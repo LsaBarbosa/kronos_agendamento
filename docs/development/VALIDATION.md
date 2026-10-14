@@ -4,6 +4,8 @@
 
 Esta revalidação substitui os resultados do snapshot anterior: baseline Spring Boot 4.1.1, Java 21.0.11, Maven Wrapper 3.9.11, Node 24.14.1/npm 11.12.1, Docker 28.5.2 e Trivy 0.75.0. O `.env` local é ignorado e não foi incluído nos scans nem no Git.
 
+**Commit de código e configuração testado:** `9991345727dad67cda794517aa2c9611ab155a19` (`AGD-001: establish quality and security gates`). As execuções abaixo validaram exatamente essa revisão; as atualizações deste relatório registram os resultados, sem alterar código funcional.
+
 ## Execuções locais
 
 | Critério/gate | Comando executado (raiz/escopo) | Resultado observado |
@@ -25,7 +27,7 @@ Esta revalidação substitui os resultados do snapshot anterior: baseline Spring
 - Não foi encontrado repositório válido no diretório nem em diretórios superiores/worktree. `.git` inicializado nesta raiz, branch `main`; identidade global existente: `LsaBarbosa <lsa94.contato@gmail.com>`.
 - Não há remote configurado, `gh` instalado ou `GH_TOKEN`/`GITHUB_TOKEN` no ambiente. Nenhuma publicação foi tentada.
 - `.env`, `backend/target/`, `frontend/node_modules/` e `frontend/dist/` estão ignorados. `backend/.dockerignore` também exclui `.env*`, chaves privadas e `.git` do contexto da imagem.
-- Commit de código: **preencher após criação**. Commit de evidências: **preencher após criação**. Nenhum commit de CI remoto existe.
+- Commit local criado na branch `main`: `9991345727dad67cda794517aa2c9611ab155a19`. O commit subsequente de documentação registra estas evidências; nenhum commit remoto/CI existe.
 
 ## Reproduzir
 

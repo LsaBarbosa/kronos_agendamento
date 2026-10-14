@@ -19,8 +19,8 @@ Referências: documento 04; documento 06, incremento A e AGD-001; ADRs 0001, 000
 - [x] Executar suíte backend em JDK 21 e PostgreSQL 16 real (14/10/2026; 18 unitários/arquiteturais + 5 integração).
 - [x] Executar Compose, health/readiness e build de imagem (14/10/2026; endpoints UP e identidade em VALIDATION.md).
 - [x] Adicionar formatter/linter frontend/Java, npm audit, CodeQL e Trivy para configuração/segredos/imagem (14/10/2026; resultados locais e limite HTTP 429 documentados em VALIDATION.md).
-- [x] Inicializar Git na raiz correta; primeiro commit local coeso a ser registrado nas evidências após criação, excluindo artefatos e `.env`.
-- [ ] Criar commit local de evidências e relacioná-lo ao commit de código em VALIDATION.md.
+- [x] Inicializar Git na raiz correta e criar commit local coeso, sem artefatos nem `.env` (`9991345727dad67cda794517aa2c9611ab155a19`, branch `main`).
+- [x] Registrar evidências dos gates e relacioná-las ao commit de código; alterações deste plano/relatório serão commitadas separadamente.
 - [ ] Executar job de CI em pipeline limpo.
 - [ ] Demonstrar migração funcional V1→V2 junto de AGD-002; também aplicar ambas do zero.
 - [ ] Demonstrar CodeQL remoto, staging/homologação, smoke/E2E e promoção autorizada quando o destino estiver definido.
