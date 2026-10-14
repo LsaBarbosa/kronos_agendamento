@@ -8,7 +8,7 @@
 | AGD-001: dependências modulares | `ModularArchitectureTest` | regras executadas nos tipos existentes; cobertura cresce com a implementação dos módulos |
 | AGD-001: format/lint frontend | scripts `format:check` e `lint`, Prettier/Oxlint fixados | `npm ci`, format, lint, testes/build e audit passaram; comando e resultado em VALIDATION.md |
 | AGD-001: format Java | Spotless + Google Java Format em `backend/pom.xml` | `spotless:check verify` passou; 18 testes unitários/arquitetura e 5 integrações PostgreSQL; VALIDATION.md |
-| AGD-001: SAST, dependências e segredos | CodeQL, Trivy, npm audit e scan de imagem | npm audit, Trivy config/secrets e imagem aprovados localmente; Trivy FS de dependências bloqueado por Maven Central HTTP 429; CodeQL/Actions remotos não executados; VALIDATION.md |
+| AGD-001: SAST, dependências e segredos | CodeQL, Trivy, npm audit e scan de imagem | CodeQL passou no GitHub; App CI falhou no Trivy FS amplo com exit 1; alvo restrito a Dockerfile passou localmente, commit `38efcc8` aguarda rerun; npm audit e imagem passaram; VALIDATION.md |
 | AGD-001: imagem | Dockerfile com bases por digest e Trivy | imagem final digest `sha256:5802db603808725c81e9cf0b779eb9bf8a118ea9cef28301a79c726c27603aee`; 0 HIGH/CRITICAL no scan local; não publicada |
 | AGD-001: migrations | Flyway V1, `DatabaseBootstrapIT` | V1 aplicada de schema vazio e revalidada; V1→V2 depende da próxima migration funcional de AGD-002 |
 | Documento 02: intervalo `[início, fim)` | `TimeInterval` e seus testes | value object validado; não equivale à proteção concorrente de AGD-015 |

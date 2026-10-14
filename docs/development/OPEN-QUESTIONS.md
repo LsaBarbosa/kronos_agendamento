@@ -9,6 +9,6 @@
 | Janela excepcional de dez minutos | documento 01, seção 7 | semântica ainda indefinida | manter desabilitada; ADR-0003 |
 | Retenção, SLOs e operação | documento 06, Sprint Zero | homologação e lançamento | validar com responsáveis antes dos gates correspondentes |
 | Imagens/dependências de produção | AGD-001/053/055 | rastreabilidade e atualização | validar política, versões suportadas e digests no ambiente de destino |
-| Gates de qualidade e staging | documento 04, seção 18 | elegibilidade CodeQL em repositório privado, destino e ambiente de promoção | lint, npm audit e imagem passaram localmente; CodeQL/CI remoto pendentes por ausência de remote/acesso; Trivy FS limitado por HTTP 429 Maven Central; staging ainda sem destino; ADR-0003 |
+| Gates de qualidade e staging | documento 04, seção 18 | credencial GitHub para publicar fix do Trivy e ambiente de promoção | CodeQL passou; App CI precisa rerun após autenticação e push; staging ainda sem destino; ADR-0003 |
 
 Estas pendências não exigem reabrir a especificação inteira. Continuar a fundação e bloquear somente o comportamento que dependa de decisão ainda não tomada.

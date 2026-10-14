@@ -23,14 +23,14 @@ Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. Ba
 
 ## Pendências de AGD-001
 
-1. Vincular os commits locais a um repositório GitHub autorizado e executar `App CI` e `CodeQL`; não há remote, `gh` ou sessão/token detectável.
-2. Confirmar elegibilidade do CodeQL se privado. Sem execução remota, SAST e pipeline permanecem não aprovados.
+1. O remote público foi encontrado; CodeQL passou (`38619623025`), mas App CI falhou apenas no job `security` (`38619623257`). A correção Trivy está no commit local `38efcc8`.
+2. Publicar a correção e acompanhar novo App CI; falta credencial GitHub local (`git push --dry-run` não obteve username). Não compartilhar token no chat.
 3. Demonstrar upgrade V1→V2 com a migration funcional de AGD-002 e aplicar ambas do zero; não criar migration vazia.
 4. Definir UX, hospedagem e staging antes do smoke/E2E de produto e homologação.
 5. Resolver gates de promoção, aprovação e evidência em staging conforme DoD.
 
 ## Próximo passo
 
-Os commits locais e evidências constam em [VALIDATION.md](VALIDATION.md). Para CI remoto, fornecer URL HTTPS/SSH `OWNER/REPOSITORY` e acesso de escrita GitHub autorizado (sessão/credencial local, sem compartilhar token no chat). Iniciar AGD-002 sem fechar AGD-001; o critério de migration se completa com banco vazio (V1→V2) e upgrade de V1 para V2.
+O destino é `LsaBarbosa/kronos_agendamento`; os runs e commits constam em [VALIDATION.md](VALIDATION.md). Para publicar o commit local, autenticar `git`/`gh` neste ambiente com acesso de escrita autorizado, sem compartilhar token no chat. Iniciar AGD-002 sem fechar AGD-001; o critério de migration se completa com banco vazio (V1→V2) e upgrade de V1 para V2.
 
 As demais histórias permanecem não implementadas. Nenhuma integração de WhatsApp/cobrança ou implantação foi realizada.

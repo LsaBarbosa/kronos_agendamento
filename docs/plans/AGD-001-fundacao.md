@@ -21,9 +21,10 @@ Referências: documento 04; documento 06, incremento A e AGD-001; ADRs 0001, 000
 - [x] Adicionar formatter/linter frontend/Java, npm audit, CodeQL e Trivy para configuração/segredos/imagem (14/10/2026; resultados locais e limite HTTP 429 documentados em VALIDATION.md).
 - [x] Inicializar Git na raiz correta e criar commit local coeso, sem artefatos nem `.env` (`9991345727dad67cda794517aa2c9611ab155a19`, branch `main`).
 - [x] Registrar evidências dos gates e relacioná-las ao commit de código; alterações deste plano/relatório serão commitadas separadamente.
-- [ ] Executar job de CI em pipeline limpo.
+- [x] Executar workflows no GitHub: CodeQL passou no commit `0f06ed9`; frontend, `verify` e segredos passaram no App CI, cujo job `security` falhou no Trivy amplo (run `38619623257`).
+- [ ] Publicar `38efcc8` após autenticar o Git local e obter novo resultado verde do App CI; push dry-run falhou por falta de username/credencial.
 - [ ] Demonstrar migração funcional V1→V2 junto de AGD-002; também aplicar ambas do zero.
-- [ ] Demonstrar CodeQL remoto, staging/homologação, smoke/E2E e promoção autorizada quando o destino estiver definido.
+- [ ] Executar staging/homologação, smoke/E2E e promoção autorizada quando destino e fluxos estiverem definidos.
 
 ## Descobertas e decisões
 
@@ -46,11 +47,11 @@ Referências: documento 04; documento 06, incremento A e AGD-001; ADRs 0001, 000
 | Imagem | `docker build --pull --iidfile /tmp/agendamento-image-id.txt -t agendamento-backend:ci backend`; Trivy image | digest identificado, sem high/critical | passou localmente após fixar Ubuntu 24.04 por digest; 0 achados em OS/JAR; VALIDATION.md |
 | Formatação, lint e segredos/config | Prettier, Oxlint, Spotless e Trivy config/secret | sem violações | passou localmente; VALIDATION.md |
 | Dependências fonte | npm audit e Trivy FS | sem high/critical | npm audit passou; scan FS não concluiu por Maven Central HTTP 429. Imagem runtime passou; repetir fonte após rate limit; VALIDATION.md |
-| SAST/CI remoto | workflows CodeQL e `App CI` no GitHub Actions | análise executada no commit publicado | configurados, não executados: ausência de remote e acesso GitHub detectável |
+| SAST/CI remoto | runs `38619623025` (CodeQL) e `38619623257` (App CI) | ambos aprovados para o mesmo commit | CodeQL passou; App CI falhou no scan Trivy amplo; fix local `38efcc8`, rerun depende de autenticação |
 | Migration compatível | `./mvnw verify` com cenários de schema vazio e upgrade V1→V2 | duas trajetórias aprovadas | pendente da migration funcional AGD-002; V1 vazia passou, sem segunda versão |
 | Staging/DoD | deploy em staging autorizado e smoke/E2E | evidência funcional e aprovação do ambiente | pendente: UX, ambiente e credenciais não definidos |
-| Pipeline limpo | workflows `App CI` e `CodeQL` no GitHub Actions | jobs passam no commit local publicado | não executado: sem remote e sem acesso GitHub detectável |
+| Pipeline limpo | execução dos workflows em `0f06ed9` | todos os jobs aprovados após a correção | frontend, `verify`, secrets e CodeQL passaram; security do App CI falhou; rerun após push de `38efcc8` pendente |
 
 ## Encerramento ou retomada
 
-Manter AGD-001 aberta. Próximo passo para CI: fornecer URL `OWNER/REPOSITORY` e acesso GitHub local autorizado (não compartilhar token); então publicar e executar `App CI` e `CodeQL`. Em paralelo, iniciar AGD-002 com tenant e isolamento; criar migration V2 funcional e testar banco vazio e upgrade de V1 antes de fechar versionamento.
+Manter AGD-001 aberta. Próximo passo para CI: autenticar `git`/`gh` com acesso autorizado no destino já informado, publicar `38efcc8` e acompanhar rerun de `App CI`. Em paralelo, iniciar AGD-002 com tenant e isolamento; criar migration V2 funcional e testar banco vazio e upgrade de V1 antes de fechar versionamento.
