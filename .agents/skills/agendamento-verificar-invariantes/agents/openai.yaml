@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verificar invariantes"
+  short_description: "Verifique riscos de domínio e persistência."
+  default_prompt: "Use $agendamento-verificar-invariantes para validar a alteração atual."

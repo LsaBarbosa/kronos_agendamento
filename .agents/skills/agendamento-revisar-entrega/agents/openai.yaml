@@ -1,0 +1,4 @@
+interface:
+  display_name: "Revisar entrega"
+  short_description: "Revise aderência, correção e evidências reais."
+  default_prompt: "Use $agendamento-revisar-entrega para revisar o diff da história informada."

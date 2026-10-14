@@ -1,0 +1,31 @@
+{
+  "name": "agendamento-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"*.{html,json,js,ts,md}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"*.{html,json,js,ts,md}\"",
+    "lint": "oxlint --react-plugin --jsx-a11y-plugin --vitest-plugin --deny-warnings src vite.config.ts",
+    "test": "vitest run",
+    "check": "tsc --noEmit -p tsconfig.json && vite build"
+  },
+  "dependencies": {
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "oxlint": "1.87.0",
+    "prettier": "3.9.10",
+    "typescript": "7.0.2",
+    "vite": "8.3.4",
+    "vitest": "5.0.4"
+  }
+}

@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+**/target/
+**/node_modules/
+**/.next/
+**/dist/
+.idea/
+*.iml
+.vscode/
+*.log
+.DS_Store
+coverage/
+*.zip
+*.tar.gz
+**/.mvn/wrapper/maven-wrapper.jar

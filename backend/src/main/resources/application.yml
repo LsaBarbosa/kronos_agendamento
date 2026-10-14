@@ -1,0 +1,53 @@
+spring:
+  application:
+    name: agendamento-backend
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/agendamento}
+    username: ${DB_USERNAME:agendamento}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: agendamento
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    schemas: agendamento
+    default-schema: agendamento
+    create-schemas: true
+    clean-disabled: true
+    locations: classpath:db/migration
+  jackson:
+    time-zone: UTC
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+  error:
+    include-message: never
+    include-stacktrace: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+
+logging:
+  pattern:
+    level: "%5p [traceId=%X{traceId:-}]"

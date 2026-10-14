@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implementar história"
+  short_description: "Implemente histórias AGD com rastreabilidade."
+  default_prompt: "Use $agendamento-implementar-historia para implementar a história AGD informada."

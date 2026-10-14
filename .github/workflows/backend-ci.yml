@@ -1,0 +1,116 @@
+name: App CI
+
+'on':
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install locked frontend dependencies
+        run: npm ci
+      - name: Check frontend formatting and lint
+        run: |
+          npm run format:check
+          npm run lint
+      - name: Run frontend tests and production build
+        run: |
+          npm test
+          npm run check
+      - name: Audit locked frontend dependencies
+        run: npm audit --audit-level=high
+
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: backend/pom.xml
+      - name: Compile and test with PostgreSQL Testcontainers
+        run: |
+          ./mvnw -B -ntp spotless:check
+          ./mvnw -B -ntp verify
+      - name: Build local image and capture its identity
+        run: |
+          docker build --iidfile ../backend-image-id.txt -t agendamento-backend:ci .
+          cat ../backend-image-id.txt
+      - name: Scan backend image for high and critical vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: agendamento-backend:ci
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          version: v0.75.0
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-verification
+          path: |
+            backend/target/surefire-reports/
+            backend/target/failsafe-reports/
+            backend-image-id.txt
+
+  security:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan repository configuration
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: misconfig
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          version: v0.75.0
+
+  secrets:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        path: [backend/src, frontend/src, .github, docs, infra, scripts]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan source tree for secrets
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: ${{ matrix.path }}
+          scanners: secret
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          version: v0.75.0
