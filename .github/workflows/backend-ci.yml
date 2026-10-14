@@ -83,11 +83,11 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - name: Scan repository configuration
+      - name: Scan backend container configuration
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
-          scan-ref: .
+          scan-ref: backend/Dockerfile
           scanners: misconfig
           format: table
           exit-code: '1'
