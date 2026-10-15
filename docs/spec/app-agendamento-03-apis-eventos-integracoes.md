@@ -258,6 +258,16 @@ Mudança de timezone exige aviso de alto impacto e política explícita para res
 
 Preferir cancelamento lógico para objetos que já produziram efeitos auditáveis.
 
+#### Contrato administrativo da grade e das políticas — AGD-011
+
+- `GET` da grade devolve `{configured, timeZone, version, periods}`. `configured=false` e `version=0` representam ausência; `configured=true` com `periods=[]` significa semana explicitamente fechada.
+- `PUT` da grade substitui todos os períodos e recebe `{expectedVersion, periods}` mais `Idempotency-Key`. `weekday` usa ISO em maiúsculas (`MONDAY`–`SUNDAY`); limites locais usam `HH:mm`; `timeZone` é sempre obtido do tenant autenticado. O array ordenado por dia e hora é a forma canônica do digest, de modo que permutações equivalentes não alteram a identidade lógica.
+- `GET` da política devolve `{configured, version, slotStepMinutes, minimumNoticeHours, bookingHorizonDays, cancellationCutoffHours, reminderOffsetHours}`. Quando `configured=false`, valores são `null`, não defaults. `PUT` substitui os cinco valores em conjunto, exige `expectedVersion` e `Idempotency-Key`.
+- `version` é independente para grade e política. Versão inicial ausente é `0`; cada alteração efetiva confirmada incrementa uma vez. Replay exige autenticação/vínculo atual e retorna o resultado original sem incrementar versão nem repetir auditoria/outbox.
+- Períodos da mesma semana não podem se sobrepor; limites adjacentes seguem intervalos semiabertos. A implementação conserva a recorrência em horário local e não cria timestamps/offsets UTC.
+- Alinhamento dos limites e períodos que cruzam meia-noite não estão determinados no modelo/produto; a implementação vigente representa início/fim no mesmo dia, sem alinhamento adicional, e registra a proposta em `OPEN-QUESTIONS.md`. Esta interpretação precisa de confirmação antes de declarar completo o critério temporal de AGD-011.
+- Rotas e schemas OpenAPI versionados estão em `docs/openapi/admin-availability.yaml`. CSRF usa o header publicado por `/api/v1/csrf`; a configuração atual usa `X-CSRF-TOKEN`.
+
 ### Agenda e reservas
 
 | Método | Endpoint | Uso |

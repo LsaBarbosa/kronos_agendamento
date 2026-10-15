@@ -61,9 +61,9 @@ class DatabaseBootstrapIT {
         .isEqualTo(2);
     assertThat(
             migrationJdbc.queryForObject(
-                "select count(*) from agendamento.flyway_schema_history where version in ('5', '6', '7') and success",
+                "select count(*) from agendamento.flyway_schema_history where version in ('5', '6', '7', '8') and success",
                 Integer.class))
-        .isEqualTo(3);
+        .isEqualTo(4);
     assertThat(
             jdbc.queryForObject("select to_regclass('agendamento.spring_session')", String.class))
         .isEqualTo("agendamento.spring_session");
@@ -71,6 +71,9 @@ class DatabaseBootstrapIT {
         .isEqualTo("agendamento.tenant");
     assertThat(jdbc.queryForObject("select to_regclass('agendamento.service')", String.class))
         .isEqualTo("agendamento.service");
+    assertThat(
+            jdbc.queryForObject("select to_regclass('agendamento.weekly_schedule')", String.class))
+        .isEqualTo("agendamento.weekly_schedule");
   }
 
   @Test

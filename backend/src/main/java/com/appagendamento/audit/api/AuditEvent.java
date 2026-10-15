@@ -36,7 +36,7 @@ public record AuditEvent(
                     || actorRef.equals("CONTROLLED_DEMO_PROVISIONER")))
         || !result.equals("COMMITTED")
         || !action.matches(
-            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)")) {
+            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED")) {
       throw new IllegalArgumentException("Ator ou resultado de auditoria inválido");
     }
     if ((actorType.equals("ADMIN") && actorId == null)
@@ -65,6 +65,14 @@ public record AuditEvent(
                       "\\{\\\"changed_fields\\\":\\[(?:\\\"(?:name|description|duration_minutes|buffer_after_minutes)\\\")(?:,\\\"(?:name|description|duration_minutes|buffer_after_minutes)\\\")*\\],\\\"version_before\\\":[0-9]+,\\\"version_after\\\":[0-9]+\\}");
           case "SERVICE_ACTIVATED", "SERVICE_DEACTIVATED" ->
               actorType.equals("ADMIN") && detailsJson.equals("{\"changed_fields\":[\"status\"]}");
+          case "SCHEDULE_UPDATED" ->
+              actorType.equals("ADMIN")
+                  && detailsJson.matches(
+                      "\\{\\\"changed_fields\\\":\\[\\\"weekly_periods\\\"\\],\\\"version_before\\\":[0-9]+,\\\"version_after\\\":[0-9]+\\}");
+          case "AVAILABILITY_POLICY_UPDATED" ->
+              actorType.equals("ADMIN")
+                  && detailsJson.matches(
+                      "\\{\\\"changed_fields\\\":\\[\\\"availability_policy\\\"\\],\\\"version_before\\\":[0-9]+,\\\"version_after\\\":[0-9]+\\}");
           default -> false;
         };
     if (!validDetails) {
