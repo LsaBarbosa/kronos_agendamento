@@ -29,7 +29,7 @@ Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. AG
 
 1. App CI (`38663531502`) e CodeQL (`38663531528`) passaram no commit publicado `3a4653442762abc5b0a64f32c633394b733715de`; histórico da falha HTTP 429 no run anterior está em VALIDATION.md.
 2. Executar o scan Trivy completo de dependências quando Maven Central aceitar as consultas; o sucesso do scan limitado ao Dockerfile não cobre esse critério.
-3. **Concluído em AGD-002:** migration funcional V2 aplicada do zero e como upgrade desde V1; testes locais e App CI passaram. V1 preservada. **Concluído localmente em AGD-003, aguardando CI/integração do PR #1:** V1–V4 aplicadas em banco vazio; upgrade desde V1 e V2 em PostgreSQL real; V1/V2 imutáveis.
+3. **Concluído em AGD-002:** migration funcional V2 aplicada do zero e como upgrade desde V1; testes locais e App CI passaram. V1 preservada. **Validado localmente e no App CI em AGD-003; aguardando integração do PR #1:** V1–V4 aplicadas em banco vazio; upgrade desde V1 e V2 em PostgreSQL real; V1/V2 imutáveis.
 4. Definir UX, hospedagem e staging antes do smoke/E2E de produto, homologação e gates de promoção da DoD.
 
 ## Próximo passo

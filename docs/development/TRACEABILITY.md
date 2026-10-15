@@ -24,4 +24,4 @@
 | AGD-005 | pacote reservado | idempotência/outbox não implementadas |
 | Demais histórias P0/P1/P2 | especificação preservada | não implementadas |
 
-Não converter preparação em conclusão de história. AGD-002 demonstra isolamento somente nos casos de uso/persistência com ator de teste; autenticação e garantia HTTP dependem de AGD-003. Evidências locais, remotas e homologação devem permanecer distinguidas e associadas a commits observáveis.
+Não converter preparação em conclusão de história. A branch AGD-003 comprova autenticação real, associação server-side e contexto do tenant no endpoint administrativo; integração aguarda merge dos PRs em ordem. AGD-002 ainda não tem rotas de negócio para provar respostas HTTP cross-tenant, e expiração temporal/homologação permanecem pendentes. Evidências locais e remotas devem permanecer distinguidas e associadas a commits observáveis.
