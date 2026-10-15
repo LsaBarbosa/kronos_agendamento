@@ -158,7 +158,7 @@ Próximo incremento recomendado: AGD-002 para tenant e isolamento, com migration
 
 ## AGD-010 — Catálogo de serviços
 
-**Branch:** `agd-010-catalogo-servicos`, derivada de `origin/main` `1090b44a5652a13c1c858fdbbb32d870cd9f85d0`; `origin/main` foi atualizado e confirmado ancestral antes da publicação. **Commit funcional validado localmente:** `4678f2481b11b427b77502523eab9638f0013b30`. **PR/CI remoto:** pendentes nesta atualização documental; registrar links e resultado após abrir o PR. Nenhuma aprovação humana ou homologação é presumida.
+**Branch:** `agd-010-catalogo-servicos`, derivada de `origin/main` `1090b44a5652a13c1c858fdbbb32d870cd9f85d0`; `origin/main` atualizado e confirmado ancestral antes da publicação. **Commit funcional validado localmente:** `4678f2481b11b427b77502523eab9638f0013b30`. **PR:** [#5](https://github.com/LsaBarbosa/kronos_agendamento/pull/5), aberto para `main`, sem merge/deploy. **Head CI:** `c096954f14dca012960de1cfa0c304ef2c07e7ed`. Nenhuma aprovação humana ou homologação é presumida.
 
 | Gate/critério | Comando ou prova | Resultado observado |
 |---|---|---|
@@ -167,11 +167,12 @@ Próximo incremento recomendado: AGD-002 para tenant e isolamento, com migration
 | Frontend e browser test source | Em `frontend/`: `PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH npm run format:check && npm run lint && npm test -- --run && npm run check`; `node --check scripts/dev/test-keycloak-browser.mjs` | Passou no commit funcional: Prettier/Oxlint, 2 testes Vitest, `tsc`, build Vite e sintaxe do script. O browser E2E foi ampliado para criar/editar/inativar/ativar via UI após login Keycloak; não foi executado localmente nesta rodada e aguarda execução no App CI. |
 | Dependências | Em `frontend/`: `npm audit --audit-level=high` | Passou após execução com rede autorizada: `found 0 vulnerabilities`. Primeiro intento falhou por DNS `EAI_AGAIN`; a falha não foi tratada como resultado de scan. |
 | Diff/segredos | `git diff --cached --check`; Trivy disponível no workflow existente | Diff limpo. Trivy não instalado localmente. Scan de secrets/imagem depende do App CI; não se afirma resultado até execução concluída. O scan completo de dependências requerido por AGD-001 permanece pendente. |
+| App CI e CodeQL | [App CI push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38797399485), [App CI PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38797414999), [CodeQL push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38797399450), [CodeQL PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38797414867) | Os quatro workflows passaram em `c096954f14dca012960de1cfa0c304ef2c07e7ed`. App CI executou `verify` com PostgreSQL e imagem, frontend, npm audit, scan configurado de imagem/config, secrets e browser E2E; CodeQL Java/Kotlin e JS/TS passou. Avisos de manutenção Node 20/ubuntu-latest não bloquearam. |
 
 ### Limites e critérios pendentes
 
 - AGD-010 permanece parcial até revisão/CI remoto e resolução de buffer positivo versus zero e do gate de publicação pública. Rotas públicas seguem deny-all; `Tenant.ACTIVE` não é tratado como autorização de publicação.
 - Preço continua omitido da API/UI até decisão de moeda/apresentação. Snapshot imutável de reserva não é demonstrável antes do comando de reserva AGD-015; AGD-010 não altera reservas existentes.
-- Não houve teste browser local nesta rodada; o workflow App CI deverá executar Keycloak/PostgreSQL/Chrome e comprovar o fluxo da interface. Não houve homologação HTTPS/staging.
+- Browser E2E real com Keycloak/PostgreSQL/Chrome passou no App CI push e PR (runs acima), incluindo o fluxo administrativo da UI. Não houve homologação HTTPS/staging.
 - Revisões independentes em leitura de dois agentes ocorreram; são pareceres técnicos, não review/aprovação humana no GitHub.
 - AGD-001 continua aberta pelo scan completo de dependências e homologação; AGD-003 por homologação HTTPS. Retenção e integrações reais seguem pendentes nas histórias/fundações correspondentes.
