@@ -46,18 +46,18 @@
 ## Progresso e validação
 
 - [x] 15/10/2026 — `origin/main` confirmou merge #3 (`1138395`) e #4 (`1090b44`); working tree limpa; branch derivada da main atualizada.
-- [x] Implementação funcional, revisão independente em leitura e validação local; achados pertinentes corrigidos.
+- [x] Implementação funcional, revisão independente em leitura e validação local; achados pertinentes corrigidos. Código testado em `4678f2481b11b427b77502523eab9638f0013b30`.
 - [ ] CI remoto App CI/CodeQL no head final.
 - [ ] PR aberto para `main`; não fazer merge/deploy.
 - [ ] Homologação e critérios dependentes de agenda/publicação.
 
 | Critério | Comando/procedimento | Esperado | Observado |
 |---|---|---|---|
-| Backend e PostgreSQL | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw -B -ntp spotless:check verify` em `backend/` | Passou: `BUILD SUCCESS`, 27 unitários/arquiteturais e 41 integrações em PostgreSQL 16.13/Testcontainers. SHA será registrado após commit. |
-| Frontend | `PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH npm run format:check && npm run lint && npm test -- --run && npm run check` em `frontend/` | Execução em andamento; browser E2E real fica no App CI. |
-| Dependências frontend e sintaxe browser | `npm audit --audit-level=high` e `node --check ../scripts/dev/test-keycloak-browser.mjs` em `frontend/` | Execução em andamento. |
-| Qualidade de patch | `git diff --check` e scanner de secrets existente | Pendente da revisão final antes do commit. |
-| Migração | suíte `verify` em DB limpo e upgrade V6→V7 | Passou em PostgreSQL real: fresh V1–V7, upgrade V6→V7, `validate` e reexecução com zero mudanças; V1–V6 preservadas. |
+| Backend e PostgreSQL | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw -B -ntp spotless:check verify` em `backend/` | Esperado: spotless, arquitetura e testes passam | Passou: `BUILD SUCCESS`, 27 unitários/arquiteturais e 41 integrações em PostgreSQL 16.13/Testcontainers, no SHA `4678f2481b11b427b77502523eab9638f0013b30`. |
+| Frontend | `PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH npm run format:check && npm run lint && npm test -- --run && npm run check` em `frontend/` | Esperado: format, lint, teste e build passam | Passou no commit `4678f2481b11b427b77502523eab9638f0013b30`: Prettier/Oxlint, 2 testes Vitest, TypeScript e build Vite. |
+| Dependências frontend e sintaxe browser | `npm audit --audit-level=high` e `node --check scripts/dev/test-keycloak-browser.mjs` | Passaram no commit de código: 0 vulnerabilidades; sintaxe válida. Audit precisou de rede autorizada após DNS indisponível no sandbox. |
+| Qualidade de patch | `git diff --cached --check` antes do commit; scanner de secrets existente no App CI | Diff sem whitespace inválido. Trivy não está instalado localmente; scan de secrets/imagem fica pendente do CI, sem alegar aprovação local. |
+| Migração | suíte `verify` em DB limpo e upgrade V6→V7 | Esperado: aplicação limpa/upgrade, validate e rerun idempotente | Passou em PostgreSQL real: fresh V1–V7, upgrade V6→V7, `validate` e reexecução com zero mudanças; V1–V6 preservadas. |
 | CI remoto | App CI e CodeQL no SHA final do PR | checks concluídos com sucesso | Pendente |
 
 ## Encerramento ou retomada
