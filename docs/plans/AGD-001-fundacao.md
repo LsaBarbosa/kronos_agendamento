@@ -22,7 +22,9 @@ Referências: documento 04; documento 06, incremento A e AGD-001; ADRs 0001, 000
 - [x] Inicializar Git na raiz correta e criar commit local coeso, sem artefatos nem `.env` (`9991345727dad67cda794517aa2c9611ab155a19`, branch `main`).
 - [x] Registrar evidências dos gates e relacioná-las ao commit de código; alterações deste plano/relatório serão commitadas separadamente.
 - [x] Executar workflows no GitHub: CodeQL passou no commit `0f06ed9`; frontend, `verify` e segredos passaram no App CI, cujo job `security` falhou no Trivy amplo (run `38619623257`).
-- [ ] Publicar `38efcc8` após autenticar o Git local e obter novo resultado verde do App CI; push dry-run falhou por falta de username/credencial.
+- [x] Revisar fast-forward e diff após `git fetch origin`: `origin/main` em `0f06ed92e47345909233fd04b2559a90b9814894`; commits locais `38efcc8` e `3a46534`, sem divergência.
+- [x] Publicar os commits locais em fast-forward sem force push, preservando `38efcc8977bf0ca7d45f935aab3b1ad31d676e5c` e `3a4653442762abc5b0a64f32c633394b733715de`.
+- [x] Acompanhar App CI e CodeQL no SHA `3a4653442762abc5b0a64f32c633394b733715de`; App CI run `38663531502` e CodeQL run `38663531528` concluíram com sucesso.
 - [ ] Demonstrar migração funcional V1→V2 junto de AGD-002; também aplicar ambas do zero.
 - [ ] Executar staging/homologação, smoke/E2E e promoção autorizada quando destino e fluxos estiverem definidos.
 
@@ -47,11 +49,11 @@ Referências: documento 04; documento 06, incremento A e AGD-001; ADRs 0001, 000
 | Imagem | `docker build --pull --iidfile /tmp/agendamento-image-id.txt -t agendamento-backend:ci backend`; Trivy image | digest identificado, sem high/critical | passou localmente após fixar Ubuntu 24.04 por digest; 0 achados em OS/JAR; VALIDATION.md |
 | Formatação, lint e segredos/config | Prettier, Oxlint, Spotless e Trivy config/secret | sem violações | passou localmente; VALIDATION.md |
 | Dependências fonte | npm audit e Trivy FS | sem high/critical | npm audit passou; scan FS não concluiu por Maven Central HTTP 429. Imagem runtime passou; repetir fonte após rate limit; VALIDATION.md |
-| SAST/CI remoto | runs `38619623025` (CodeQL) e `38619623257` (App CI) | ambos aprovados para o mesmo commit | CodeQL passou; App CI falhou no scan Trivy amplo; fix local `38efcc8`, rerun depende de autenticação |
+| SAST/CI remoto | runs `38663531502` (App CI) e `38663531528` (CodeQL) | workflows aprovados no commit corrigido publicado | os dois passaram integralmente no SHA `3a4653442762abc5b0a64f32c633394b733715de`; falha anterior e HTTP 429 estão detalhados em VALIDATION.md |
 | Migration compatível | `./mvnw verify` com cenários de schema vazio e upgrade V1→V2 | duas trajetórias aprovadas | pendente da migration funcional AGD-002; V1 vazia passou, sem segunda versão |
 | Staging/DoD | deploy em staging autorizado e smoke/E2E | evidência funcional e aprovação do ambiente | pendente: UX, ambiente e credenciais não definidos |
-| Pipeline limpo | execução dos workflows em `0f06ed9` | todos os jobs aprovados após a correção | frontend, `verify`, secrets e CodeQL passaram; security do App CI falhou; rerun após push de `38efcc8` pendente |
+| Pipeline limpo | execução dos workflows no commit de correção publicado | todos os jobs aprovados | App CI e CodeQL concluíram com sucesso em `3a4653442762abc5b0a64f32c633394b733715de`; links em VALIDATION.md |
 
 ## Encerramento ou retomada
 
-Manter AGD-001 aberta. Próximo passo para CI: autenticar `git`/`gh` com acesso autorizado no destino já informado, publicar `38efcc8` e acompanhar rerun de `App CI`. Em paralelo, iniciar AGD-002 com tenant e isolamento; criar migration V2 funcional e testar banco vazio e upgrade de V1 antes de fechar versionamento.
+Manter AGD-001 aberta. App CI/CodeQL passaram no commit publicado; executar o scan completo de dependências quando o rate limit do Maven Central permitir e concluir staging/homologação. Em paralelo, iniciar AGD-002 com tenant e isolamento; criar migration V2 funcional e testar banco vazio e upgrade de V1 antes de fechar versionamento. O scan restrito a `backend/Dockerfile` não comprova o scan completo.

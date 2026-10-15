@@ -1,7 +1,7 @@
 # Estado do projeto
 
 **Atualização:** 14/10/2026.
-**Entrega:** documentação organizada, backend/frontend base, gates locais de qualidade/segurança e commits locais preparados.
+**Entrega:** documentação organizada, backend/frontend base, gates locais e execução remota bem-sucedida de App CI/CodeQL no commit `3a4653442762abc5b0a64f32c633394b733715de`.
 **AGD-001:** em andamento; não marcar como concluída.
 **Plano:** [AGD-001-fundacao.md](../plans/AGD-001-fundacao.md).
 
@@ -19,18 +19,17 @@
 
 ## Evidência
 
-Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. Backend/Testcontainers (18+5), frontend, format/lint, npm audit, Trivy config/secrets e scan da imagem passaram localmente. O Trivy filesystem para dependências foi bloqueado por HTTP 429 do Maven Central; configuração do workflow não substitui CI remoto.
+Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. Backend/Testcontainers (18+5), frontend, format/lint, npm audit e Trivy local passaram; App CI e CodeQL também passaram no SHA publicado. O Trivy filesystem completo para dependências permanece pendente por HTTP 429 do Maven Central; a checagem de configuração no workflow cobre somente o Dockerfile e não substitui o scan de dependências.
 
 ## Pendências de AGD-001
 
-1. O remote público foi encontrado; CodeQL passou (`38619623025`), mas App CI falhou apenas no job `security` (`38619623257`). A correção Trivy está no commit local `38efcc8`.
-2. Publicar a correção e acompanhar novo App CI; falta credencial GitHub local (`git push --dry-run` não obteve username). Não compartilhar token no chat.
+1. App CI (`38663531502`) e CodeQL (`38663531528`) passaram no commit publicado `3a4653442762abc5b0a64f32c633394b733715de`; histórico da falha HTTP 429 no run anterior está em VALIDATION.md.
+2. Executar o scan Trivy completo de dependências quando Maven Central aceitar as consultas; o sucesso do scan limitado ao Dockerfile não cobre esse critério.
 3. Demonstrar upgrade V1→V2 com a migration funcional de AGD-002 e aplicar ambas do zero; não criar migration vazia.
-4. Definir UX, hospedagem e staging antes do smoke/E2E de produto e homologação.
-5. Resolver gates de promoção, aprovação e evidência em staging conforme DoD.
+4. Definir UX, hospedagem e staging antes do smoke/E2E de produto, homologação e gates de promoção da DoD.
 
 ## Próximo passo
 
-O destino é `LsaBarbosa/kronos_agendamento`; os runs e commits constam em [VALIDATION.md](VALIDATION.md). Para publicar o commit local, autenticar `git`/`gh` neste ambiente com acesso de escrita autorizado, sem compartilhar token no chat. Iniciar AGD-002 sem fechar AGD-001; o critério de migration se completa com banco vazio (V1→V2) e upgrade de V1 para V2.
+O destino `LsaBarbosa/kronos_agendamento` recebeu os dois commits preservando SHAs; App CI e CodeQL passaram. Próximo: repetir o scan completo de dependências após o rate limit, iniciar AGD-002 com tenant/isolamento e migration V2 funcional, e definir ambiente de staging para homologação. Manter AGD-001 aberta até fechar os gates aplicáveis.
 
 As demais histórias permanecem não implementadas. Nenhuma integração de WhatsApp/cobrança ou implantação foi realizada.
