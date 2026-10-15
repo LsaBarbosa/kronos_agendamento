@@ -99,7 +99,6 @@ public class JdbcOutboxStore implements OutboxStore {
             SET state = 'RECONCILIATION_REQUIRED', claim_token = NULL, lease_until = NULL,
                 last_error_code = ?
             WHERE event_id = ? AND state = 'CLAIMED' AND claim_token = ?
-              AND lease_until > clock_timestamp()
             """,
             errorCode,
             claim.eventId(),

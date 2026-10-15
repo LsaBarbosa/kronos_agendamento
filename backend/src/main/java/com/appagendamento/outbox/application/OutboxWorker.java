@@ -7,6 +7,8 @@ import com.appagendamento.outbox.api.OutboxStore;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -14,6 +16,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class OutboxWorker {
 
+  private static final Logger log = LoggerFactory.getLogger(OutboxWorker.class);
   private static final Duration BASE_BACKOFF = Duration.ofSeconds(1);
   private static final Duration MAX_BACKOFF = Duration.ofMinutes(15);
   private final OutboxStore store;
@@ -44,24 +47,35 @@ public class OutboxWorker {
   }
 
   public int processBatch(OutboxPublisher publisher) {
-    List<OutboxClaim> claims = store.claim(batchSize, leaseDuration);
-    for (OutboxClaim claim : claims) {
+    int processed = 0;
+    while (processed < batchSize) {
+      List<OutboxClaim> claims = store.claim(1, leaseDuration);
+      if (claims.isEmpty()) {
+        break;
+      }
+      OutboxClaim claim = claims.getFirst();
+      processed++;
       DeliveryResult result;
       try {
         result = publisher.publish(claim);
       } catch (RuntimeException failure) {
         result = DeliveryResult.OUTCOME_UNKNOWN;
       }
-      switch (result) {
-        case DELIVERED -> store.markDelivered(claim);
-        case RETRYABLE_FAILURE ->
-            store.markRetry(
-                claim, backoff(claim.attemptCount()), maxAttempts, "DESTINATION_RETRYABLE");
-        case TERMINAL_FAILURE -> store.markTerminal(claim, "DESTINATION_TERMINAL");
-        case OUTCOME_UNKNOWN -> store.markOutcomeUnknown(claim, "DESTINATION_OUTCOME_UNKNOWN");
+      boolean recorded =
+          switch (result) {
+            case DELIVERED -> store.markDelivered(claim);
+            case RETRYABLE_FAILURE ->
+                store.markRetry(
+                    claim, backoff(claim.attemptCount()), maxAttempts, "DESTINATION_RETRYABLE");
+            case TERMINAL_FAILURE -> store.markTerminal(claim, "DESTINATION_TERMINAL");
+            case OUTCOME_UNKNOWN -> store.markOutcomeUnknown(claim, "DESTINATION_OUTCOME_UNKNOWN");
+          };
+      if (!recorded) {
+        log.warn("Outbox claim transition rejected: eventId={}, outcome={}", claim.eventId(), result);
+        break;
       }
     }
-    return claims.size();
+    return processed;
   }
 
   public boolean reprocess(UUID eventId) {

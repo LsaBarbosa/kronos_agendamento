@@ -359,9 +359,83 @@ class IdempotencyOutboxIT {
     assertThat(reclaimed.eventId()).isEqualTo(eventId);
     assertThat(reclaimed.claimToken()).isNotEqualTo(firstClaim.claimToken());
     assertThat(reclaimed.attemptCount()).isEqualTo(firstClaim.attemptCount() + 1);
+    assertThat(outbox.markOutcomeUnknown(firstClaim, "DESTINATION_OUTCOME_UNKNOWN")).isFalse();
+    assertThat(outboxState(eventId)).isEqualTo("CLAIMED");
     assertThat(outbox.markDelivered(firstClaim)).isFalse();
     assertThat(outbox.markDelivered(reclaimed)).isTrue();
     assertThat(outbox.markDelivered(reclaimed)).isFalse();
+  }
+
+  @Test
+  void unknownOutcomeAfterLeaseExpiryIsPreservedWithoutAutomaticRedelivery() {
+    Tenant tenant = tenant();
+    var operation =
+        renameTenant.execute(
+            admin(tenant.tenantId()),
+            tenant.tenantId(),
+            "late-unknown-" + UUID.randomUUID(),
+            "Unknown",
+            0);
+    UUID eventId = eventFor(operation.operationId());
+    postponeOtherPendingEvents(eventId);
+    OutboxWorker directWorker = new OutboxWorker(outbox, null, 1, 60, 8);
+
+    assertThat(
+            directWorker.processBatch(
+                claim -> {
+                  assertThat(claim.eventId()).isEqualTo(eventId);
+                  migrationJdbc.update(
+                      "UPDATE agendamento.outbox_event SET lease_until = clock_timestamp() - interval '1 second' WHERE event_id = ?",
+                      eventId);
+                  assertThat(outbox.markDelivered(claim)).isFalse();
+                  return DeliveryResult.OUTCOME_UNKNOWN;
+                }))
+        .isEqualTo(1);
+
+    assertThat(outboxState(eventId)).isEqualTo("RECONCILIATION_REQUIRED");
+    assertThat(outbox.claim(1, Duration.ofMinutes(1))).isEmpty();
+    assertThat(outbox.reprocess(eventId)).isFalse();
+  }
+
+  @Test
+  void workerClaimsOnlyTheEventItIsAboutToPublish() {
+    Tenant firstTenant = tenant();
+    Tenant secondTenant = tenant();
+    var firstOperation =
+        renameTenant.execute(
+            admin(firstTenant.tenantId()),
+            firstTenant.tenantId(),
+            "just-in-time-a-" + UUID.randomUUID(),
+            "First",
+            0);
+    var secondOperation =
+        renameTenant.execute(
+            admin(secondTenant.tenantId()),
+            secondTenant.tenantId(),
+            "just-in-time-b-" + UUID.randomUUID(),
+            "Second",
+            0);
+    UUID firstEvent = eventFor(firstOperation.operationId());
+    UUID secondEvent = eventFor(secondOperation.operationId());
+    postponeOtherPendingEvents(firstEvent, secondEvent);
+    OutboxWorker directWorker = new OutboxWorker(outbox, null, 2, 60, 8);
+
+    assertThat(
+            directWorker.processBatch(
+                claim -> {
+                  assertThat(
+                          runtimeJdbc.queryForObject(
+                              "SELECT count(*) FROM agendamento.outbox_event WHERE event_id IN (?, ?) AND state = 'CLAIMED'",
+                              Integer.class,
+                              firstEvent,
+                              secondEvent))
+                      .isEqualTo(1);
+                  return DeliveryResult.DELIVERED;
+                }))
+        .isEqualTo(2);
+
+    assertThat(outboxState(firstEvent)).isEqualTo("DELIVERED");
+    assertThat(outboxState(secondEvent)).isEqualTo("DELIVERED");
   }
 
   @Test
