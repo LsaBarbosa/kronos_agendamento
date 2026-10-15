@@ -10,7 +10,7 @@
 
 ## Estado e dependências
 
-- PR #3 continua aberto em `main` (estado `CLEAN`, sem reviews humanas registradas), head `23731b8`; branch atual AGD-005 parte desse commit.
+- PR #3 continua aberto em `main` (estado `CLEAN`, sem reviews humanas registradas), head `23731b8`; branch atual AGD-005 parte desse commit. PR #4 foi publicado sobre `agd-004-auditoria-correlacao` e depende da integração do #3.
 - V1–V5, `RenameTenant`, auditoria append-only e PostgreSQL/Testcontainers existem. O rename é a operação escolhida por validar versão esperada, mutação de domínio e auditoria já implementada, sem inventar endpoint de produto.
 - Não há serviços de negócio externos nem destino real configurado; a prova de consumo usa efeito local persistido em PostgreSQL.
 - Subagentes independentes não estavam disponíveis nesta sessão; revisão será sequencial com a skill local de leitura.
@@ -49,7 +49,7 @@
 |---|---|---|---|
 | PostgreSQL, migração e invariantes | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw -B -ntp spotless:check verify` em `backend/` | Testes reais de V6, concorrência, replay, worker, consumer e grants passam | Passou em 15/10/2026: BUILD SUCCESS; 25 testes unitários/arquiteturais e 29 testes de integração, PostgreSQL 16.13/Testcontainers. |
 | Frontend e dependências | `npm run format:check && npm run lint && npm test && npm run check && npm audit --audit-level=high` em `frontend/` | Sem regressão; audit high+ não encontra vulnerabilidades | Passou em 15/10/2026; 2 testes, build Vite e `found 0 vulnerabilities`. |
-| App CI e CodeQL | execuções push/PR no SHA publicado | `success`; links associados ao SHA | Passaram em 15/10/2026 no head `dafda4730244ac9c378a85d3ab4035a41ce0bfbd`: App CI push [38784285959](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38784285959), PR [38784330334](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38784330334), CodeQL push [38784286181](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38784286181), PR [38784330349](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38784330349). Inclui verify/Testcontainers, frontend, security/image, secrets e OIDC browser E2E. |
+| App CI e CodeQL | execuções push/PR no SHA publicado | `success`; links associados ao SHA | Passaram em 15/10/2026 no head `2d922bd6476cecd25570560dc218845fd41b9487`: App CI push [38784822663](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38784822663), PR [38784829943](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38784829943), CodeQL push [38784822674](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38784822674), PR [38784829990](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38784829990). Todos os jobs passaram, incluindo verify/Testcontainers, frontend, security/image, secrets e OIDC browser E2E. |
 
 ## Pendências e retomada
 
