@@ -1,11 +1,11 @@
 # Estado do projeto
 
 **Atualização:** 15/10/2026.
-**Entrega:** documentação organizada, backend/frontend base, gates locais e execução remota bem-sucedida de App CI/CodeQL no commit `3a4653442762abc5b0a64f32c633394b733715de`.
+**Entrega:** base backend/frontend, migrations, identidade administrativa e provas locais/remotas registradas; branch AGD-003 recebeu novo incremento de expiração JDBC local, com publicação/CI desse incremento ainda pendentes.
 **AGD-001:** em andamento; não marcar como concluída.
 **Plano:** [AGD-001-fundacao.md](../plans/AGD-001-fundacao.md).
 **AGD-002:** parcial no [PR #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1), branch `agd-002-tenant-isolamento`; código `e6bbcf3b920c1c6c6220d181e10f86d88c11ae32`, evidências no head `5b8b6f0c3038823b70b918ea7ab93a8b1299008d`. AGD-003 demonstra identidade OIDC real, associação server-side e contexto no GET do tenant próprio; essa resolução aguarda merge dos PRs #1/#2. Isolamento de futuros endpoints de negócio depende das histórias correspondentes. Ver [plano AGD-002](../plans/AGD-002-tenant-isolamento.md).
-**AGD-003:** em andamento na branch `agd-003-autenticacao-autorizacao`, PR #2 aberto sobre `agd-002-tenant-isolamento`, dependente do PR #1. Implementação e browser E2E real passaram localmente e remotamente; App CI `38742515664` e CodeQL `38742515500` passaram no commit `1b509c12b94c7bcbd841265f7edeb4abfe749eff`. Permanecem pendentes expiração temporal, hospedagem/TLS e homologação; ver evidências em VALIDATION.md, [plano AGD-003](../plans/AGD-003-identidade-keycloak.md) e [ADR-0006](../decisions/ADR-0006-keycloak-oidc-sessao-administrativa.md).
+**AGD-003:** em andamento na branch `agd-003-autenticacao-autorizacao`, PR #2 aberto sobre `agd-002-tenant-isolamento`, dependente do PR #1. App CI `38744164405`, CodeQL `38744164349` e o E2E browser passaram no head anterior `e17a326e1f126498961ebc7f278d616499a475a2`. Neste incremento, Maven/Testcontainers e browser E2E local passaram; corrigida a ativação JDBC real do Spring Session Boot 4, demonstrada expiração 25/31m e SSO preservado. Novo commit e CI remoto ainda pendentes. Homologação HTTPS hospedada permanece pendente; consulte VALIDATION.md, [plano AGD-003](../plans/AGD-003-identidade-keycloak.md), [runbook HTTPS](../plans/AGD-003-homologacao-https.md) e [ADR-0006](../decisions/ADR-0006-keycloak-oidc-sessao-administrativa.md).
 
 ## Já disponível
 
@@ -19,11 +19,11 @@
 - Workflow de CI com job isolado de teste e build do frontend.
 - Compose identifica a prontidão da aplicação pelo endpoint Actuator readiness.
 - AGD-002: tabela Tenant em V2, slug canonicalizado e globalmente único, timezone IANA, status/version e casos de uso de leitura/renomeação limitados pelo `tenant_id` do contexto; sem rotas de negócio liberadas.
-- AGD-003: AdminUser e associação ativos em V3; tabelas Spring Session JDBC no schema Flyway em V4; realm compartilhado Keycloak local 26.8.1; Authorization Code/PKCE; rotas administrativas mínimas e autorização revalidada no banco em cada requisição. V1/V2 preservadas.
+- AGD-003: AdminUser e associação ativos em V3; tabelas Spring Session JDBC no schema Flyway em V4; starter JDBC do Spring Boot 4 ativa persistência real; realm compartilhado Keycloak local 26.8.1; Authorization Code/PKCE; rotas administrativas mínimas e autorização revalidada no banco em cada requisição. V1/V2 preservadas.
 
 ## Evidência
 
-Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. AGD-001 teve backend/Testcontainers (18+5), frontend, format/lint, npm audit e Trivy local aprovados; App CI e CodeQL passaram no SHA publicado. O Trivy filesystem completo de dependências segue pendente após HTTP 429; a checagem de configuração verde cobre somente o Dockerfile. AGD-002 `spotless:check verify` passou em Java 21/PostgreSQL 16.13 (21 testes unitários/arquiteturais + 9 integrações), e App CI/CodeQL passaram no head do PR.
+Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. AGD-001 continua aberta pelo scan filesystem completo de dependências e homologação; scan limitado ao Dockerfile não o substitui. AGD-003: novo `spotless:check verify` passou em JDK 21 (21 testes unitários/arquiteturais + 11 integrações com PostgreSQL Testcontainers 16.13); browser E2E local com Keycloak/PostgreSQL reais passou para expiração 30m. Os gates remotos do novo commit ainda aguardam publicação.
 
 ## Pendências de AGD-001
 
@@ -34,6 +34,6 @@ Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. AG
 
 ## Próximo passo
 
-Os [PRs #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1) e [#2](https://github.com/LsaBarbosa/kronos_agendamento/pull/2) estão abertos; o #2 depende do #1. App CI, E2E real e CodeQL passaram no SHA registrado em VALIDATION.md. Próximo: revisar/integrar PRs em ordem; homologar expiração e infraestrutura HTTPS; evoluir endpoints de negócio e testes cross-tenant HTTP. AGD-003 e AGD-002 permanecem parciais; AGD-001 segue aberta pelo scan completo e homologação.
+Os [PRs #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1) e [#2](https://github.com/LsaBarbosa/kronos_agendamento/pull/2) estão abertos e mergeáveis, sem review registrado; o #2 depende do #1. Checks do head anterior `e17a326` passaram. Próximo: publicar e aguardar App CI/CodeQL do incremento; obter decisão/revisão do #1 e integrá-lo antes do #2; só então atualizar a base do #2 para `main`. Em paralelo, providenciar domínio/issuer/TLS/secrets e executar smoke HTTPS com 30m reais. AGD-003 e AGD-002 permanecem parciais; AGD-001 segue aberta pelo scan completo e homologação.
 
 As demais histórias permanecem não implementadas. Nenhuma integração de WhatsApp/cobrança ou implantação foi realizada.

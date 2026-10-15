@@ -25,7 +25,7 @@ spring:
     clean-disabled: true
     locations: classpath:db/migration
   session:
-    store-type: none
+    store-type: jdbc
     timeout: 30m
     jdbc:
       initialize-schema: never
@@ -42,7 +42,7 @@ server:
       cookie:
         name: AGDSESSION
         http-only: true
-        secure: ${SESSION_COOKIE_SECURE:false}
+        secure: ${SESSION_COOKIE_SECURE:true}
         same-site: lax
   error:
     include-message: never

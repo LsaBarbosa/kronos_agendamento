@@ -93,11 +93,13 @@ try {
     await command('Network.enable');
     await navigate('http://localhost:5173/admin', command, evaluate);
     await waitForText('Entrar como administrador', evaluate);
-    await waitUntil(async () => (await cookies(command)).some((cookie) => cookie.name === 'AGDSESSION'));
     const sessionBeforeLogin = (await cookies(command)).find(
         (cookie) => cookie.name === 'AGDSESSION',
     );
-    if (!sessionBeforeLogin?.httpOnly || sessionBeforeLogin.sameSite !== 'Lax') {
+    if (
+        sessionBeforeLogin &&
+        (!sessionBeforeLogin.httpOnly || sessionBeforeLogin.sameSite !== 'Lax')
+    ) {
         throw new Error('Cookie de sessão não tem HttpOnly e SameSite=Lax.');
     }
     console.log('Browser: frontend carregado.');
@@ -114,8 +116,14 @@ try {
     const sessionAfterLogin = (await cookies(command)).find(
         (cookie) => cookie.name === 'AGDSESSION',
     );
-    if (!sessionAfterLogin || sessionAfterLogin.value === sessionBeforeLogin.value) {
+    if (
+        !sessionAfterLogin ||
+        (sessionBeforeLogin && sessionAfterLogin.value === sessionBeforeLogin.value)
+    ) {
         throw new Error('Identificador da sessão não foi renovado após autenticação.');
+    }
+    if (!sessionAfterLogin.httpOnly || sessionAfterLogin.sameSite !== 'Lax') {
+        throw new Error('Cookie autenticado não tem HttpOnly e SameSite=Lax.');
     }
     const tenantDisplayed = await evaluate(
         "document.body.innerText.includes(" +
@@ -168,10 +176,74 @@ try {
         setAccessStatus('admin_user', 'ACTIVE', credentials, appEnvironment);
     }
 
-    await evaluate(
-        "[...document.querySelectorAll('button')].find(button => button.innerText.includes('Sair')).click()",
+    const sessionBeforeExpiry = (await cookies(command)).find(
+        (cookie) => cookie.name === 'AGDSESSION',
     );
-    await waitForText('Sessão local encerrada.', evaluate);
+    if (!sessionBeforeExpiry) throw new Error('Cookie de sessão não encontrado antes do teste de expiração.');
+    const nearExpiryRecord = setSessionIdleMinutes(
+        sessionBeforeExpiry.value,
+        25,
+        appEnvironment,
+    );
+    if (nearExpiryRecord.maxInactiveInterval !== 1800) {
+        throw new Error(`Intervalo de inatividade inesperado: ${nearExpiryRecord.maxInactiveInterval}s.`);
+    }
+    if (nearExpiryRecord.expiryTime <= Date.now()) {
+        throw new Error('expiry_time não permaneceu futuro com 25 minutos de inatividade.');
+    }
+    const validBeforeExpiry = await evaluate(
+        "fetch('/api/v1/admin/session', {credentials:'same-origin'}).then(async response => ({status:response.status, body:await response.json()}))",
+    );
+    if (validBeforeExpiry.status !== 200) {
+        throw new Error('Sessão com 25 minutos de inatividade foi rejeitada antes do limite.');
+    }
+    const refreshedRecord = readSessionRecord(sessionBeforeExpiry.value, appEnvironment);
+    if (
+        refreshedRecord.maxInactiveInterval !== 1800 ||
+        refreshedRecord.lastAccessTime <= nearExpiryRecord.lastAccessTime + 24 * 60 * 1000 ||
+        Math.abs(Date.now() - refreshedRecord.lastAccessTime) > 120_000 ||
+        refreshedRecord.expiryTime <= Date.now()
+    ) {
+        throw new Error('Requisição válida não renovou last_access_time na sessão JDBC de 30 minutos.');
+    }
+
+    setSessionIdleMinutes(sessionBeforeExpiry.value, 31, appEnvironment);
+    const expiredApiResponse = await evaluate(
+        "fetch('/api/v1/admin/session', {credentials:'same-origin'}).then(async response => ({status:response.status, body:await response.json()}))",
+    );
+    if (
+        expiredApiResponse.status !== 401 ||
+        expiredApiResponse.body.error?.code !== 'AUTHENTICATION_REQUIRED'
+    ) {
+        throw new Error('Cookie da sessão inativa por mais de 30 minutos acessou a API protegida.');
+    }
+    await navigate('http://localhost:5173/admin', command, evaluate);
+    await waitForText('Sua sessão expirou ou ainda não foi iniciada.', evaluate);
+    if (!(await evaluate("Boolean(document.querySelector('a[href*=oauth2]'))"))) {
+        throw new Error('UI não ofereceu novo login após receber 401 da sessão expirada.');
+    }
+    await evaluate("document.querySelector('a[href*=oauth2]').click()");
+    await waitForText('Sessão administrativa ativa.', evaluate);
+    if (await evaluate("Boolean(document.querySelector('input[name=\"username\"]'))")) {
+        throw new Error('SSO Keycloak ativo deveria permitir novo login sem formulário de credenciais.');
+    }
+    const renewedSessionStatus = await evaluate(
+        "fetch('/api/v1/admin/session', {credentials:'same-origin'}).then(response => response.status)",
+    );
+    if (renewedSessionStatus !== 200) {
+        throw new Error('Nova autenticação OIDC não criou sessão local depois da expiração.');
+    }
+    console.log('Browser: expiração local de 30 min, renovação por atividade e novo login via SSO validados.');
+
+    await waitUntil(async () => {
+        if ((await evaluate("document.querySelector('output')?.innerText")) === 'Sessão local encerrada.') {
+            return true;
+        }
+        await evaluate(
+            "[...document.querySelectorAll('button')].find(button => button.innerText.includes('Sair')).click()",
+        );
+        return (await evaluate("document.querySelector('output')?.innerText")) === 'Sessão local encerrada.';
+    });
     const reusedSessionStatus = await evaluate(
         "fetch('/api/v1/admin/session', {credentials:'same-origin'}).then(response => response.status)",
     );
@@ -191,7 +263,7 @@ try {
     );
     await waitForText('ADMIN_ACCESS_DENIED', evaluate);
     assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, credentials);
-    console.log('Browser E2E passed: OIDC login, tenant, revocation, CSRF logout, unlinked denial, no test credentials in backend logs.');
+    console.log('Browser E2E passed: OIDC login, tenant, 30-minute idle expiry, SSO reauthentication, revocation, CSRF logout, unlinked denial, no test credentials in backend logs.');
 } finally {
     socket?.close();
     browser.kill('SIGTERM');
@@ -250,6 +322,84 @@ function setAccessStatus(table, status, credentials, environment) {
         ],
         { stdio: 'ignore' },
     );
+}
+
+function setSessionIdleMinutes(sessionId, idleMinutes, environment) {
+    const storedSessionId = normalizeSessionId(sessionId);
+    const result = queryPostgres(
+        `WITH idle AS (SELECT clock_timestamp() - interval '${idleMinutes} minutes' AS last_access)
+         UPDATE agendamento.spring_session AS stored_session
+         SET last_access_time = (extract(epoch FROM idle.last_access) * 1000)::bigint,
+             expiry_time = (extract(epoch FROM idle.last_access + stored_session.max_inactive_interval * interval '1 second') * 1000)::bigint
+         FROM idle
+         WHERE replace(trim(stored_session.session_id), '-', '') = '${storedSessionId}'
+         RETURNING stored_session.max_inactive_interval || '|' || stored_session.last_access_time || '|' || stored_session.expiry_time`,
+        environment,
+    );
+    if (!result) throw new Error('Sessão JDBC ativa não encontrada para o teste temporal.');
+    return parseSessionRecord(result);
+}
+
+function readSessionRecord(sessionId, environment) {
+    const storedSessionId = normalizeSessionId(sessionId);
+    const result = queryPostgres(
+        `SELECT max_inactive_interval || '|' || last_access_time || '|' || expiry_time
+         FROM agendamento.spring_session WHERE replace(trim(session_id), '-', '') = '${storedSessionId}'`,
+        environment,
+    );
+    return result ? parseSessionRecord(result) : null;
+}
+
+function normalizeSessionId(sessionId) {
+    const decodedSessionId =
+        /^[0-9a-f]{32}$/i.test(sessionId) ||
+        /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(sessionId)
+            ? sessionId
+            : Buffer.from(sessionId, 'base64url').toString('utf8');
+    if (/^[0-9a-f]{32}$/i.test(decodedSessionId)) {
+        return decodedSessionId;
+    }
+    if (/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(decodedSessionId)) {
+        return decodedSessionId.replaceAll('-', '');
+    }
+    throw new Error('Identificador de sessão tem formato inesperado.');
+}
+
+function parseSessionRecord(value) {
+    const [maxInactiveInterval, lastAccessTime, expiryTime] = value
+        .split('|')
+        .map(Number);
+    return { maxInactiveInterval, lastAccessTime, expiryTime };
+}
+
+function queryPostgres(query, environment) {
+    return execFileSync(
+        'docker',
+        [
+            'compose',
+            '-p',
+            'agendamento',
+            'exec',
+            '-T',
+            '-e',
+            `PGPASSWORD=${environment.POSTGRES_PASSWORD}`,
+            'postgres',
+            'psql',
+            '-X',
+            '-q',
+            '-t',
+            '-A',
+            '-v',
+            'ON_ERROR_STOP=1',
+            '-U',
+            environment.POSTGRES_USER,
+            '-d',
+            environment.POSTGRES_DB,
+            '-c',
+            query,
+        ],
+        { encoding: 'utf8' },
+    ).trim();
 }
 
 function assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, credentials) {
