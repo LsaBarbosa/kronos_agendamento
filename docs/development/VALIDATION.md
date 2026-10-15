@@ -185,3 +185,5 @@ No head original `4181b630f45f7dd24f1bbcb8180a1943fcea775a`, App CI PR `38801658
 Revisão atual: backend revisado independentemente em leitura; não equivale a aprovação humana. Novo teste frontend cobre identidade de retry após resposta perdida e comandos divergentes. `npm run format`, `npm run lint`, `npm test` (4 testes) e `npm run check` passaram neste ambiente. JDK local 17 e ausência de Docker impedem repetir integração PostgreSQL aqui; usar App CI do novo head, sem inferir aprovação futura.
 
 Sem mudanças em backend ou migrations. Mantidas pendências de homologação, retenção, fornecedores e scan completo. Listagem sem paginação e reforço de CHECK SQL de detalhes de auditoria são melhorias conhecidas, sem caminho HTTP de bypass demonstrado. A implementação Java aplica allowlist.
+
+Regressão browser adicional: perde deliberadamente a resposta HTTP após commit de criação e repete o submit com a mesma chave; consulta autenticada exige exatamente um serviço. Sintaxe `node --check scripts/dev/test-keycloak-browser.mjs` passou; execução depende do App CI do head entregue.

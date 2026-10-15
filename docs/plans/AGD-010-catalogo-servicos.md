@@ -30,7 +30,7 @@
 
 - NFKC + trim + lowercase `Locale.ROOT` é a canonicalização técnica do nome para unicidade, mantendo nome de apresentação; índice parcial `WHERE status='ACTIVE'` resolve concorrência. Registrar em ADR.
 - Cada alteração usa `expectedVersion` e incrementa a versão; chamadas mutáveis exigem `Idempotency-Key`; digest inclui tenant confiável, alvo, versão e campos canônicos. Resultado replay sempre revalida associação e existência.
-- Criação recebe status explícito; não definir ativação/default implicitamente. `buffer_after_minutes = 0` é permitido pelo modelo 02 e campo opcional do documento 01, mas AGD-010 usa “positivos”; solicitar decisão e manter o comportamento conforme resposta aprovada (ou registrar pendência).
+- Criação recebe status explícito; não definir ativação/default implicitamente. `buffer_after_minutes = 0` é permitido pelo modelo 02 e campo opcional do documento 01, e foi confirmado pelo usuário em 15/10/2026; AGD-010 foi alinhada à decisão.
 - Documento 01 exige link público oculto até a configuração mínima válida, mas essa configuração inclui capacidade/agenda futura não existente. Até esclarecer o gate e implementar a dependência AGD-011, rotas públicas continuam deny-all; não inferir prontidão de `Tenant.ACTIVE`.
 - Sem outbox artificial: usar somente `ServiceCreated` que o documento 03 declara. Evento usa ID estável do serviço, tenant, versão e operation/correlation IDs; payload allowlisted sem request nem nome/descrição.
 - Sem prazo ou expurgo novo; pendência geral de retenção segue vigente.
@@ -48,7 +48,7 @@
 - [x] 15/10/2026 — `origin/main` confirmou merge #3 (`1138395`) e #4 (`1090b44`); working tree limpa; branch derivada da main atualizada.
 - [x] Implementação funcional, revisão independente em leitura e validação local; achados pertinentes corrigidos. Código testado em `4678f2481b11b427b77502523eab9638f0013b30`.
 - [x] App CI e CodeQL push/PR passaram no head documental `5d64bf8ed88feb727af7757c666bda6b7bc39eeb` (runs `38801099775`, `38801112602`, `38801099641`, `38801112548`); browser E2E real passou após a correção CSRF `eaddf0f`. A implementação funcional testada permanece idêntica ao head de código `d88f175`; links em `VALIDATION.md`.
-- [x] PR [#5](https://github.com/LsaBarbosa/kronos_agendamento/pull/5) aberto para `main`; não fazer merge/deploy.
+- [x] PR [#5](https://github.com/LsaBarbosa/kronos_agendamento/pull/5) aberto para `main`; integração autorizada em 15/10/2026 após revisão/checks. Sem deploy.
 - [ ] Homologação e critérios dependentes de agenda/publicação.
 
 | Critério | Comando/procedimento | Esperado | Observado |
@@ -62,7 +62,7 @@
 
 ## Encerramento ou retomada
 
-- Estado permanece parcial: o gate público depende de decisão e da prontidão de agenda; snapshots só podem ser comprovados com reservas em AGD-015. O conflito documental sobre buffer e a apresentação/moeda de preço seguem em `OPEN-QUESTIONS.md`.
+- Estado permanece parcial: o gate público depende de decisão e da prontidão de agenda; snapshots só podem ser comprovados com reservas em AGD-015. Buffer foi resolvido em 15/10/2026; apresentação/moeda de preço seguem em `OPEN-QUESTIONS.md`.
 - `STATUS.md`, `VALIDATION.md`, `TRACEABILITY.md` e `OPEN-QUESTIONS.md` registram SHAs, runs, decisões e limites. CI está verde no head publicado; registrar eventual novo head documental separado.
 - Próxima dependência funcional: AGD-011 — Grade semanal e políticas.
 
@@ -74,3 +74,5 @@
 - Regressões verificam resposta perdida/retry e troca de comando. Backend/migrations não alterados nesta revisão; V1–V7 preservadas.
 - Limites de revisão: sem JDK 21 ou Docker neste ambiente, backend depende do CI remoto do head entregue. Listagem sem paginação e endurecimento adicional da constraint SQL de detalhes de auditoria (CHECK com NULL) são melhorias registradas; API Java aplica allowlist. A revisão não demonstra homologação.
 - Gate público e snapshots persistidos em reservas continuam pendentes. O bloqueio público aprovado não equivale à implementação do gate.
+
+Regressão browser adicional: perde deliberadamente a resposta HTTP após commit de criação e repete o submit com a mesma chave; consulta autenticada exige exatamente um serviço. Sintaxe `node --check scripts/dev/test-keycloak-browser.mjs` passou; execução depende do App CI do head entregue.

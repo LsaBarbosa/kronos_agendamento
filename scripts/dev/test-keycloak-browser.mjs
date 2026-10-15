@@ -153,8 +153,26 @@ try {
     await setAdminField('input', 1, '45', evaluate);
     await setAdminField('input', 2, '0', evaluate);
     await setAdminField('select', 0, 'ACTIVE', evaluate);
+    // Commit succeeds, but the first response is lost before the UI receives it.
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        if (String(args[0]).endsWith('/v1/admin/services') && args[1]?.method === 'POST' && response.ok) {
+          window.fetch = originalFetch;
+          throw new TypeError('Simulated lost response after commit');
+        }
+        return response;
+      };
+    })()`);
+    await evaluate("document.querySelector('form').requestSubmit()");
+    await waitForText('Não foi possível salvar.', evaluate);
     await evaluate("document.querySelector('form').requestSubmit()");
     await waitForText('Serviço criado.', evaluate);
+    const matchingServices = await evaluate(
+        `fetch('/api/v1/admin/services', { credentials: 'same-origin' }).then(response => response.json()).then(services => services.filter(service => service.name === ${JSON.stringify(catalogName)}).length)`,
+    );
+    if (matchingServices !== 1) throw new Error('Retry duplicated catalog service after lost response');
     await waitForText(catalogName, evaluate);
     await evaluate(`(() => {
       const serviceRow = [...document.querySelectorAll('li')].find(item => item.innerText.includes(${JSON.stringify(catalogName)}));
