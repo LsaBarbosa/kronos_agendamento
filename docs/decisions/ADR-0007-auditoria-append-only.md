@@ -1,7 +1,7 @@
 # ADR-0007 — Trilha de auditoria append-only no PostgreSQL
 
-**Data:** 15/10/2026  
-**Status:** adotada para o incremento AGD-004; não encerra os critérios futuros de auditoria.  
+**Data:** 15/10/2026
+**Status:** adotada para o incremento AGD-004; não encerra os critérios futuros de auditoria.
 **Referências:** documentos 01 seção 14, 02 seções 2/15, 04 seções 7/14, 05 seções 15/21/22, AGD-004 e ADR-0005/0006.
 
 ## Contexto
