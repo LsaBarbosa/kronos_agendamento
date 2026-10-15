@@ -32,6 +32,6 @@
 - **AGD-003:** disponibilizar domínio/issuer/TLS/secrets e executar smoke HTTPS observado; não inferir homologação dos testes locais. Não habilitar suporte sem RBAC/MFA aprovados.
 - **AGD-004:** fechar cobertura de falhas/logout/negações de segurança conforme decisão e implementação futura; integrar auditoria a operações de negócio futuras; decidir retenção/legal hold antes de excluir qualquer evento.
 - **AGD-005:** PR #4 integrado. Destinos WhatsApp/cobrança/broker e reconciliação real não estão integrados; consumo PostgreSQL é prova de infraestrutura. Aprovar retenção para idempotency records/outbox/receipts antes de expurgar. Homologação permanece pendente.
-- **AGD-010:** falta CI remoto verde no PR e decisão de produto sobre exposição pública/gate de prontidão e semântica positiva versus zero do buffer. Não há preço/moeda definido. A prova de snapshot preservado em reservas requer AGD-015; não houve alteração em reservas.
+- **AGD-010:** PR #5 permanece aberto para revisão; App CI/CodeQL push/PR passaram no head atual, sem merge/deploy. Decisões pendentes: exposição pública/gate de prontidão, buffer positivo versus zero e preço/moeda. Snapshot preservado em reservas requer AGD-015; este incremento não alterou reservas.
 
 Próximo incremento funcional recomendado após revisão de AGD-010: AGD-011 — Grade semanal e políticas. As demais integrações de produto permanecem fora desta fundação e não foram homologadas em produção.
