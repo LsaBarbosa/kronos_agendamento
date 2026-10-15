@@ -18,7 +18,7 @@
 | Critério | Evidência esperada |
 |---|---|
 | Criar, editar, ativar e inativar | Casos de uso, API protegida e fluxo administrativo UI |
-| Duração múltipla de 15 e positiva; buffer múltiplo de 15 e não negativo | Validação de domínio, constraints PostgreSQL e testes; confirmar resolução do conflito documental sobre buffer zero |
+| Duração múltipla de 15 e positiva; buffer múltiplo de 15 e não negativo | Validação de domínio, constraints PostgreSQL e testes; decisão do usuário em 15/10/2026 confirma buffer zero |
 | Nome único entre ativos do tenant por comparação normalizada | Índice único parcial em PostgreSQL e corrida concorrente |
 | Isolamento e não revelação HTTP | chamadas autenticadas para próprio/alheio/inexistente; sem mudança ou evento de sucesso em negação |
 | Mutação auditável/idempotente | sucesso, replay, digest divergente e rollback em PostgreSQL real |
@@ -65,3 +65,12 @@
 - Estado permanece parcial: o gate público depende de decisão e da prontidão de agenda; snapshots só podem ser comprovados com reservas em AGD-015. O conflito documental sobre buffer e a apresentação/moeda de preço seguem em `OPEN-QUESTIONS.md`.
 - `STATUS.md`, `VALIDATION.md`, `TRACEABILITY.md` e `OPEN-QUESTIONS.md` registram SHAs, runs, decisões e limites. CI está verde no head publicado; registrar eventual novo head documental separado.
 - Próxima dependência funcional: AGD-011 — Grade semanal e políticas.
+
+## Revisão para integração — 15/10/2026
+
+- Usuário autorizou executar as recomendações e integrar após validação: buffer zero ou positivo em múltiplos de 15 confirmado; publicação pública continua bloqueada até condição explícita aprovada e implementada. Requisito e ADR atualizados.
+- Revisão independente em leitura do backend administrativo não identificou bloqueadores reproduzíveis de isolamento/CAS/atomicidade. Revisão por agente não é aprovação humana no GitHub.
+- Corrigido vínculo de Idempotency-Key na UI: retry do mesmo conteúdo mantém chave; alteração de conteúdo/versão/ação/alvo usa outra chave. Chaves são descartadas após sucesso confirmado ou logout; não são persistidas no navegador.
+- Regressões verificam resposta perdida/retry e troca de comando. Backend/migrations não alterados nesta revisão; V1–V7 preservadas.
+- Limites de revisão: sem JDK 21 ou Docker neste ambiente, backend depende do CI remoto do head entregue. Listagem sem paginação e endurecimento adicional da constraint SQL de detalhes de auditoria (CHECK com NULL) são melhorias registradas; API Java aplica allowlist. A revisão não demonstra homologação.
+- Gate público e snapshots persistidos em reservas continuam pendentes. O bloqueio público aprovado não equivale à implementação do gate.

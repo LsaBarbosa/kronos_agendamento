@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { apiBaseUrl } from './config';
+import { commandKey } from './commandKey';
 
 type Session = { authenticated: boolean; tenantId: string; role: string };
 type Csrf = { headerName: string; token: string };
@@ -166,9 +167,6 @@ export function App() {
             ? apiBaseUrl + '/v1/admin/services/' + editing.serviceId
             : apiBaseUrl + '/v1/admin/services';
         const operationKey = editing ? 'update:' + editing.serviceId : 'create';
-        const key =
-            pendingKeys.current.get(operationKey) ?? crypto.randomUUID();
-        pendingKeys.current.set(operationKey, key);
         const body = editing
             ? {
                   name: draft.name,
@@ -184,6 +182,7 @@ export function App() {
                   bufferAfterMinutes: Number(draft.bufferAfterMinutes),
                   status: draft.status,
               };
+        const key = commandKey(pendingKeys.current, operationKey, body);
         try {
             const response = await fetch(endpoint, {
                 method: editing ? 'PATCH' : 'POST',
@@ -213,7 +212,7 @@ export function App() {
                 return;
             }
             const saved = (await response.json()) as Service;
-            pendingKeys.current.delete(operationKey);
+            pendingKeys.current.delete(JSON.stringify([operationKey, body]));
             setServices((current) => {
                 const unchanged = current.filter(
                     (item) => item.serviceId !== saved.serviceId,
@@ -240,9 +239,8 @@ export function App() {
         }
         const action = service.status === 'ACTIVE' ? 'deactivate' : 'activate';
         const operationKey = 'status:' + service.serviceId + ':' + action;
-        const key =
-            pendingKeys.current.get(operationKey) ?? crypto.randomUUID();
-        pendingKeys.current.set(operationKey, key);
+        const body = { expectedVersion: service.version };
+        const key = commandKey(pendingKeys.current, operationKey, body);
         setError('');
         setNotice('');
         try {
@@ -260,7 +258,7 @@ export function App() {
                         [csrf.headerName]: csrf.token,
                         'Idempotency-Key': key,
                     },
-                    body: JSON.stringify({ expectedVersion: service.version }),
+                    body: JSON.stringify(body),
                 },
             );
             if (response.status === 401) {
@@ -275,7 +273,7 @@ export function App() {
                 return;
             }
             const updated = (await response.json()) as Service;
-            pendingKeys.current.delete(operationKey);
+            pendingKeys.current.delete(JSON.stringify([operationKey, body]));
             setServices((current) =>
                 current.map((item) =>
                     item.serviceId === updated.serviceId ? updated : item,
@@ -304,6 +302,7 @@ export function App() {
         setSession(null);
         setCsrf(null);
         setServices([]);
+        pendingKeys.current.clear();
         setStatus(
             response.ok ? 'Sessão local encerrada.' : 'Logout rejeitado.',
         );
