@@ -3,7 +3,7 @@ package com.appagendamento.tenant;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.appagendamento.identityaccess.api.AuthenticatedTenant;
+import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import com.appagendamento.support.PostgresTestEnvironment;
 import com.appagendamento.tenant.application.CreateTenant;
 import com.appagendamento.tenant.application.GetTenant;
@@ -16,9 +16,9 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationVersion;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -29,9 +29,8 @@ import org.springframework.test.context.DynamicPropertySource;
 @SpringBootTest
 class TenantPersistenceIT {
 
-  @Autowired private JdbcTemplate jdbc;
-  @Autowired private DataSource dataSource;
-  @Autowired private Flyway flyway;
+  private JdbcTemplate jdbc;
+  @Autowired private JdbcTemplate appJdbc;
   @Autowired private CreateTenant createTenant;
   @Autowired private GetTenant getTenant;
   @Autowired private RenameTenant renameTenant;
@@ -41,12 +40,17 @@ class TenantPersistenceIT {
     PostgresTestEnvironment.configure(registry);
   }
 
+  @BeforeEach
+  void privilegedFixtures() {
+    jdbc = new JdbcTemplate(PostgresTestEnvironment.migrationDataSource());
+  }
+
   @Test
   void appliesV1AndV2ToFreshSchemaAndCanRerunWithoutChanges() {
     String schema = isolatedSchemaName();
     Flyway fresh = isolatedFlyway(schema);
 
-    assertThat(fresh.migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(fresh.migrate().migrationsExecuted).isEqualTo(5);
     fresh.validate();
     assertThat(fresh.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -55,7 +59,7 @@ class TenantPersistenceIT {
                     + schema
                     + ".flyway_schema_history WHERE success ORDER BY installed_rank",
                 String.class))
-        .containsExactly(null, "1", "2", "3", "4");
+        .containsExactly(null, "1", "2", "3", "4", "5");
     assertThat(
             jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = ? AND table_name = 'tenant')",
@@ -78,7 +82,7 @@ class TenantPersistenceIT {
 
     assertThat(v1.info().current().getVersion().getVersion()).isEqualTo("1");
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(4);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -87,7 +91,7 @@ class TenantPersistenceIT {
                     + schema
                     + ".flyway_schema_history WHERE success ORDER BY installed_rank",
                 String.class))
-        .containsExactly(null, "1", "2", "3", "4");
+        .containsExactly(null, "1", "2", "3", "4", "5");
     assertThat(
             jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = ? AND table_name = 'tenant')",
@@ -103,7 +107,7 @@ class TenantPersistenceIT {
     assertThat(v2.migrate().migrationsExecuted).isEqualTo(2);
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(3);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -112,7 +116,7 @@ class TenantPersistenceIT {
                     + schema
                     + ".flyway_schema_history WHERE success ORDER BY installed_rank",
                 String.class))
-        .containsExactly(null, "1", "2", "3", "4");
+        .containsExactly(null, "1", "2", "3", "4", "5");
     assertThat(
             jdbc.queryForObject("SELECT to_regclass(?||'.spring_session')", String.class, schema))
         .isEqualTo(schema + ".spring_session");
@@ -122,7 +126,7 @@ class TenantPersistenceIT {
   void permitsOwnTenantOperationsAndConcealsForeignTenantForReadAndMutation() {
     Tenant own = createTenant.execute("Clínica A", "tenant-a-" + suffix(), "America/Sao_Paulo");
     Tenant foreign = createTenant.execute("Clínica B", "tenant-b-" + suffix(), "America/Fortaleza");
-    AuthenticatedTenant actor = () -> own.tenantId();
+    AuthenticatedAdmin actor = adminActor(own.tenantId());
 
     assertThat(getTenant.execute(actor, own.tenantId()).tenantId()).isEqualTo(own.tenantId());
     Tenant renamed = renameTenant.execute(actor, own.tenantId(), "Clínica A Atualizada", 0);
@@ -170,7 +174,7 @@ class TenantPersistenceIT {
 
   private Flyway isolatedFlyway(String schema, MigrationVersion target) {
     return Flyway.configure()
-        .dataSource(dataSource)
+        .dataSource(PostgresTestEnvironment.migrationDataSource())
         .locations("classpath:db/migration")
         .schemas(schema)
         .defaultSchema(schema)
@@ -186,5 +190,35 @@ class TenantPersistenceIT {
 
   private static String suffix() {
     return UUID.randomUUID().toString().substring(0, 8);
+  }
+
+  private static AuthenticatedAdmin adminActor(UUID tenantId) {
+    UUID adminId = UUID.randomUUID();
+    return new AuthenticatedAdmin() {
+      @Override
+      public UUID adminUserId() {
+        return adminId;
+      }
+
+      @Override
+      public String issuer() {
+        return "https://identity.test/realms/agendamento";
+      }
+
+      @Override
+      public String subject() {
+        return UUID.randomUUID().toString();
+      }
+
+      @Override
+      public String role() {
+        return "TENANT_ADMIN";
+      }
+
+      @Override
+      public UUID tenantId() {
+        return tenantId;
+      }
+    };
   }
 }

@@ -19,6 +19,9 @@ spring:
           time_zone: UTC
   flyway:
     enabled: true
+    url: ${FLYWAY_DB_URL:${DB_URL:jdbc:postgresql://localhost:5432/agendamento}}
+    user: ${FLYWAY_DB_USERNAME:${POSTGRES_USER:agendamento}}
+    password: ${FLYWAY_DB_PASSWORD:${POSTGRES_PASSWORD:${DB_PASSWORD}}}
     schemas: agendamento
     default-schema: agendamento
     create-schemas: true

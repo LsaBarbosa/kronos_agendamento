@@ -10,11 +10,12 @@ fi
 
 umask 077
 password=$(openssl rand -hex 32)
+app_password=$(openssl rand -hex 32)
 cat > .env <<EOF
 POSTGRES_DB=agendamento
 POSTGRES_USER=agendamento
 POSTGRES_PASSWORD=$password
-DB_PASSWORD=$password
+APP_DB_PASSWORD=$app_password
 POSTGRES_PORT=5432
 APP_PORT=8080
 EOF

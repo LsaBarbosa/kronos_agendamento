@@ -51,6 +51,25 @@ if [[ -z "$subject" ]]; then
   echo "Não foi possível obter o subject provisionado no Keycloak." >&2
   exit 1
 fi
+existing_tenant=$(docker compose -p agendamento exec -T \
+  -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
+  psql -X -qAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
+  -d "${POSTGRES_DB:-agendamento}" -v tenant_slug="$slug" \
+  -c "SELECT EXISTS (SELECT 1 FROM agendamento.tenant WHERE slug = :'tenant_slug')")
+if [[ "$existing_tenant" == "t" ]]; then
+  echo "Slug já provisionado; use um slug novo. Nenhuma credencial foi alterada." >&2
+  exit 1
+fi
+existing_identity=$(docker compose -p agendamento exec -T \
+  -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
+  psql -X -qAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
+  -d "${POSTGRES_DB:-agendamento}" -v issuer="http://localhost:8180/realms/agendamento" \
+  -v subject="$subject" \
+  -c "SELECT EXISTS (SELECT 1 FROM agendamento.admin_user WHERE identity_issuer = :'issuer' AND identity_subject = :'subject')")
+if [[ "$existing_identity" == "t" ]]; then
+  echo "A identidade já está provisionada no banco; nenhuma credencial foi alterada." >&2
+  exit 1
+fi
 "${kc[@]}" update "users/$subject" -r agendamento \
   -s enabled=true -s email=demo-admin@local.invalid -s emailVerified=true \
   -s firstName=Demo -s lastName=Admin -s 'requiredActions=[]' >/dev/null
@@ -76,29 +95,30 @@ tenant_id=$(docker compose -p agendamento exec -T \
   -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
   psql -X -qAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
   -d "${POSTGRES_DB:-agendamento}" \
-  -v tenant_id="$tenant_id" -v tenant_name="$tenant_name" -v tenant_slug="$slug" <<'SQL'
+  -v tenant_id="$tenant_id" -v tenant_name="$tenant_name" -v tenant_slug="$slug" \
+  -v user_id="$subject" -v issuer="http://localhost:8180/realms/agendamento" \
+  -v subject="$subject" -v trace_id="$(uuidgen)" <<'SQL'
+BEGIN;
 INSERT INTO agendamento.tenant (tenant_id, name, slug, timezone, status, version)
 VALUES (:'tenant_id', :'tenant_name', :'tenant_slug', 'America/Sao_Paulo', 'ACTIVE', 0)
-ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
 RETURNING tenant_id;
+INSERT INTO agendamento.admin_user (user_id, identity_issuer, identity_subject, status)
+VALUES (:'user_id', :'issuer', :'subject', 'ACTIVE');
+INSERT INTO agendamento.admin_tenant_membership (user_id, tenant_id, role, status)
+VALUES (:'user_id', :'tenant_id', 'TENANT_ADMIN', 'ACTIVE');
+INSERT INTO agendamento.audit_event
+  (event_id, tenant_id, actor_type, actor_ref, action, target_type, target_id, result,
+   correlation_id, trace_id, details)
+VALUES
+  (gen_random_uuid(), :'tenant_id', 'SYSTEM', 'CONTROLLED_DEMO_PROVISIONER',
+   'TENANT_CREATED', 'TENANT', :'tenant_id', 'COMMITTED', :'trace_id', :'trace_id',
+   '{"changed_fields":["name","slug","timezone"]}'::jsonb),
+  (gen_random_uuid(), :'tenant_id', 'SYSTEM', 'CONTROLLED_DEMO_PROVISIONER',
+   'TENANT_ADMIN_LINKED', 'ADMIN_TENANT_MEMBERSHIP', :'user_id', 'COMMITTED',
+   :'trace_id', :'trace_id', '{"changed_fields":["identity","membership"]}'::jsonb);
+COMMIT;
 SQL
 )
-
-issuer=http://localhost:8180/realms/agendamento
-docker compose -p agendamento exec -T \
-  -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
-  psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
-  -d "${POSTGRES_DB:-agendamento}" \
-  -v user_id="$subject" -v issuer="$issuer" -v subject="$subject" -v tenant_id="$tenant_id" <<'SQL'
-INSERT INTO agendamento.admin_user (user_id, identity_issuer, identity_subject, status)
-VALUES (:'user_id', :'issuer', :'subject', 'ACTIVE')
-ON CONFLICT (identity_issuer, identity_subject) DO UPDATE SET status = 'ACTIVE';
-INSERT INTO agendamento.admin_tenant_membership (user_id, tenant_id, role, status)
-SELECT user_id, :'tenant_id', 'TENANT_ADMIN', 'ACTIVE'
-FROM agendamento.admin_user
-WHERE identity_issuer = :'issuer' AND identity_subject = :'subject'
-ON CONFLICT (user_id) DO UPDATE SET tenant_id = EXCLUDED.tenant_id, role = EXCLUDED.role, status = 'ACTIVE';
-SQL
 
 umask 077
 printf 'KEYCLOAK_DEMO_USERNAME=%s\nKEYCLOAK_DEMO_PASSWORD=%s\nKEYCLOAK_UNLINKED_USERNAME=%s\nKEYCLOAK_UNLINKED_PASSWORD=%s\nDEMO_TENANT_ID=%s\n' \

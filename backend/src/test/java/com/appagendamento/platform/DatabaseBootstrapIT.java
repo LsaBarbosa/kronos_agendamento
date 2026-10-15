@@ -8,6 +8,7 @@ import com.appagendamento.platform.infrastructure.web.CorrelationIdFilter;
 import com.appagendamento.support.PostgresTestEnvironment;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -22,6 +23,7 @@ import org.springframework.test.web.servlet.MockMvc;
 class DatabaseBootstrapIT {
 
   @Autowired private JdbcTemplate jdbc;
+  private JdbcTemplate migrationJdbc;
   @Autowired private Flyway flyway;
   @Autowired private MockMvc mvc;
 
@@ -30,28 +32,38 @@ class DatabaseBootstrapIT {
     PostgresTestEnvironment.configure(registry);
   }
 
+  @BeforeEach
+  void privilegedMigrationInspection() {
+    migrationJdbc = new JdbcTemplate(PostgresTestEnvironment.migrationDataSource());
+  }
+
   @Test
   void startsWithRealPostgresAndAppliesMigration() {
     assertThat(jdbc.queryForObject("select version()", String.class)).contains("PostgreSQL 16");
     assertThat(
-            jdbc.queryForObject(
+            migrationJdbc.queryForObject(
                 "select count(*) from pg_extension where extname = 'btree_gist'", Integer.class))
         .isEqualTo(1);
     assertThat(
-            jdbc.queryForObject(
+            migrationJdbc.queryForObject(
                 "select count(*) from agendamento.flyway_schema_history where version = '1' and success",
                 Integer.class))
         .isEqualTo(1);
     assertThat(
-            jdbc.queryForObject(
+            migrationJdbc.queryForObject(
                 "select count(*) from agendamento.flyway_schema_history where version = '2' and success",
                 Integer.class))
         .isEqualTo(1);
     assertThat(
-            jdbc.queryForObject(
+            migrationJdbc.queryForObject(
                 "select count(*) from agendamento.flyway_schema_history where version in ('3', '4') and success",
                 Integer.class))
         .isEqualTo(2);
+    assertThat(
+            migrationJdbc.queryForObject(
+                "select count(*) from agendamento.flyway_schema_history where version = '5' and success",
+                Integer.class))
+        .isEqualTo(1);
     assertThat(
             jdbc.queryForObject("select to_regclass('agendamento.spring_session')", String.class))
         .isEqualTo("agendamento.spring_session");
