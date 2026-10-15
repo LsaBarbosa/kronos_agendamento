@@ -54,8 +54,10 @@ fi
 existing_tenant=$(docker compose -p agendamento exec -T \
   -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
   psql -X -qAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
-  -d "${POSTGRES_DB:-agendamento}" -v tenant_slug="$slug" \
-  -c "SELECT EXISTS (SELECT 1 FROM agendamento.tenant WHERE slug = :'tenant_slug')")
+  -d "${POSTGRES_DB:-agendamento}" -v tenant_slug="$slug" <<'SQL'
+SELECT EXISTS (SELECT 1 FROM agendamento.tenant WHERE slug = :'tenant_slug');
+SQL
+)
 if [[ "$existing_tenant" == "t" ]]; then
   echo "Slug já provisionado; use um slug novo. Nenhuma credencial foi alterada." >&2
   exit 1
@@ -64,8 +66,10 @@ existing_identity=$(docker compose -p agendamento exec -T \
   -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
   psql -X -qAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
   -d "${POSTGRES_DB:-agendamento}" -v issuer="http://localhost:8180/realms/agendamento" \
-  -v subject="$subject" \
-  -c "SELECT EXISTS (SELECT 1 FROM agendamento.admin_user WHERE identity_issuer = :'issuer' AND identity_subject = :'subject')")
+  -v subject="$subject" <<'SQL'
+SELECT EXISTS (SELECT 1 FROM agendamento.admin_user WHERE identity_issuer = :'issuer' AND identity_subject = :'subject');
+SQL
+)
 if [[ "$existing_identity" == "t" ]]; then
   echo "A identidade já está provisionada no banco; nenhuma credencial foi alterada." >&2
   exit 1
