@@ -113,11 +113,11 @@ Próximo incremento recomendado: AGD-002 para tenant e isolamento, com migration
 
 ## AGD-004 — Auditoria e correlação (branch local)
 
-**Branch/base:** `agd-004-auditoria-correlacao` sobre `main` integrada em `81ce55d944c8c09a1a29ab1cb91ed03e5d97f4c5`. **Estado:** parcial; commit/PR/CI remotos serão acrescentados após publicação. Os pareceres abaixo são revisões independentes por agentes em leitura, não aprovação humana registrada no GitHub.
+**Branch/base:** commit `d24d53bd0bbdfa63ecc1c29cc6db52a74cd9e149` em `agd-004-auditoria-correlacao`, sobre `main` integrada em `81ce55d944c8c09a1a29ab1cb91ed03e5d97f4c5`. **Estado:** parcial; PR/CI remotos serão acrescentados após publicação. Os pareceres abaixo são revisões independentes por agentes em leitura, não aprovação humana registrada no GitHub.
 
 | Critério/gate | Comando executado (escopo) | Resultado observado |
 |---|---|---|
-| Formatação, unitários, arquitetura, integração e migração Flyway | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw -B -ntp spotless:check verify` (`backend/`) | `BUILD SUCCESS` em 15/10/2026; Spotless passou, 23 testes unitários/arquiteturais e 15 integrações em PostgreSQL 16.13/Testcontainers. V5 aplicada preservando V1–V4. Commit a associar após criação. |
+| Formatação, unitários, arquitetura, integração e migração Flyway | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw -B -ntp spotless:check verify` (`backend/`) | `BUILD SUCCESS` em 15/10/2026 no commit `d24d53bd0bbdfa63ecc1c29cc6db52a74cd9e149`; Spotless passou, 23 testes unitários/arquiteturais e 15 integrações em PostgreSQL 16.13/Testcontainers. V5 aplicada preservando V1–V4. |
 | Atomicidade e isolamento da auditoria | `AuditTrailIT` incluído no `verify` | PostgreSQL real: mutação e evento confirmam juntos; rollback não deixa evento COMMITTED; falha do insert da auditoria impede confirmar create/rename; query interna retorna eventos somente do tenant derivado do contexto autenticado. |
 | Privilégios append-only | `AuditTrailIT` incluído no `verify` | Conexão runtime `agendamento_app`, separada do migrator e do owner NOLOGIN; SELECT/INSERT funcionam e UPDATE/DELETE/TRUNCATE falham. Limite explícito: DBA, migrator/owner e processos privilegiados permanecem fora dessa garantia. |
 | Correlação e dados permitidos | `CorrelationIdFilterTest`, `AuditEventTest` e `AuditTrailIT` no `verify` | UUID validado/gerado correlaciona resposta, MDC e evento; limpeza entre requisições/falha testada. JSON de auditoria restringe chaves/valores; tentativas de telefone, códigos, tokens, cookies, credenciais e senhas são recusadas. Sem serialização de request/OIDC. |

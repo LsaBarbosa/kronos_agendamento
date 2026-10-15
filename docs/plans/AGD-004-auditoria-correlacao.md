@@ -39,17 +39,17 @@ Consulta é apenas contrato interno: recebe identidade autenticada, deriva `tena
 
 - [x] 15/10/2026 — V5, papéis runtime/owner e contratos/eventos Tenant implementados; V1–V4 preservadas.
 - [x] 15/10/2026 — Testes PostgreSQL reais cobrem fresh/upgrade, isolamento, privilégios, rollback e falha ao gravar auditoria na criação e renomeação; revisão independente executada e achados pertinentes corrigidos.
-- [ ] Publicar commit/PR, acompanhar App CI e CodeQL e registrar SHAs/runs neste plano e nos registros de estado.
+- [ ] Publicar `d24d53bd0bbdfa63ecc1c29cc6db52a74cd9e149` em PR, acompanhar App CI e CodeQL e registrar SHAs/runs neste plano e nos registros de estado.
 - [ ] Resolver cobertura de segurança e retenção conforme decisão de produto/operação; adicionar eventos às operações críticas futuras junto aos seus casos de uso.
 
 ## Validação
 
 | Critério de aceite | Procedimento/comando | Resultado esperado | Resultado observado |
 |---|---|---|---|
-| Formatação/build/testes de backend | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw -B -ntp spotless:check verify` (`backend/`) | Zero falhas; migrations e IT em PostgreSQL real | Passou em 15/10/2026; 23 unitários/arquitetura + 15 IT no SHA a registrar em VALIDATION.md |
-| Append-only e privilégios | `AuditTrailIT` em `verify` | Runtime só lê/insere; UPDATE/DELETE/TRUNCATE e membership ao owner falham | Passou sob `agendamento_app` em PostgreSQL 16.13 em 15/10/2026; SHA a registrar |
-| Atomicidade criação/renomeação | `AuditTrailIT` em `verify` | Commit persiste ambos; rollback ou erro de auditoria não deixa alteração/evento de sucesso isolado | Passou em PostgreSQL 16.13 em 15/10/2026; SHA a registrar |
-| Correlação e allowlist | `CorrelationIdFilterTest`, `AuditEventTest`, `AuditTrailIT` | Response/MDC/evento compartilham UUID; dados sensíveis não são aceitos em details | Passou localmente em 15/10/2026; revisão de cobertura de logs HTTP permanece pendente |
+| Formatação/build/testes de backend | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw -B -ntp spotless:check verify` (`backend/`) | Zero falhas; migrations e IT em PostgreSQL real | Passou em 15/10/2026 no commit `d24d53bd0bbdfa63ecc1c29cc6db52a74cd9e149`; 23 unitários/arquitetura + 15 IT, registrado em VALIDATION.md |
+| Append-only e privilégios | `AuditTrailIT` em `verify` | Runtime só lê/insere; UPDATE/DELETE/TRUNCATE e membership ao owner falham | Passou sob `agendamento_app` em PostgreSQL 16.13 em 15/10/2026 no commit `d24d53bd0bbdfa63ecc1c29cc6db52a74cd9e149` |
+| Atomicidade criação/renomeação | `AuditTrailIT` em `verify` | Commit persiste ambos; rollback ou erro de auditoria não deixa alteração/evento de sucesso isolado | Passou em PostgreSQL 16.13 em 15/10/2026 no commit `d24d53bd0bbdfa63ecc1c29cc6db52a74cd9e149` |
+| Correlação e allowlist | `CorrelationIdFilterTest`, `AuditEventTest`, `AuditTrailIT` | Response/MDC/evento compartilham UUID; dados sensíveis não são aceitos em details | Passou localmente em 15/10/2026 no commit `d24d53bd0bbdfa63ecc1c29cc6db52a74cd9e149`; revisão de cobertura de logs HTTP permanece pendente |
 | CI remoto | App CI e CodeQL push/PR após publicar | Todos os checks verdes no mesmo SHA publicado | Pendente: commit/PR ainda não publicados |
 
 ## Pendências e limites
