@@ -42,6 +42,13 @@ class DatabaseBootstrapIT {
                 "select count(*) from agendamento.flyway_schema_history where version = '1' and success",
                 Integer.class))
         .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from agendamento.flyway_schema_history where version = '2' and success",
+                Integer.class))
+        .isEqualTo(1);
+    assertThat(jdbc.queryForObject("select to_regclass('agendamento.tenant')", String.class))
+        .isEqualTo("agendamento.tenant");
   }
 
   @Test
