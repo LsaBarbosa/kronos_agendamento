@@ -6,6 +6,12 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+import com.appagendamento.audit.api.AuditCorrelationId;
+import com.appagendamento.catalog.application.CreateService;
+import com.appagendamento.catalog.application.GetService;
+import com.appagendamento.catalog.application.ListServices;
+import com.appagendamento.catalog.application.SetServiceStatus;
+import com.appagendamento.catalog.application.UpdateService;
 import com.appagendamento.platform.infrastructure.web.CorrelationIdFilter;
 import com.appagendamento.tenant.application.GetTenant;
 import java.util.UUID;
@@ -29,6 +35,12 @@ class SecurityBoundaryTest {
   @Autowired private MockMvc mvc;
 
   @MockitoBean private GetTenant getTenant;
+  @MockitoBean private CreateService createService;
+  @MockitoBean private UpdateService updateService;
+  @MockitoBean private SetServiceStatus setServiceStatus;
+  @MockitoBean private GetService getService;
+  @MockitoBean private ListServices listServices;
+  @MockitoBean private AuditCorrelationId auditCorrelationId;
 
   @Test
   void anonymousBusinessRequestReceivesConsistentError() throws Exception {

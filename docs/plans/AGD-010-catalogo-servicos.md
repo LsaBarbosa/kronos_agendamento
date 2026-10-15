@@ -1,0 +1,67 @@
+# AGD-010 — Catálogo de serviços
+
+## Identificação e objetivo
+
+- História P0 AGD-010, implementada na branch `agd-010-catalogo-servicos` a partir da `main` atualizada em `1090b44`.
+- Entregar gestão administrativa de serviços isolada por tenant, com criação, edição, ativação e inativação, sem antecipar agenda, disponibilidade ou reservas.
+- Requisitos: documento 01 §4; documento 02 §§2 e 4.2; documento 03 §5 (rotas administrativas), §7 (`ServiceCreated`) e §15 (testes); documento 04 §§4–5; documento 06 critério AGD-010.
+
+## Escopo e exclusões
+
+- Inclui domínio, V7, casos de uso e rotas administrativas da tabela de Serviços, UI autenticada, validação, CAS/versionamento, auditoria e idempotência transacionais, e evento `ServiceCreated` da outbox por estar explicitamente listado no documento 03.
+- Tenant/ator vêm exclusivamente do principal `AuthenticatedAdmin` e da associação revalidada em banco. Leituras/mutações por ID alheio retornam a mesma resposta não reveladora de recurso inexistente.
+- Não inclui agenda, disponibilidade, reservas/snapshots de reserva, pagamento, fornecedores, publicação de endpoint público nem alteração de status comercial do tenant.
+- Preço informativo e atributos opcionais de cor/ordenação ficam omitidos da UI/API deste recorte: a moeda é definida pelo produto, mas não há decisão de moeda/formato. A omissão respeita o caráter opcional do preço; registrar decisão antes de expor preço.
+
+## Critérios verificáveis
+
+| Critério | Evidência esperada |
+|---|---|
+| Criar, editar, ativar e inativar | Casos de uso, API protegida e fluxo administrativo UI |
+| Duração múltipla de 15 e positiva; buffer múltiplo de 15 e não negativo | Validação de domínio, constraints PostgreSQL e testes; confirmar resolução do conflito documental sobre buffer zero |
+| Nome único entre ativos do tenant por comparação normalizada | Índice único parcial em PostgreSQL e corrida concorrente |
+| Isolamento e não revelação HTTP | chamadas autenticadas para próprio/alheio/inexistente; sem mudança ou evento de sucesso em negação |
+| Mutação auditável/idempotente | sucesso, replay, digest divergente e rollback em PostgreSQL real |
+| Evento previsto | `ServiceCreated` gravado atomicamente com criação; não inventar eventos de update/ativação |
+| Migração segura | instalação V1–V7 limpa, upgrade V6→V7, validate e rerun sem mudar V1–V6 |
+| Inativo fora de novas ofertas públicas sem tocar reservas existentes | estado de domínio é implementado; endpoint público e prova ponta a ponta ficam pendentes de prontidão/publicação, agenda de AGD-011 e decisão sobre o gate |
+
+## Decisões, dependências e riscos
+
+- NFKC + trim + lowercase `Locale.ROOT` é a canonicalização técnica do nome para unicidade, mantendo nome de apresentação; índice parcial `WHERE status='ACTIVE'` resolve concorrência. Registrar em ADR.
+- Cada alteração usa `expectedVersion` e incrementa a versão; chamadas mutáveis exigem `Idempotency-Key`; digest inclui tenant confiável, alvo, versão e campos canônicos. Resultado replay sempre revalida associação e existência.
+- Criação recebe status explícito; não definir ativação/default implicitamente. `buffer_after_minutes = 0` é permitido pelo modelo 02 e campo opcional do documento 01, mas AGD-010 usa “positivos”; solicitar decisão e manter o comportamento conforme resposta aprovada (ou registrar pendência).
+- Documento 01 exige link público oculto até a configuração mínima válida, mas essa configuração inclui capacidade/agenda futura não existente. Até esclarecer o gate e implementar a dependência AGD-011, rotas públicas continuam deny-all; não inferir prontidão de `Tenant.ACTIVE`.
+- Sem outbox artificial: usar somente `ServiceCreated` que o documento 03 declara. Evento usa ID estável do serviço, tenant, versão e operation/correlation IDs; payload allowlisted sem request nem nome/descrição.
+- Sem prazo ou expurgo novo; pendência geral de retenção segue vigente.
+
+## Estratégia de implementação e testes
+
+1. Domain value object/aggregate `Service`, comandos e contratos de repositório no módulo catalog.
+2. V7 com FK tenant, status, checks e índice parcial; grants mínimos ao role runtime conforme V6.
+3. JDBC repository e casos de uso transacionais integrando `AdminAccessPolicy`, auditoria, idempotência e outbox apenas na criação.
+4. Controller DTO-only sob `/api/v1/admin/services`; React usa sessão/cookie backend e CSRF existentes.
+5. Testes de domínio, API autenticada (próprio, cross-tenant, inexistente, sem CSRF), Testcontainers PostgreSQL para migration/uniqueness/concorrência/CAS/replay/rollback/grants, e Vitest para fluxo UI.
+
+## Progresso e validação
+
+- [x] 15/10/2026 — `origin/main` confirmou merge #3 (`1138395`) e #4 (`1090b44`); working tree limpa; branch derivada da main atualizada.
+- [x] Implementação funcional, revisão independente em leitura e validação local; achados pertinentes corrigidos.
+- [ ] CI remoto App CI/CodeQL no head final.
+- [ ] PR aberto para `main`; não fazer merge/deploy.
+- [ ] Homologação e critérios dependentes de agenda/publicação.
+
+| Critério | Comando/procedimento | Esperado | Observado |
+|---|---|---|---|
+| Backend e PostgreSQL | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw -B -ntp spotless:check verify` em `backend/` | Passou: `BUILD SUCCESS`, 27 unitários/arquiteturais e 41 integrações em PostgreSQL 16.13/Testcontainers. SHA será registrado após commit. |
+| Frontend | `PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH npm run format:check && npm run lint && npm test -- --run && npm run check` em `frontend/` | Execução em andamento; browser E2E real fica no App CI. |
+| Dependências frontend e sintaxe browser | `npm audit --audit-level=high` e `node --check ../scripts/dev/test-keycloak-browser.mjs` em `frontend/` | Execução em andamento. |
+| Qualidade de patch | `git diff --check` e scanner de secrets existente | Pendente da revisão final antes do commit. |
+| Migração | suíte `verify` em DB limpo e upgrade V6→V7 | Passou em PostgreSQL real: fresh V1–V7, upgrade V6→V7, `validate` e reexecução com zero mudanças; V1–V6 preservadas. |
+| CI remoto | App CI e CodeQL no SHA final do PR | checks concluídos com sucesso | Pendente |
+
+## Encerramento ou retomada
+
+- Estado permanece parcial: o gate público depende de decisão e da prontidão de agenda; snapshots só podem ser comprovados com reservas em AGD-015. O conflito documental sobre buffer e a apresentação/moeda de preço seguem em `OPEN-QUESTIONS.md`.
+- Atualizar `STATUS.md`, `VALIDATION.md`, `TRACEABILITY.md` e `OPEN-QUESTIONS.md` com SHA testado, runs e limites observados.
+- Próxima dependência funcional: AGD-011 — Grade semanal e políticas.

@@ -145,6 +145,37 @@ try {
             ')',
     );
     if (!tenantDisplayed) throw new Error('Tenant autorizado não apareceu na UI.');
+    await waitForText('Catálogo de serviços', evaluate);
+    await waitForText('Nenhum serviço cadastrado.', evaluate);
+    const catalogName = `Catálogo E2E ${Date.now()}`;
+    await setAdminField('input', 0, catalogName, evaluate);
+    await setAdminField('textarea', 0, 'Atendimento de demonstração', evaluate);
+    await setAdminField('input', 1, '45', evaluate);
+    await setAdminField('input', 2, '0', evaluate);
+    await setAdminField('select', 0, 'ACTIVE', evaluate);
+    await evaluate("document.querySelector('form').requestSubmit()");
+    await waitForText('Serviço criado.', evaluate);
+    await waitForText(catalogName, evaluate);
+    await evaluate(`(() => {
+      const serviceRow = [...document.querySelectorAll('li')].find(item => item.innerText.includes(${JSON.stringify(catalogName)}));
+      const action = [...serviceRow.querySelectorAll('button')].find(button => button.innerText === 'Inativar');
+      action.click();
+    })()`);
+    await waitForText('Serviço inativado.', evaluate);
+    await evaluate(`(() => {
+      const serviceRow = [...document.querySelectorAll('li')].find(item => item.innerText.includes(${JSON.stringify(catalogName)}));
+      [...serviceRow.querySelectorAll('button')].find(button => button.innerText === 'Editar').click();
+    })()`);
+    await setAdminField('input', 0, catalogName + ' Editado', evaluate);
+    await evaluate("document.querySelector('form').requestSubmit()");
+    await waitForText('Serviço atualizado.', evaluate);
+    await waitForText(catalogName + ' Editado', evaluate);
+    await evaluate(`(() => {
+      const serviceRow = [...document.querySelectorAll('li')].find(item => item.innerText.includes(${JSON.stringify(catalogName + ' Editado')}));
+      [...serviceRow.querySelectorAll('button')].find(button => button.innerText === 'Ativar').click();
+    })()`);
+    await waitForText('Serviço ativado.', evaluate);
+    console.log('Browser: catálogo autenticado criou, editou, inativou e ativou serviço.');
     const foreignTenantQuery = await evaluate(
         `fetch('/api/v1/admin/tenant?tenantId=00000000-0000-0000-0000-000000000001', {credentials:'same-origin'}).then(response => response.json())`,
     );
@@ -326,6 +357,17 @@ async function submitLogin(username, password, evaluate) {
       passwordField.value = ${JSON.stringify(password)};
       loginForm.requestSubmit();
       return true;
+    })()`);
+}
+
+async function setAdminField(elementType, index, value, evaluate) {
+    await evaluate(`(() => {
+      const field = document.querySelectorAll('form ' + ${JSON.stringify(elementType)})[${index}];
+      if (!field) throw new Error('Catalog form field not found');
+      const descriptor = Object.getOwnPropertyDescriptor(HTML${elementType === 'textarea' ? 'TextArea' : elementType === 'select' ? 'Select' : 'Input'}Element.prototype, 'value');
+      descriptor.set.call(field, ${JSON.stringify(value)});
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      field.dispatchEvent(new Event('change', { bubbles: true }));
     })()`);
 }
 

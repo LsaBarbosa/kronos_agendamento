@@ -35,12 +35,60 @@ body {
 }
 
 .foundation-card {
-    width: min(100%, 560px);
+    width: min(100%, 920px);
     padding: clamp(28px, 7vw, 56px);
     border: 1px solid #e1e7e1;
     border-radius: 24px;
     background: #fff;
     box-shadow: 0 24px 80px rgb(35 52 43 / 8%);
+}
+
+form {
+    display: grid;
+    gap: 14px;
+    margin: 24px 0;
+}
+
+label {
+    display: grid;
+    gap: 6px;
+    color: #344b3f;
+    font-weight: 600;
+}
+
+input,
+textarea,
+select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #cbd6ce;
+    border-radius: 8px;
+    color: inherit;
+    font: inherit;
+}
+
+button {
+    width: fit-content;
+    padding: 10px 16px;
+    border: 0;
+    border-radius: 8px;
+    color: #fff;
+    background: #39725b;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+button:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+li {
+    margin: 12px 0;
+    padding: 16px;
+    border: 1px solid #e1e7e1;
+    border-radius: 12px;
 }
 
 .eyebrow {
