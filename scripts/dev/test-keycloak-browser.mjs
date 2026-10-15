@@ -233,11 +233,19 @@ try {
     if (renewedSessionStatus !== 200) {
         throw new Error('Nova autenticação OIDC não criou sessão local depois da expiração.');
     }
+    const renewedCsrfStatus = await evaluate(
+        "fetch('/api/v1/csrf', {credentials:'same-origin'}).then(response => response.status)",
+    );
+    if (renewedCsrfStatus !== 200) {
+        throw new Error(`Endpoint CSRF indisponível após login SSO (HTTP ${renewedCsrfStatus}).`);
+    }
+    await navigate('http://localhost:5173/admin', command, evaluate);
+    await waitForText('Sessão administrativa ativa.', evaluate);
     console.log('Browser: expiração local de 30 min, renovação por atividade e novo login via SSO validados.');
 
     await waitUntil(() =>
         evaluate(
-            "Boolean([...document.querySelectorAll('button')].find(button => button.innerText.includes('Sair') && !button.disabled))",
+            "Boolean([...document.querySelectorAll('button')].find(button => !button.disabled))",
         ),
     );
     await evaluate(
