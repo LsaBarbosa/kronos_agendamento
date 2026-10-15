@@ -185,15 +185,58 @@ class AvailabilityScheduleIT {
         .andExpect(status().isBadRequest())
         .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
 
+    mvc.perform(
+            put("/api/v1/admin/schedule/weekly-periods")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "overnight-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {"expectedVersion":1,"periods":[
+                      {"weekday":"MONDAY","localStart":"23:45","localEnd":"00:15"}]}
+                    """))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
+
+    mvc.perform(
+            put("/api/v1/admin/schedule/weekly-periods")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "unaligned-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {"expectedVersion":1,"periods":[
+                      {"weekday":"MONDAY","localStart":"09:10","localEnd":"12:00"}]}
+                    """))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
+
+    mvc.perform(
+            put("/api/v1/admin/schedule/weekly-periods")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "aligned-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {"expectedVersion":1,"periods":[
+                      {"weekday":"MONDAY","localStart":"09:15","localEnd":"12:45"}]}
+                    """))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(2))
+        .andExpect(jsonPath("$.periods[0].localStart").value("09:15"));
+
     assertThat(
             appJdbc.queryForObject(
                 "SELECT count(*) FROM agendamento.weekly_period WHERE tenant_id = ?",
                 Integer.class,
                 tenantId))
-        .isEqualTo(3);
-    assertThat(count("audit_event", "SCHEDULE_UPDATED")).isEqualTo(1);
-    assertThat(count("outbox_event", "ScheduleChanged")).isEqualTo(1);
-    assertThat(count("idempotency_record", "availability.weekly-schedule.replace.v1")).isEqualTo(2);
+        .isEqualTo(1);
+    assertThat(count("audit_event", "SCHEDULE_UPDATED")).isEqualTo(2);
+    assertThat(count("outbox_event", "ScheduleChanged")).isEqualTo(2);
+    assertThat(count("idempotency_record", "availability.weekly-schedule.replace.v1")).isEqualTo(3);
   }
 
   @Test
@@ -247,6 +290,42 @@ class AvailabilityScheduleIT {
 
     assertThat(count("audit_event", "AVAILABILITY_POLICY_UPDATED")).isEqualTo(1);
     assertThat(count("outbox_event", "AvailabilityPolicyChanged")).isEqualTo(1);
+  }
+
+  @Test
+  void quarterHourBoundariesDoNotDependOnConfiguredThirtyOrSixtyMinuteSlot() throws Exception {
+    for (int slotMinutes : List.of(30, 60)) {
+      long policyVersion = slotMinutes == 30 ? 0 : 1;
+      mvc.perform(
+              put("/api/v1/admin/availability-policy")
+                  .with(authentication(token(actor)))
+                  .with(csrf())
+                  .header("Idempotency-Key", "slot-" + slotMinutes + "-" + UUID.randomUUID())
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(
+                      """
+                      {"expectedVersion":%d,"slotStepMinutes":%d,"minimumNoticeHours":1,
+                       "bookingHorizonDays":7,"cancellationCutoffHours":2,"reminderOffsetHours":2}
+                      """
+                          .formatted(policyVersion, slotMinutes)))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.slotStepMinutes").value(slotMinutes));
+    }
+
+    mvc.perform(
+            put("/api/v1/admin/schedule/weekly-periods")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "quarter-hour-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {"expectedVersion":0,"periods":[
+                      {"weekday":"MONDAY","localStart":"09:15","localEnd":"12:45"}]}
+                    """))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.periods[0].localStart").value("09:15"))
+        .andExpect(jsonPath("$.periods[0].localEnd").value("12:45"));
   }
 
   @Test
@@ -326,6 +405,8 @@ class AvailabilityScheduleIT {
 
   @Test
   void auditFailureRollsBackScheduleIdempotencyAndOutbox() {
+    replaceWeeklySchedule.execute(
+        actor, "initial-schedule-" + UUID.randomUUID(), 0, List.of(period("09:00", "12:00")));
     migrationJdbc.execute(
         """
         CREATE OR REPLACE FUNCTION agendamento.reject_schedule_audit() RETURNS trigger
@@ -342,7 +423,7 @@ class AvailabilityScheduleIT {
     String key = "audit-failure-" + UUID.randomUUID();
     try {
       assertThatThrownBy(
-              () -> replaceWeeklySchedule.execute(actor, key, 0, List.of(period("09:00", "12:00"))))
+              () -> replaceWeeklySchedule.execute(actor, key, 1, List.of(period("13:00", "17:00"))))
           .isInstanceOf(RuntimeException.class);
     } finally {
       migrationJdbc.execute("DROP TRIGGER reject_schedule_audit ON agendamento.audit_event");
@@ -353,9 +434,63 @@ class AvailabilityScheduleIT {
                 "SELECT count(*) FROM agendamento.weekly_schedule WHERE tenant_id = ?",
                 Integer.class,
                 tenantId))
-        .isZero();
-    assertThat(count("idempotency_record", "availability.weekly-schedule.replace.v1")).isZero();
-    assertThat(count("outbox_event", "ScheduleChanged")).isZero();
+        .isEqualTo(1);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT version FROM agendamento.weekly_schedule WHERE tenant_id = ?",
+                Long.class,
+                tenantId))
+        .isEqualTo(1);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT local_start::text FROM agendamento.weekly_period WHERE tenant_id = ?",
+                String.class,
+                tenantId))
+        .startsWith("09:00");
+    assertThat(count("idempotency_record", "availability.weekly-schedule.replace.v1")).isEqualTo(1);
+    assertThat(count("audit_event", "SCHEDULE_UPDATED")).isEqualTo(1);
+    assertThat(count("outbox_event", "ScheduleChanged")).isEqualTo(1);
+  }
+
+  @Test
+  void replayIsRejectedAfterMembershipRevocation() throws Exception {
+    String key = "revoked-replay-" + UUID.randomUUID();
+    String body =
+        """
+        {"expectedVersion":0,"periods":[
+          {"weekday":"MONDAY","localStart":"09:00","localEnd":"12:00"}]}
+        """;
+    mvc.perform(
+            put("/api/v1/admin/schedule/weekly-periods")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isOk());
+    migrationJdbc.update(
+        "UPDATE agendamento.admin_tenant_membership SET status = 'DISABLED' WHERE user_id = ? AND tenant_id = ?",
+        adminId,
+        tenantId);
+
+    mvc.perform(
+            put("/api/v1/admin/schedule/weekly-periods")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isForbidden());
+
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT version FROM agendamento.weekly_schedule WHERE tenant_id = ?",
+                Long.class,
+                tenantId))
+        .isEqualTo(1);
+    assertThat(count("audit_event", "SCHEDULE_UPDATED")).isEqualTo(1);
+    assertThat(count("outbox_event", "ScheduleChanged")).isEqualTo(1);
+    assertThat(count("idempotency_record", "availability.weekly-schedule.replace.v1")).isEqualTo(1);
   }
 
   @Test
@@ -398,10 +533,31 @@ class AvailabilityScheduleIT {
     appJdbc.update(
         "INSERT INTO agendamento.weekly_period (tenant_id, weekday, local_start, local_end) VALUES (?, 'MONDAY', '09:00', '12:00')",
         tenantId);
+    appJdbc.update(
+        "INSERT INTO agendamento.weekly_period (tenant_id, weekday, local_start, local_end) VALUES (?, 'MONDAY', '12:00', '13:00')",
+        tenantId);
     assertThatThrownBy(
             () ->
                 appJdbc.update(
                     "INSERT INTO agendamento.weekly_period (tenant_id, weekday, local_start, local_end) VALUES (?, 'MONDAY', '11:00', '13:00')",
+                    tenantId))
+        .isInstanceOf(DataIntegrityViolationException.class);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.weekly_period WHERE tenant_id = ?",
+                Integer.class,
+                tenantId))
+        .isEqualTo(2);
+    assertThatThrownBy(
+            () ->
+                appJdbc.update(
+                    "INSERT INTO agendamento.weekly_period (tenant_id, weekday, local_start, local_end) VALUES (?, 'TUESDAY', '09:10', '12:00')",
+                    tenantId))
+        .isInstanceOf(DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () ->
+                appJdbc.update(
+                    "INSERT INTO agendamento.weekly_period (tenant_id, weekday, local_start, local_end) VALUES (?, 'WEDNESDAY', '23:45', '24:00')",
                     tenantId))
         .isInstanceOf(DataIntegrityViolationException.class);
     assertThat(

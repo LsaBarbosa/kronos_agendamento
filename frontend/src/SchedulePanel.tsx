@@ -229,6 +229,12 @@ export function SchedulePanel({
                 ) {
                     return `${label}: informe início e fim no mesmo dia, com início anterior ao fim.`;
                 }
+                if (
+                    Number(period.localStart.slice(3, 5)) % 15 !== 0 ||
+                    Number(period.localEnd.slice(3, 5)) % 15 !== 0
+                ) {
+                    return `${label}: início e fim devem estar alinhados a cada 15 minutos.`;
+                }
             }
             for (let index = 1; index < dayPeriods.length; index += 1) {
                 if (
@@ -420,8 +426,15 @@ export function SchedulePanel({
                             ficarão fechados.
                         </p>
                     )}
-                    <form onSubmit={(event) => void saveWeekly(event)}>
+                    <form
+                        noValidate
+                        onSubmit={(event) => void saveWeekly(event)}
+                    >
                         <h3>Horários por dia</h3>
+                        <p>
+                            Use limites em intervalos de 15 minutos. O slot de
+                            30 ou 60 minutos não altera esse alinhamento.
+                        </p>
                         {weekdays.map(([weekday, label]) => {
                             const dayPeriods = periods.filter(
                                 (period) => period.weekday === weekday,
@@ -439,6 +452,7 @@ export function SchedulePanel({
                                                 <input
                                                     aria-label={`${label} início ${index + 1}`}
                                                     type="time"
+                                                    step="900"
                                                     required
                                                     value={period.localStart}
                                                     onChange={(event) =>
@@ -455,6 +469,7 @@ export function SchedulePanel({
                                                 <input
                                                     aria-label={`${label} fim ${index + 1}`}
                                                     type="time"
+                                                    step="900"
                                                     required
                                                     value={period.localEnd}
                                                     onChange={(event) =>

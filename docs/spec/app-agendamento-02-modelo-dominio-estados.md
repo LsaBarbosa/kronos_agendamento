@@ -71,6 +71,7 @@ Os relacionamentos com provedores externos usam referências opacas. Payload bru
 ### 4.3 Intervalos
 
 - Todos os intervalos usam semântica semiaberta `[início, fim)`.
+- Na grade semanal recorrente, limites são horários locais alinhados a múltiplos de 15 minutos; o slot de disponibilidade não altera essa regra. `local_start < local_end`; não há período atravessando meia-noite no MVP. Períodos adjacentes são válidos e períodos sobrepostos são inválidos.
 - `starts_at < service_ends_at <= occupied_until`.
 - `occupied_until = service_ends_at + buffer_after` no momento da confirmação.
 - Dois intervalos podem se tocar no limite: `[09:00, 10:00)` e `[10:00, 11:00)` não se sobrepõem.

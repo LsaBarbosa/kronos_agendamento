@@ -17,6 +17,9 @@ public record WeeklyPeriod(DayOfWeek weekday, LocalTime localStart, LocalTime lo
         || !localStart.isBefore(localEnd)) {
       throw new ScheduleValidationException("Período deve ter início antes do fim no mesmo dia");
     }
+    if (localStart.getMinute() % 15 != 0 || localEnd.getMinute() % 15 != 0) {
+      throw new ScheduleValidationException("Limites do período devem alinhar a cada 15 minutos");
+    }
   }
 
   @Override

@@ -212,7 +212,23 @@ Código e regressão browser publicados em `2e304520654eff6b50e0fc0276063fed3354
 
 ### Limites e pendências AGD-011
 
-- AGD-011 permanece parcial até decisão sobre alinhamento dos limites a 15 minutos e períodos que cruzam meia-noite. A pergunta e proposta conservadora constam em `OPEN-QUESTIONS.md`; nenhum default foi inventado.
+- A decisão temporal foi aprovada pelo usuário em 15/10/2026 e implementada como registrado em ADR-0010 e na complementação abaixo. AGD-011 permanece parcial por homologação/staging e outros critérios ainda não observados.
 - `87b2478` é o head de código/evidência associado aos quatro workflows acima. O commit posterior que registra seus resultados altera somente documentação; os checks correspondentes a esse head mais recente do PR também devem permanecer verdes. Homologação não ocorreu.
 - AGD-001 continua aberta por scan completo de dependências e homologação/staging; AGD-003 por homologação HTTPS. Retenção, fornecedores e snapshot de reserva (AGD-015) seguem nas histórias próprias. Grade salva não habilita publicação ou rotas públicas.
-- No setup do E2E foi encontrado backend Compose antigo e ausência local de `APP_DB_PASSWORD`/role runtime; o provisionamento documentado `bash scripts/dev/ensure-app-db-role.sh` e rebuild resolveram o ambiente, depois do qual o E2E passou. Credenciais locais são ignoradas pelo Git.
+- O E2E desta alteração usa CI em ambiente descartável. Não foi executado localmente: PostgreSQL dev existente contém tenant, serviço e grade; dados não foram removidos. Credenciais locais são ignoradas pelo Git.
+
+## AGD-011 — complemento temporal aprovado em 15/10/2026
+
+**Branch/PR:** `agd-011-grade-semanal-politicas`, PR [#6](https://github.com/LsaBarbosa/kronos_agendamento/pull/6), ainda aberto; head da evidência local e CI desta rodada será preenchido após publicação. Sem merge/deploy.
+
+| Critério/gate | Comando/procedimento | Resultado observado |
+|---|---|---|
+| Backend, domínio, HTTP, arquitetura e PostgreSQL real | Em `backend/`: `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` | `BUILD SUCCESS`, 32 unitários/arquiteturais e 54 integrações PostgreSQL 16.13/Testcontainers, zero falhas. Domínio rejeita 09:10, limite final desalinhado, igualdade/reversão e cruzamento; HTTP rejeita 09:10 e 23:45–00:15 com `VALIDATION_ERROR`. Persistência aceita adjacência/09:15–12:45 com slot 30 e 60, e rejeita overlap, 09:10 e fim 24:00. |
+| Rejeição sem efeito e fronteira confiável | `AvailabilityScheduleIT` no mesmo `verify` | Após mutação inicial, overlap/desalinhamento/cruzamento inválidos preservam períodos/versão e não acrescentam auditoria de sucesso, outbox ou registro idempotente. Replay após desativação do vínculo retorna 403. Falha de auditoria durante substituição preserva grade/version, auditoria/outbox e idempotência prévias. |
+| Migration e dados legados | `TenantPersistenceIT` no mesmo `verify`; preflight SQL V9 no plano | V9 aplicada em fresh V1–V9 e upgrade V8 alinhado; Flyway `validate`/rerun; V1–V8 não modificadas. Migração V8 com `09:10` falha com diagnóstico, mantém o horário e a versão V8, e passa somente após reparo explícito simulado e rerun. Consulta read-only do DB local V8 retornou zero linhas fora da regra; não representa staging/produção. |
+| Frontend, OpenAPI e E2E browser | `npm run format:check && npm run check && npm run lint && npm test` em `frontend/`; `node --check scripts/dev/test-keycloak-browser.mjs`; parser Prettier para YAML | Frontend passou (2 arquivos/4 testes Vitest, build/TypeScript/lint); script E2E sintaticamente válido; YAML OpenAPI parseou pelo Prettier. E2E alterado para tentar 09:10, confirmar API ainda `configured=false/version=0`, e seguir save/reload. Execução local não feita para não limpar o banco dev com dados; job OIDC browser do App CI neste head é evidência necessária. |
+| Dependências e higiene local | `npm audit --audit-level=high` (`frontend/`); `git diff --check` | NPM audit passou após retry com rede autorizada: `found 0 vulnerabilities`; falha inicial do sandbox foi DNS `EAI_AGAIN`. Diff check passou. Scan completo de dependências (AGD-001) permanece pendente; Trivy é executado no CI, não está instalado localmente. |
+| Revisão independente | Dois revisores em leitura: requisitos/contratos/tempo/UI; concorrência/transações/migração/autorizações | Ambos não apontaram bloqueio funcional. Corrigidos: plano exagerava cobertura do navegador; testes agora cobrem rollback de substituição e replay pós-revogação. Pareceres não equivalem a aprovação humana no GitHub. |
+| App CI push/PR e CodeQL push/PR | Links associados ao SHA do head final | Aguardando workflows disparados pela publicação deste incremento; preencher run IDs e resultados antes da entrega. |
+
+O upgrade V8→V9 exige rodar a consulta preflight documentada em cada ambiente real, obter decisão explícita do tenant e ajustar via V8/CAS sem arredondar. Homologação HTTPS/staging, scan completo de dependências, retenção e integrações reais continuam pendentes.

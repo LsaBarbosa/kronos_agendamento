@@ -65,6 +65,14 @@ class WeeklyScheduleTest {
         .isInstanceOf(ScheduleValidationException.class);
     assertThatThrownBy(() -> period(DayOfWeek.SUNDAY, "23:00", "01:00"))
         .isInstanceOf(ScheduleValidationException.class);
+    assertThatThrownBy(() -> period(DayOfWeek.MONDAY, "09:10", "12:00"))
+        .isInstanceOf(ScheduleValidationException.class);
+    assertThatThrownBy(() -> period(DayOfWeek.MONDAY, "09:00", "12:01"))
+        .isInstanceOf(ScheduleValidationException.class);
+    assertThatThrownBy(() -> period(DayOfWeek.MONDAY, "12:00", "12:00"))
+        .isInstanceOf(ScheduleValidationException.class);
+    assertThatThrownBy(() -> period(DayOfWeek.MONDAY, "12:15", "12:00"))
+        .isInstanceOf(ScheduleValidationException.class);
     assertThatThrownBy(
             () ->
                 new WeeklySchedule(

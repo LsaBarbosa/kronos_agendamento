@@ -206,6 +206,16 @@ try {
     await setFieldByAriaLabel('Segunda-feira fim 1', '12:00', evaluate);
     await setFieldByAriaLabel('Segunda-feira início 2', '13:00', evaluate);
     await setFieldByAriaLabel('Segunda-feira fim 2', '17:00', evaluate);
+    await setFieldByAriaLabel('Segunda-feira início 1', '09:10', evaluate);
+    await clickButtonByText('Salvar grade semanal', evaluate);
+    await waitForText('início e fim devem estar alinhados a cada 15 minutos.', evaluate);
+    const unchangedSchedule = await evaluate(
+        "fetch('/api/v1/admin/schedule/weekly-periods', {credentials:'same-origin'}).then(response => response.json())",
+    );
+    if (unchangedSchedule.configured || unchangedSchedule.version !== 0) {
+        throw new Error('Rejected unaligned period changed the persisted schedule.');
+    }
+    await setFieldByAriaLabel('Segunda-feira início 1', '09:00', evaluate);
     await clickButtonByText('Salvar grade semanal', evaluate);
     await waitForText('Grade semanal salva.', evaluate);
     await setSelectByLabel('Intervalo inicial dos horários (minutos)', '30', evaluate);

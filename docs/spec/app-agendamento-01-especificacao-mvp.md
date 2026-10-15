@@ -109,6 +109,8 @@ A disponibilidade de um serviço é a interseção de:
 
 - Cada dia pode ter zero ou mais períodos, por exemplo 09:00–12:00 e 13:00–18:00.
 - Períodos do mesmo dia não podem se sobrepor.
+- Os limites são horários locais `HH:mm` alinhados a múltiplos de 15 minutos, independentemente do slot configurado.
+- Os períodos são semiabertos `[início,fim)`: períodos adjacentes são permitidos; sobreposição é rejeitada. O início deve ser anterior ao fim; períodos que cruzam meia-noite são rejeitados no MVP.
 - A grade é interpretada no fuso do tenant.
 - Mudança de grade afeta apenas o cálculo futuro; reservas existentes permanecem válidas e visíveis, ainda que fiquem fora da nova grade.
 

@@ -107,6 +107,7 @@ Critérios de aceite:
 Critérios de aceite:
 
 - Administrador define múltiplos períodos por dia sem sobreposição.
+- Limites locais usam múltiplos de 15 minutos, intervalos `[início,fim)`, adjacência permitida, sobreposição rejeitada, início anterior ao fim e cruzamento de meia-noite rejeitado no MVP; o alinhamento independe do slot de 30/60 minutos.
 - Configura slot 15/30/60, antecedência 1–24 h, horizonte 7/30/60/90 dias, cancelamento 2–24 h e lembrete 2/6/12/24 h.
 - Atualização usa versão/CAS.
 - Grade inválida é rejeitada sem mudança parcial.
