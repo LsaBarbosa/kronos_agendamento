@@ -59,7 +59,7 @@ Próximo incremento recomendado: AGD-002 para tenant e isolamento, com migration
 
 ## AGD-002 — Tenant e isolamento (branch local)
 
-**Branch:** `agd-002-tenant-isolamento`, baseada no `main` em `271569fcb1de0f98c695ecacfeccd19ba6608777`. **Commit de código:** `e6bbcf3b920c1c6c6220d181e10f86d88c11ae32`. A execução é local, não CI remoto.
+**Branch:** `agd-002-tenant-isolamento`, baseada no `main` em `271569fcb1de0f98c695ecacfeccd19ba6608777`. **Commit de código:** `e6bbcf3b920c1c6c6220d181e10f86d88c11ae32`. O head remoto `5b8b6f0c3038823b70b918ea7ab93a8b1299008d` acrescenta documentação de evidência; nenhum código mudou após o SHA local testado.
 
 | Critério | Comando/escopo | Resultado observado |
 |---|---|---|
@@ -69,7 +69,7 @@ Próximo incremento recomendado: AGD-002 para tenant e isolamento, com migration
 | Isolamento por tenant | `TenantPersistenceIT.permitsOwnTenantOperationsAndConcealsForeignTenantForReadAndMutation` | Contextos de identidade controlados em teste: leitura/renomeação do próprio tenant passou; leitura e tentativa de mutação de outro tenant produziram `TenantNotFoundException` idêntica; registro alheio permaneceu intacto. Isto não comprova identidade real nem HTTP. |
 | Corrida de slug | `TenantPersistenceIT.concurrentInsertsOfSameCanonicalSlugHaveOneWinner` | Dois writers simultâneos no PostgreSQL, slug após canonicalização: um sucesso, um conflito; uma única linha. Garantia final por `UNIQUE (slug)` e `ON CONFLICT` dirigido à constraint. |
 | Campos, canonicalização e timezone | `TenantDomainTest` | 3 testes passaram: trimming/NFKC/lowercase, formato slug, timezone IANA, campos/status e incremento de version em renomeação. |
-| CI remoto e PR | `gh auth status`; branch ainda não publicada | Não executado no commit `e6bbcf3b920c1c6c6220d181e10f86d88c11ae32`: o CLI reconhece `LsaBarbosa`, mas informa token inválido. Não há URL de PR nem run associado à branch; reautenticar antes de push/PR e acompanhar App CI/CodeQL. |
+| CI remoto e PR | [PR #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1), App CI e CodeQL | PR aberto. No head `5b8b6f0c3038823b70b918ea7ab93a8b1299008d`, App CI passou em [push 38665441992](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38665441992) e [pull_request 38665495754](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38665495754); CodeQL passou em [push 38665441831](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38665441831) e [pull_request 38665495668](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38665495668). Nove jobs do App CI e ambas as linguagens do CodeQL passaram. Avisos de Node.js 20/`ubuntu-latest` não bloquearam. |
 
 ### Limites ainda abertos em AGD-002
 
@@ -78,3 +78,4 @@ Próximo incremento recomendado: AGD-002 para tenant e isolamento, com migration
 - Nenhuma tabela de negócio além da raiz `tenant` existe no incremento; entidades futuras devem tornar `tenant_id` obrigatório e impedir referências cruzadas.
 - `ACTIVE` não significa onboarding completo, assinatura elegível ou publicação. Política de palavra reservada/liberação de slug e efeito de troca de timezone continuam em `OPEN-QUESTIONS.md`.
 - AGD-002 permanece parcial até identidade real e os demais critérios aplicáveis. AGD-001 também continua aberta pelo scan Trivy completo de dependências e homologação/staging.
+- O job de segurança remoto verifica configuração somente em `backend/Dockerfile`; seu sucesso não cobre o scan Trivy filesystem completo de dependências, ainda pendente em AGD-001 após HTTP 429 anterior do Maven Central.

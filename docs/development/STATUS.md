@@ -4,7 +4,7 @@
 **Entrega:** documentação organizada, backend/frontend base, gates locais e execução remota bem-sucedida de App CI/CodeQL no commit `3a4653442762abc5b0a64f32c633394b733715de`.
 **AGD-001:** em andamento; não marcar como concluída.
 **Plano:** [AGD-001-fundacao.md](../plans/AGD-001-fundacao.md).
-**AGD-002:** parcial na branch `agd-002-tenant-isolamento`, commit local `e6bbcf3b920c1c6c6220d181e10f86d88c11ae32`; domínio Tenant, V2 funcional e testes locais PostgreSQL aprovados; autenticação/associação real, HTTP, push/PR e CI remoto pendentes. Ver [plano AGD-002](../plans/AGD-002-tenant-isolamento.md).
+**AGD-002:** parcial no [PR #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1), branch `agd-002-tenant-isolamento`; código `e6bbcf3b920c1c6c6220d181e10f86d88c11ae32`, evidências no head `5b8b6f0c3038823b70b918ea7ab93a8b1299008d`. App CI e CodeQL passaram em push/PR; identidade real e garantias HTTP permanecem pendentes de AGD-003. Ver [plano AGD-002](../plans/AGD-002-tenant-isolamento.md).
 
 ## Já disponível
 
@@ -21,17 +21,17 @@
 
 ## Evidência
 
-Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. AGD-001 teve backend/Testcontainers (18+5), frontend, format/lint, npm audit e Trivy local aprovados; App CI e CodeQL também passaram no SHA publicado. O Trivy filesystem completo para dependências permanece pendente por HTTP 429 do Maven Central; a checagem de configuração no workflow cobre somente o Dockerfile e não substitui o scan de dependências. AGD-002 `spotless:check verify` passou em Java 21/PostgreSQL 16.13 com 21 testes unitários/arquiteturais e 9 integrações, incluindo os cenários V1/V2; confira SHA e escopo na validação.
+Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. AGD-001 teve backend/Testcontainers (18+5), frontend, format/lint, npm audit e Trivy local aprovados; App CI e CodeQL passaram no SHA publicado. O Trivy filesystem completo de dependências segue pendente após HTTP 429; a checagem de configuração verde cobre somente o Dockerfile. AGD-002 `spotless:check verify` passou em Java 21/PostgreSQL 16.13 (21 testes unitários/arquiteturais + 9 integrações), e App CI/CodeQL passaram no head do PR.
 
 ## Pendências de AGD-001
 
 1. App CI (`38663531502`) e CodeQL (`38663531528`) passaram no commit publicado `3a4653442762abc5b0a64f32c633394b733715de`; histórico da falha HTTP 429 no run anterior está em VALIDATION.md.
 2. Executar o scan Trivy completo de dependências quando Maven Central aceitar as consultas; o sucesso do scan limitado ao Dockerfile não cobre esse critério.
-3. **Concluído localmente em AGD-002:** migration funcional V2 aplicada do zero e como upgrade desde V1; execução remota vinculada ao commit da branch ainda pendente. V1 preservada.
+3. **Concluído em AGD-002:** migration funcional V2 aplicada do zero e como upgrade desde V1; testes locais e App CI passaram. V1 preservada.
 4. Definir UX, hospedagem e staging antes do smoke/E2E de produto, homologação e gates de promoção da DoD.
 
 ## Próximo passo
 
-O destino `LsaBarbosa/kronos_agendamento` recebeu os commits prévios preservando SHAs; App CI e CodeQL passaram em `3a4653442762abc5b0a64f32c633394b733715de`. AGD-002 tem implementação e testes locais PostgreSQL; falta revisão final, commit, push/PR e CI remoto. `gh auth status` reportou token inválido, embora a autenticação tenha sido concluída anteriormente; reautenticar o usuário `LsaBarbosa` para publicar. Próximo depois da revisão: completar AGD-003 com identidade/sessão, associação administrativa verificada server-side, resolver tenant exclusivamente do principal, proteger endpoints e provar respostas HTTP não reveladoras. Manter AGD-001 e AGD-002 abertas até fechar seus gates.
+O [PR #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1) está aberto. App CI `38665441992`/`38665495754` e CodeQL `38665441831`/`38665495668` passaram no head `5b8b6f0c3038823b70b918ea7ab93a8b1299008d`; detalhes em VALIDATION.md. O scan Trivy filesystem completo segue pendente e não é substituído pelo scan de imagem/configuração. Próximo: completar AGD-003 com identidade/sessão, associação administrativa verificada server-side, resolver tenant do principal, proteger endpoints e provar respostas HTTP não reveladoras. Manter AGD-001 e AGD-002 abertas até fechar os gates.
 
 As demais histórias permanecem não implementadas. Nenhuma integração de WhatsApp/cobrança ou implantação foi realizada.
