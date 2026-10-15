@@ -47,7 +47,7 @@
 
 - [x] 15/10/2026 — `origin/main` confirmou merge #3 (`1138395`) e #4 (`1090b44`); working tree limpa; branch derivada da main atualizada.
 - [x] Implementação funcional, revisão independente em leitura e validação local; achados pertinentes corrigidos. Código testado em `4678f2481b11b427b77502523eab9638f0013b30`.
-- [x] App CI e CodeQL push/PR passaram no head final registrado `d88f1751004803d766691a82efdaf3692ad52757`; browser E2E real passou após a correção CSRF `eaddf0f`. Links em `VALIDATION.md`.
+- [x] App CI e CodeQL push/PR passaram no head documental `5d64bf8ed88feb727af7757c666bda6b7bc39eeb` (runs `38801099775`, `38801112602`, `38801099641`, `38801112548`); browser E2E real passou após a correção CSRF `eaddf0f`. A implementação funcional testada permanece idêntica ao head de código `d88f175`; links em `VALIDATION.md`.
 - [x] PR [#5](https://github.com/LsaBarbosa/kronos_agendamento/pull/5) aberto para `main`; não fazer merge/deploy.
 - [ ] Homologação e critérios dependentes de agenda/publicação.
 
