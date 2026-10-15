@@ -32,11 +32,11 @@
 - Migrations V3 (identidade/vínculo) e V4 (Spring Session JDBC); V1/V2 preservadas. Flyway fresh V1–V4, upgrade desde V1 e desde V2, validate/rerun e teste de autorização passaram em PostgreSQL 16.13 real.
 - Keycloak real importou realm e client confidencial; Chrome headless validou login associado, usuário sem associação negado, cookie HttpOnly/SameSite=Lax, rotação de sessão, tenant de vínculo apesar de query adulterada, usuário/vínculo inativos, CSRF inválido, logout e cookie revogado rejeitado.
 - Gate local `./mvnw -B -ntp -Dmaven.repo.local=/tmp/agendamento-m2 spotless:check verify`: `BUILD SUCCESS`, 21 unitários/arquiteturais + 11 integrações; frontend `format:check`, lint, 2 testes e `check` passaram.
-- Até o push: faltam os SHAs finais, runs App CI/CodeQL/E2E e a revisão dos resultados remotos. A evidência detalhada e os links serão registrados em `docs/development/VALIDATION.md`.
+- Commit `1b509c12b94c7bcbd841265f7edeb4abfe749eff`: App CI + browser E2E passaram em [run 38742515664](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38742515664); CodeQL Java/Kotlin + JS/TS passou em [run 38742515500](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38742515500). PR #2 aberto, dependente do PR #1. A revisão remota não foi concluída; resultados completos em `docs/development/VALIDATION.md`.
 
 ## Passos restantes
 
-1. Push da branch e PR dependente do PR #1; acompanhar App CI, CodeQL e `oidc-browser-e2e`.
+1. Obter revisão e integrar PR #1 antes do PR #2, sem reescrever história publicada.
 2. Confirmar expiração temporal da sessão, infraestrutura HTTPS/Secure e comportamento de hospedagem/homologação quando houver ambiente aprovado.
 3. Evoluir E2E cross-tenant nas rotas de negócio assim que forem implementadas; a API atual não possui endpoint de mutação de negócio.
 4. Obter matriz RBAC e política de MFA de suporte antes de habilitar papéis de operação.

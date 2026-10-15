@@ -4,8 +4,8 @@
 **Entrega:** documentação organizada, backend/frontend base, gates locais e execução remota bem-sucedida de App CI/CodeQL no commit `3a4653442762abc5b0a64f32c633394b733715de`.
 **AGD-001:** em andamento; não marcar como concluída.
 **Plano:** [AGD-001-fundacao.md](../plans/AGD-001-fundacao.md).
-**AGD-002:** parcial no [PR #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1), branch `agd-002-tenant-isolamento`; código `e6bbcf3b920c1c6c6220d181e10f86d88c11ae32`, evidências no head `5b8b6f0c3038823b70b918ea7ab93a8b1299008d`. App CI e CodeQL passaram em push/PR; identidade real e garantias HTTP permanecem pendentes de AGD-003. Ver [plano AGD-002](../plans/AGD-002-tenant-isolamento.md).
-**AGD-003:** em andamento na branch `agd-003-autenticacao-autorizacao`, derivada do head `9a4f6b2` do PR #1 aberto e dependente dele. Keycloak/OIDC, sessão PostgreSQL, associação server-side, papéis mínimos, UI, migrations V3/V4 e E2E local em Chrome implementados. Verify local e Chrome/Keycloak/PostgreSQL reais passaram; links CI remotos serão anexados após publicar. Ver [plano AGD-003](../plans/AGD-003-identidade-keycloak.md) e [ADR-0006](../decisions/ADR-0006-keycloak-oidc-sessao-administrativa.md).
+**AGD-002:** parcial no [PR #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1), branch `agd-002-tenant-isolamento`; código `e6bbcf3b920c1c6c6220d181e10f86d88c11ae32`, evidências no head `5b8b6f0c3038823b70b918ea7ab93a8b1299008d`. AGD-003 demonstra identidade OIDC real, associação server-side e contexto no GET do tenant próprio; essa resolução aguarda merge dos PRs #1/#2. Isolamento de futuros endpoints de negócio depende das histórias correspondentes. Ver [plano AGD-002](../plans/AGD-002-tenant-isolamento.md).
+**AGD-003:** em andamento na branch `agd-003-autenticacao-autorizacao`, PR #2 aberto sobre `agd-002-tenant-isolamento`, dependente do PR #1. Implementação e browser E2E real passaram localmente e remotamente; App CI `38742515664` e CodeQL `38742515500` passaram no commit `1b509c12b94c7bcbd841265f7edeb4abfe749eff`. Permanecem pendentes expiração temporal, hospedagem/TLS e homologação; ver evidências em VALIDATION.md, [plano AGD-003](../plans/AGD-003-identidade-keycloak.md) e [ADR-0006](../decisions/ADR-0006-keycloak-oidc-sessao-administrativa.md).
 
 ## Já disponível
 
@@ -34,6 +34,6 @@ Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. AG
 
 ## Próximo passo
 
-O [PR #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1) está aberto. App CI e CodeQL passaram no head AGD-002 anterior, conforme VALIDATION.md. O PR #2 de AGD-003 será derivado do PR #1, com dependência declarada. Próximo: publicar e acompanhar App CI/CodeQL/E2E de Keycloak; homologar expiração e infraestrutura HTTPS; evoluir endpoints de negócio e testes cross-tenant HTTP. AGD-003 e AGD-002 permanecem parciais; AGD-001 segue aberta pelo scan completo e homologação.
+Os [PRs #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1) e [#2](https://github.com/LsaBarbosa/kronos_agendamento/pull/2) estão abertos; o #2 depende do #1. App CI, E2E real e CodeQL passaram no SHA registrado em VALIDATION.md. Próximo: revisar/integrar PRs em ordem; homologar expiração e infraestrutura HTTPS; evoluir endpoints de negócio e testes cross-tenant HTTP. AGD-003 e AGD-002 permanecem parciais; AGD-001 segue aberta pelo scan completo e homologação.
 
 As demais histórias permanecem não implementadas. Nenhuma integração de WhatsApp/cobrança ou implantação foi realizada.
