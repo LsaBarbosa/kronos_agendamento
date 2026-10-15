@@ -40,8 +40,8 @@
 - [x] 15/10/2026 — PR #3 confirmado aberto e branch AGD-005 criada a partir do head publicado; escolhas do incremento registradas.
 - [x] Implementar V6 e serviços idempotency/outbox/consumer; V1–V5 permanecem imutáveis.
 - [x] Integrar `RenameTenant` e provar riscos PostgreSQL reais, incluindo transações/conexões independentes.
-- [x] Revisar entrega sequencialmente e executar gates locais; CI remoto continua pendente para o novo commit.
-- [ ] Atualizar os registros com SHA e resultados remotos após publicação.
+- [x] Revisar entrega sequencialmente e executar gates locais e remotos.
+- [x] Atualizar os registros com SHAs e resultados observados.
 
 ## Validação
 
@@ -49,7 +49,7 @@
 |---|---|---|---|
 | PostgreSQL, migração e invariantes | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw -B -ntp spotless:check verify` em `backend/` | Testes reais de V6, concorrência, replay, worker, consumer e grants passam | Passou em 15/10/2026: BUILD SUCCESS; 25 testes unitários/arquiteturais e 29 testes de integração, PostgreSQL 16.13/Testcontainers. |
 | Frontend e dependências | `npm run format:check && npm run lint && npm test && npm run check && npm audit --audit-level=high` em `frontend/` | Sem regressão; audit high+ não encontra vulnerabilidades | Passou em 15/10/2026; 2 testes, build Vite e `found 0 vulnerabilities`. |
-| App CI e CodeQL | execuções push/PR no SHA publicado | `success`; links associados ao SHA | Pendente de publicação do commit AGD-005. |
+| App CI e CodeQL | execuções push/PR no SHA publicado | `success`; links associados ao SHA | Passaram em 15/10/2026 no head `dafda4730244ac9c378a85d3ab4035a41ce0bfbd`: App CI push [38784285959](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38784285959), PR [38784330334](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38784330334), CodeQL push [38784286181](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38784286181), PR [38784330349](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38784330349). Inclui verify/Testcontainers, frontend, security/image, secrets e OIDC browser E2E. |
 
 ## Pendências e retomada
 
