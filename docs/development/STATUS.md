@@ -1,11 +1,11 @@
 # Estado do projeto
 
 **Atualização:** 15/10/2026.
-**Entrega:** base backend/frontend, migrations, identidade administrativa e provas locais/remotas registradas; branch AGD-003 recebeu novo incremento de expiração JDBC local, com publicação/CI desse incremento ainda pendentes.
+**Entrega:** base backend/frontend, migrations, identidade administrativa e provas locais/remotas registradas; incremento de expiração JDBC publicado até `591df5ae63aee8e8b24ad1d641a5061c5fbe9af8`, com App CI e CodeQL aprovados nos eventos push e PR.
 **AGD-001:** em andamento; não marcar como concluída.
 **Plano:** [AGD-001-fundacao.md](../plans/AGD-001-fundacao.md).
 **AGD-002:** parcial no [PR #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1), branch `agd-002-tenant-isolamento`; código `e6bbcf3b920c1c6c6220d181e10f86d88c11ae32`, evidências no head `5b8b6f0c3038823b70b918ea7ab93a8b1299008d`. AGD-003 demonstra identidade OIDC real, associação server-side e contexto no GET do tenant próprio; essa resolução aguarda merge dos PRs #1/#2. Isolamento de futuros endpoints de negócio depende das histórias correspondentes. Ver [plano AGD-002](../plans/AGD-002-tenant-isolamento.md).
-**AGD-003:** em andamento na branch `agd-003-autenticacao-autorizacao`, PR #2 aberto sobre `agd-002-tenant-isolamento`, dependente do PR #1. O head `a041abbddc58a15e9809b7bd300916c83bf7266f` passou App CI push/PR (`38756824027`, `38756839440`) e CodeQL push/PR (`38756823965`, `38756839790`), incluindo o E2E real. Prova local/Testcontainers e browser comprova sessão JDBC, expiração 25/31m e SSO preservado. Homologação HTTPS hospedada permanece pendente; consulte VALIDATION.md, [plano AGD-003](../plans/AGD-003-identidade-keycloak.md), [runbook HTTPS](../plans/AGD-003-homologacao-https.md) e [ADR-0006](../decisions/ADR-0006-keycloak-oidc-sessao-administrativa.md).
+**AGD-003:** em andamento na branch `agd-003-autenticacao-autorizacao`, PR #2 aberto sobre `agd-002-tenant-isolamento`, dependente do PR #1. No head publicado `591df5ae63aee8e8b24ad1d641a5061c5fbe9af8`, App CI push/PR (`38757958404`, `38757962737`) e CodeQL push/PR (`38757958367`, `38757963338`) passaram. Prova local/Testcontainers e browser comprova sessão JDBC, expiração 25/31m e SSO preservado. Homologação HTTPS hospedada permanece pendente; consulte VALIDATION.md, [plano AGD-003](../plans/AGD-003-identidade-keycloak.md), [runbook HTTPS](../plans/AGD-003-homologacao-https.md) e [ADR-0006](../decisions/ADR-0006-keycloak-oidc-sessao-administrativa.md).
 
 ## Já disponível
 
@@ -23,7 +23,7 @@
 
 ## Evidência
 
-Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. AGD-001 continua aberta pelo scan filesystem completo de dependências e homologação; scan limitado ao Dockerfile não o substitui. AGD-003: novo `spotless:check verify` passou em JDK 21 (21 testes unitários/arquiteturais + 11 integrações com PostgreSQL Testcontainers 16.13); browser E2E local com Keycloak/PostgreSQL reais passou para expiração 30m. Os gates remotos do novo commit ainda aguardam publicação.
+Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. AGD-001 continua aberta pelo scan filesystem completo de dependências e homologação; scan limitado ao Dockerfile não o substitui. AGD-003: `spotless:check verify` passou em JDK 21 (21 testes unitários/arquiteturais + 11 integrações com PostgreSQL Testcontainers 16.13); browser E2E local com Keycloak/PostgreSQL reais passou para expiração de 30m. App CI e CodeQL passaram no head publicado `591df5ae63aee8e8b24ad1d641a5061c5fbe9af8`.
 
 ## Pendências de AGD-001
 
@@ -34,6 +34,6 @@ Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. AG
 
 ## Próximo passo
 
-Os [PRs #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1) e [#2](https://github.com/LsaBarbosa/kronos_agendamento/pull/2) estão abertos e mergeáveis, sem review registrada; o #2 depende do #1. O head `a041abb` passou todos os gates remotos push/PR. Obter decisão/revisão do #1 e integrá-lo antes do #2; só então atualizar a base do #2 para `main` e revalidar diff/checks. Em paralelo, providenciar domínio/issuer/TLS/secrets e executar smoke HTTPS com 30m reais. AGD-003 e AGD-002 permanecem parciais; AGD-001 segue aberta pelo scan completo e homologação.
+Os [PRs #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1) e [#2](https://github.com/LsaBarbosa/kronos_agendamento/pull/2) estão abertos e mergeáveis, sem review registrada; o #2 depende do #1. Os checks do head `591df5a` passaram em push/PR. Obter decisão/revisão do #1 e integrá-lo antes do #2; só então atualizar a base do #2 para `main` e revalidar diff/checks. Em paralelo, providenciar domínio/issuer/TLS/secrets e executar smoke HTTPS com 30m reais. AGD-003 e AGD-002 permanecem parciais; AGD-001 segue aberta pelo scan completo e homologação.
 
 As demais histórias permanecem não implementadas. Nenhuma integração de WhatsApp/cobrança ou implantação foi realizada.
