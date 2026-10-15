@@ -96,7 +96,7 @@ Critérios de aceite:
 Critérios de aceite:
 
 - Administrador cria, edita, ativa e inativa serviço.
-- Duração e buffer são positivos/válidos e múltiplos de 15 minutos.
+- Duração é positiva e múltipla de 15 minutos. Buffer posterior aceita zero ou valores positivos múltiplos de 15 minutos (decisão de produto aprovada em 15/10/2026).
 - Serviço inativo some do público sem alterar reservas existentes.
 - Reserva futura preserva snapshot do serviço confirmado.
 

@@ -35,7 +35,8 @@ public record AuditEvent(
                 && (actorRef.equals("CONTROLLED_TENANT_PROVISIONER")
                     || actorRef.equals("CONTROLLED_DEMO_PROVISIONER")))
         || !result.equals("COMMITTED")
-        || !action.matches("TENANT_(CREATED|RENAMED|ADMIN_LINKED)")) {
+        || !action.matches(
+            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)")) {
       throw new IllegalArgumentException("Ator ou resultado de auditoria inválido");
     }
     if ((actorType.equals("ADMIN") && actorId == null)
@@ -54,6 +55,16 @@ public record AuditEvent(
           case "TENANT_ADMIN_LINKED" ->
               actorRef.equals("CONTROLLED_DEMO_PROVISIONER")
                   && detailsJson.equals("{\"changed_fields\":[\"identity\",\"membership\"]}");
+          case "SERVICE_CREATED" ->
+              actorType.equals("ADMIN")
+                  && detailsJson.equals(
+                      "{\"changed_fields\":[\"name\",\"description\",\"duration_minutes\",\"buffer_after_minutes\",\"status\"]}");
+          case "SERVICE_UPDATED" ->
+              actorType.equals("ADMIN")
+                  && detailsJson.matches(
+                      "\\{\\\"changed_fields\\\":\\[(?:\\\"(?:name|description|duration_minutes|buffer_after_minutes)\\\")(?:,\\\"(?:name|description|duration_minutes|buffer_after_minutes)\\\")*\\],\\\"version_before\\\":[0-9]+,\\\"version_after\\\":[0-9]+\\}");
+          case "SERVICE_ACTIVATED", "SERVICE_DEACTIVATED" ->
+              actorType.equals("ADMIN") && detailsJson.equals("{\"changed_fields\":[\"status\"]}");
           default -> false;
         };
     if (!validDetails) {
