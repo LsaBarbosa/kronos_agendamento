@@ -193,7 +193,7 @@ Regressão browser adicional: perde deliberadamente a resposta HTTP após commit
 Código e regressão browser publicados em `2e304520654eff6b50e0fc0276063fed3354edf5`. CodeQL [push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38803508460) e [PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38803515302) confirmados success. App CI [push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38803508276) e [PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38803515299) em andamento no momento deste registro. A integração está autorizada somente após sucesso do head final; os resultados finais ficam vinculados no PR #5. Não inferir homologação a partir deles.
 ## AGD-011 — Grade semanal e políticas
 
-**Branch/base:** `agd-011-grade-semanal-politicas`, base `c5dbec26cf88843704c6bf1575b69666ed235ab0` (`origin/main`, confirmada por `git fetch origin`). **Estado:** validação local aprovada; publicação e CI remoto ainda pendentes. O worktree foi testado antes do commit, portanto os resultados ainda não estão associados a um SHA de entrega. Nenhum merge ou deploy foi feito.
+**Branch/base:** `agd-011-grade-semanal-politicas`, base `c5dbec26cf88843704c6bf1575b69666ed235ab0`; commit funcional `4344d98a16161c17385a82bfd11c10e8be2de66b`; PR [#6](https://github.com/LsaBarbosa/kronos_agendamento/pull/6), aberto para `main`. Os resultados locais foram executados antes do commit e correspondem ao conteúdo desse SHA; quatro workflows push/PR passaram nesse commit. Nenhum merge ou deploy foi feito.
 
 | Critério/gate | Comando/procedimento | Resultado observado |
 |---|---|---|
@@ -204,11 +204,15 @@ Código e regressão browser publicados em `2e304520654eff6b50e0fc0276063fed3354
 | Frontend | `PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH npm run format:check && npm run check && npm run lint && npm test` (`frontend/`) | Passou: Prettier, TypeScript/Vite build, Oxlint sem avisos e Vitest (2 arquivos, 4 testes). Estados de ausência, erro, retry de carga, conflito com draft preservado, reload explícito, sessão expirada e associação revogada cobertos. |
 | Browser E2E OIDC real | `node --check scripts/dev/test-keycloak-browser.mjs`; Compose local com Keycloak/PostgreSQL/Chrome; `node scripts/dev/test-keycloak-browser.mjs` | Passou localmente: login OIDC real; configurou dois períodos e políticas, salvou, recarregou e confirmou via API; conflito CAS preservou draft e recuperação explícita carregou versão atual. Não é homologação HTTPS/staging. |
 | Revisão independente | Duas revisões em leitura: requisitos/contratos/tempo/UX e isolamento/transações/idempotência | Corrigidos achados de allowlist `changed_fields`, CAS sob lock mesmo sem alteração, retry/recuperação de UI e erro de validação. Pareceres técnicos não são aprovação humana GitHub. |
-| Git e higiene | `git diff --check`; revisão de diff/migrations | `git diff --check` passou; fetch confirmou base. CI remoto pendente. Conferir segredos/arquivos ignorados antes do commit. |
+| Git e higiene | `git diff --check`; revisão de diff/migrations | Diff limpo antes do commit; V1–V7 sem alterações; `.env` e credenciais locais ignorados. Matriz secrets do App CI push/PR passou. |
+| App CI push | [Run 38821277299](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38821277299) | `success` no SHA `4344d98a16161c17385a82bfd11c10e8be2de66b`; verify/PostgreSQL, Trivy imagem/config, frontend, browser OIDC E2E e matriz de secrets passaram. |
+| CodeQL push | [Run 38821277272](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38821277272) | `success` no SHA `4344d98a16161c17385a82bfd11c10e8be2de66b`; Java/Kotlin e JavaScript/TypeScript analisados. |
+| App CI PR | [Run 38821300931](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38821300931) | `success` no SHA `4344d98a16161c17385a82bfd11c10e8be2de66b`; mesmos gates do push concluídos. |
+| CodeQL PR | [Run 38821300944](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38821300944) | `success` no SHA `4344d98a16161c17385a82bfd11c10e8be2de66b`; Java/Kotlin e JavaScript/TypeScript analisados. |
 
 ### Limites e pendências AGD-011
 
 - AGD-011 permanece parcial até decisão sobre alinhamento dos limites a 15 minutos e períodos que cruzam meia-noite. A pergunta e proposta conservadora constam em `OPEN-QUESTIONS.md`; nenhum default foi inventado.
-- App CI push/PR e CodeQL push/PR devem ser registrados no head publicado. Homologação não ocorreu.
+- A atualização documental após `4344d98` cria um novo head; acompanhar App CI push/PR e CodeQL push/PR também nesse head antes de declarar CI final. Homologação não ocorreu.
 - AGD-001 continua aberta por scan completo de dependências e homologação/staging; AGD-003 por homologação HTTPS. Retenção, fornecedores e snapshot de reserva (AGD-015) seguem nas histórias próprias. Grade salva não habilita publicação ou rotas públicas.
 - No setup do E2E foi encontrado backend Compose antigo e ausência local de `APP_DB_PASSWORD`/role runtime; o provisionamento documentado `bash scripts/dev/ensure-app-db-role.sh` e rebuild resolveram o ambiente, depois do qual o E2E passou. Credenciais locais são ignoradas pelo Git.

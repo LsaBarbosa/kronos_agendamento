@@ -52,7 +52,7 @@
 - [x] Contratos OpenAPI, domínio/casos de uso, V8, API e UI implementados.
 - [x] Testes PostgreSQL, frontend e browser E2E local; duas revisões independentes em leitura e correções de auditoria/CAS/UX.
 - [x] Validação local completa: Maven/PostgreSQL, frontend e browser E2E real; detalhes em `VALIDATION.md`.
-- [ ] Commit, publicação e PR; acompanhar App CI/CodeQL no SHA final.
+- [x] Commit `4344d98a16161c17385a82bfd11c10e8be2de66b`, branch publicada e PR #6 aberta. App CI/CodeQL push/PR passaram neste head; atualização documental gera novo head e exige acompanhamento dos novos runs.
 - [ ] Homologação/staging permanece separada e pendente.
 
 ## Validação
@@ -63,7 +63,7 @@
 | Persistência/CAS/atomicidade | Mesmo `verify`, PostgreSQL 16.13/Testcontainers | Migração V8, exclusão overlap, CAS/concorrência, rollback, replay e Flyway | Passou: fresh install, upgrade, validate/rerun, grants runtime, concorrência e rollback |
 | UI com OIDC real | `node scripts/dev/test-keycloak-browser.mjs` | Keycloak/PostgreSQL/Chrome reais; save/reload, conflito, rascunho e recuperação | Passou localmente no stack reconstruído com esta branch e V8; sem homologação |
 | Frontend | `npm run format:check && npm run check && npm run lint && npm test` em `frontend/`; `node --check scripts/dev/test-keycloak-browser.mjs` | Prettier, Oxlint, Vitest, TypeScript/build e sintaxe E2E | Passou: 2 arquivos/4 testes Vitest, build e lint verdes |
-| CI remoto | App CI e CodeQL em push/PR no head final | todos os jobs concluídos com success | Pendente de commit/publicação |
+| CI remoto (head funcional) | App CI e CodeQL em push/PR | Todos os jobs concluíram com `success` em `4344d98a16161c17385a82bfd11c10e8be2de66b`: App CI `38821277299`, `38821300931`; CodeQL `38821277272`, `38821300944`. Links em `VALIDATION.md`. A atualização documental posterior terá novo SHA/runs. |
 
 ## Retomada
 
