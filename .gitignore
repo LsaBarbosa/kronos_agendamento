@@ -1,6 +1,10 @@
 .env
 .env.*
 !.env.example
+.env.keycloak
+.demo-admin.credentials
+.env.keycloak
+.demo-admin.credentials
 **/target/
 **/node_modules/
 **/.next/

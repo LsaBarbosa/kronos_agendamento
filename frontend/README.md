@@ -1,6 +1,6 @@
 # Frontend
 
-Fundação web em React, TypeScript e Vite. A interface ainda não contém fluxos de produto; eles entram conforme as histórias e decisões de UX aprovadas.
+Aplicação administrativa mínima em React, TypeScript e Vite. O incremento AGD-003 inicia login no backend, apresenta tenant/sessão e encerra a sessão local; fluxos de negócio continuam fechados e entram conforme as histórias e decisões de UX aprovadas.
 
 ## Requisitos
 
@@ -22,3 +22,5 @@ npm audit --audit-level=high
 ```
 
 `npm run format` aplica Prettier aos arquivos frontend cobertos; `npm run format:check` valida sem modificar. `npm run lint` executa Oxlint com os plugins React, JSX accessibility e Vitest. `npm run check` valida os tipos TypeScript e gera o build de produção em `dist/`. `npm audit` consulta o registry npm para as dependências travadas. Copie `.env.example` para `.env.local` para definir `VITE_API_BASE_URL`; o padrão local é `/api`.
+
+Para Keycloak local, use o proxy Vite `/api`, `/oauth2` e `/login` e siga [as instruções da raiz](../README.md#identidade-administrativa-local-agd-003). O browser mantém somente o cookie de sessão backend; tokens OIDC não são armazenados no frontend.

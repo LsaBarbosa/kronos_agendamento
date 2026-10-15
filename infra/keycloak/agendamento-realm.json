@@ -1,0 +1,21 @@
+{
+  "realm": "agendamento",
+  "enabled": true,
+  "displayName": "Agendamento local",
+  "loginWithEmailAllowed": false,
+  "duplicateEmailsAllowed": false,
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "verifyEmail": false,
+  "bruteForceProtected": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "TENANT_ADMIN",
+        "description": "Role de integração; a autorização efetiva é conferida no banco da aplicação."
+      }
+    ]
+  },
+  "clients": []
+}

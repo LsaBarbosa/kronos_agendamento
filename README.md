@@ -21,7 +21,8 @@ As skills já estão em `.agents/skills/`; os perfis opcionais estão em `.codex
 | [docs/spec/app-agendamento-README.md](docs/spec/app-agendamento-README.md) | índice dos sete documentos originais, preservados |
 | [AGENTS.md](AGENTS.md) | regras permanentes de desenvolvimento |
 | [backend/](backend/) | aplicação Spring Boot, Maven Wrapper, migração e testes |
-| [compose.yaml](compose.yaml) | PostgreSQL e backend opcional para execução local |
+| [compose.yaml](compose.yaml) | PostgreSQL e backend local |
+| [compose.keycloak.yaml](compose.keycloak.yaml) | Keycloak local e banco exclusivo do provedor |
 | [docs/development/STATUS.md](docs/development/STATUS.md) | implementado, pendente e próximo passo |
 | [docs/development/VALIDATION.md](docs/development/VALIDATION.md) | verificações efetivamente executadas e limitações |
 | [docs/development/TRACEABILITY.md](docs/development/TRACEABILITY.md) | ligação entre critérios, código e evidência |
@@ -62,7 +63,35 @@ curl --fail http://localhost:8080/actuator/health
 curl --fail http://localhost:8080/actuator/health/readiness
 ```
 
-Com a aplicação e o banco prontos, a resposta de saúde deve indicar `UP`. Apenas os GETs de health, liveness e readiness são públicos. As rotas de negócio permanecem fechadas até a implementação de autenticação/autorização e casos de uso; não existe usuário administrativo padrão.
+Com a aplicação e o banco prontos, a resposta de saúde deve indicar `UP`. Apenas os GETs de health, liveness e readiness são públicos. As APIs administrativas liberadas estão limitadas à sessão e à leitura do tenant associado; demais rotas de negócio continuam fechadas.
+
+## Identidade administrativa local (AGD-003)
+
+O Keycloak local usa realm `agendamento`, imagem `26.8.1` fixada por digest e PostgreSQL/credenciais próprios, independentes dos dados da aplicação. `start-dev` é exclusivo do ambiente local. Não há auto-registro nem usuário associado automaticamente.
+
+1. Gere `.env` da aplicação (se ausente), depois gere credenciais descartáveis e prepare Keycloak:
+
+```bash
+bash scripts/dev/prepare-local-env.sh
+bash scripts/dev/prepare-keycloak.sh
+docker compose -p agendamento --env-file .env --env-file .env.keycloak \
+  -f compose.yaml -f compose.keycloak.yaml -f compose.identity.yaml \
+  --profile app up --build --wait
+```
+
+2. Provisione explicitamente Tenant, usuário `demo-admin` e vínculo ativo. Senha temporária e UUID do tenant são gravados em `.demo-admin.credentials`, ignorado pelo Git:
+
+```bash
+bash scripts/dev/provision-demo-admin.sh demo-clinica "Clínica Demonstração"
+```
+
+3. Inicie o Vite (`cd frontend && npm ci && npm run dev`) e abra `http://localhost:5173/admin`. O navegador usa `/api` no proxy Vite, obtém CSRF por endpoint JSON e não recebe tokens OIDC. Callback do backend: `http://localhost:8080/login/oauth2/code/keycloak`; issuer e redirects são fixos, sem curingas.
+
+O backend no Compose usa URLs internas para token/JWKS/userinfo e issuer público `http://localhost:8180/realms/agendamento`; a validação `iss` não é desligada. Cookie local usa `HttpOnly`, `SameSite=Lax` e `Secure=false` somente em HTTP local. Produção deve usar HTTPS, `Secure=true`, hostname/issuer fixos, `start` (nunca `start-dev`), redirects exatos e segredos gerenciados.
+
+Logout invalida a sessão local, mas preserva a sessão SSO Keycloak; login seguinte pode não pedir senha. Logout federado/hospedagem permanecem pendentes de homologação.
+
+Para parar Keycloak preservando seus dados: `docker compose -p agendamento -f compose.keycloak.yaml --env-file .env.keycloak down`. Remova volumes apenas em ambiente descartável.
 
 Para encerrar preservando o volume local:
 
