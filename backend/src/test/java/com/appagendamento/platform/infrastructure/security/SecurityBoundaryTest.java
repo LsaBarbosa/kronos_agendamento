@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.appagendamento.platform.infrastructure.web.CorrelationIdFilter;
+import com.appagendamento.tenant.application.GetTenant;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,6 +16,7 @@ import org.springframework.boot.security.autoconfigure.SecurityAutoConfiguration
 import org.springframework.boot.security.autoconfigure.web.servlet.ServletWebSecurityAutoConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest
@@ -25,6 +27,8 @@ import org.springframework.test.web.servlet.MockMvc;
 @Import({SecurityConfiguration.class, SecurityErrorWriter.class, CorrelationIdFilter.class})
 class SecurityBoundaryTest {
   @Autowired private MockMvc mvc;
+
+  @MockitoBean private GetTenant getTenant;
 
   @Test
   void anonymousBusinessRequestReceivesConsistentError() throws Exception {

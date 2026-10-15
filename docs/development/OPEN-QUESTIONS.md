@@ -2,7 +2,9 @@
 
 | Tema | Referência | Efeito | Tratamento atual |
 |---|---|---|---|
-| Identidade administrativa | AGD-003; documento 04 | login, sessão e autorização | endpoints de negócio fechados; escolher provedor antes da integração; ADR-0003 |
+| Identidade administrativa — provedor | AGD-003; documento 04 | login e sessão | **Resolvido pelo usuário:** Keycloak via OIDC, sessão JDBC server-side e autorização por vínculo persistido; ADR-0006. |
+| RBAC administrativo e suporte | AGD-003; documentos 01, 02 e 06 | autorização granular, acesso da operação e MFA | Especificação define um administrador principal por tenant e menciona “papel apropriado”, sem matriz. AGD-003 limita-se a `TENANT_ADMIN`; aprovar matriz e política de MFA para suporte antes de liberar papéis adicionais. |
+| Hospedagem e homologação da identidade | AGD-001/003; documento 04 | issuer/redirects/TLS e prova no ambiente | Keycloak local é reprodutível; domínio, hospedagem, secrets gerenciados e ambiente/staging continuam pendentes. |
 | Slugs e ciclo de vida do tenant | AGD-002; documentos 01–03 | palavras reservadas, liberação após encerramento e relação do status com onboarding/assinatura | AGD-002 fixa somente canonicalização técnica e unicidade global persistente; sem lista reservada ou reciclagem. `ACTIVE` não publica nem libera rotas. Aprovar semântica comercial e política de liberação antes de onboarding público; ADR-0005 |
 | Troca de timezone do tenant | documento 03, seção 5.1 | impacto em horários futuros e auditoria | a recomendação de bloquear alteração é pendente, não decisão; não há mutação de timezone em AGD-002 |
 | WhatsApp e templates | documento 01; AGD-024/030 | códigos e notificações | não implementados; isolar por adapter; ADR-0003 |

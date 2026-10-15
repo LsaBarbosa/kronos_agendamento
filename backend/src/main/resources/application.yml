@@ -24,12 +24,26 @@ spring:
     create-schemas: true
     clean-disabled: true
     locations: classpath:db/migration
+  session:
+    store-type: none
+    timeout: 30m
+    jdbc:
+      initialize-schema: never
+      table-name: agendamento.spring_session
+      cleanup-cron: "0 0 * * * *"
   jackson:
     time-zone: UTC
 
 server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful
+  servlet:
+    session:
+      cookie:
+        name: AGDSESSION
+        http-only: true
+        secure: ${SESSION_COOKIE_SECURE:false}
+        same-site: lax
   error:
     include-message: never
     include-stacktrace: never

@@ -1,0 +1,19 @@
+spring:
+  config:
+    activate:
+      on-profile: keycloak
+  session:
+    store-type: jdbc
+
+identity:
+  oidc:
+    enabled: true
+    issuer-uri: ${OIDC_ISSUER_URI:http://localhost:8180/realms/agendamento}
+    authorization-uri: ${OIDC_AUTHORIZATION_URI:http://localhost:8180/realms/agendamento/protocol/openid-connect/auth}
+    token-uri: ${OIDC_TOKEN_URI:http://keycloak:8080/realms/agendamento/protocol/openid-connect/token}
+    jwk-set-uri: ${OIDC_JWK_SET_URI:http://keycloak:8080/realms/agendamento/protocol/openid-connect/certs}
+    user-info-uri: ${OIDC_USER_INFO_URI:http://keycloak:8080/realms/agendamento/protocol/openid-connect/userinfo}
+    client-id: ${OIDC_CLIENT_ID:agendamento-backend}
+    client-secret: ${OIDC_CLIENT_SECRET}
+    redirect-uri: ${OIDC_REDIRECT_URI:http://localhost:8080/login/oauth2/code/keycloak}
+    frontend-url: ${APP_FRONTEND_URL:http://localhost:5173/admin}

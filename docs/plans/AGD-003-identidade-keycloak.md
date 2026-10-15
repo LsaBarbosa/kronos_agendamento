@@ -1,0 +1,43 @@
+# Plano — AGD-003: identidade e autorização administrativa
+
+**Estado:** em andamento; implementação local validada, aguardando publicação/CI remoto e homologação. **Branch:** `agd-003-autenticacao-autorizacao`, derivada do head do PR #1 ainda aberto (`agd-002-tenant-isolamento`, `9a4f6b2`). O PR de AGD-003 declara dependência do PR #1.
+
+## Escopo
+
+- Implementar login OIDC administrativo com Keycloak, Authorization Code, state/nonce/PKCE e redirects restritos; sessão backend JDBC; logout, expiração, revogação, CSRF e proteção de rotas administrativas.
+- Persistir identidade por issuer+subject e associação AdminUser–tenant; autorização ativa consultada no servidor; provisionamento local explícito e reproduzível.
+- Expor somente contexto administrativo autenticado e consulta do próprio Tenant já implementada; manter as demais rotas de negócio deny-all até suas histórias.
+- Fornecer Compose local para Keycloak e banco próprio, realm importável, proxy Vite e UX mínima de entrada/saída/estado.
+- Adicionar migrations V3 para identidades/vínculos e V4 para tabelas JDBC de sessão; V1/V2 são imutáveis e Flyway é o único dono do schema de sessão.
+
+## Critérios verificáveis no incremento
+
+- OIDC redireciona para realm compartilhado e client confidencial com redirect URI exata e PKCE S256; navegador não recebe token.
+- Somente `(issuer, subject)` cadastrado com AdminUser e vínculo ativos recebe `TENANT_ADMIN`; associação inativa/revogada ou usuário não provisionado falha fechado, sem auto-criação.
+- Cada requisição protegida revalida associação e papel no PostgreSQL; desativação bloqueia sessão existente. Contexto tenant não aceita parâmetro do cliente.
+- `GET /api/v1/admin/session` mostra apenas tenant autorizado e `GET /api/v1/admin/tenant` lê somente o próprio registro. Demais APIs continuam fechadas.
+- CSRF obrigatório em operações não idempotentes sob cookie; erros API 401/403 neutros; logout invalida a sessão local, mantendo a sessão SSO Keycloak ativa.
+- PostgreSQL real aplica migrations em banco vazio e upgrade desde V2; sessões têm schema controlado somente por Flyway.
+- Testes automatizados com PostgreSQL e Keycloak reais cobrem login/associação/papel/revogação/CSRF; a expiração temporal permanece pendente. Browser E2E com Keycloak real é gate para declarar DONE.
+
+## Dependências que permanecem em AGD-003 / decisão
+
+- Hosted Keycloak, domínio, TLS, segredo gerenciado, configuração de callback e homologação de produção dependem de decisão/ambiente ainda não fornecidos.
+- A especificação cita um administrador principal por tenant e “papel apropriado”, mas não define matriz RBAC. Neste corte só `TENANT_ADMIN` é permitido; roles de operação/suporte e MFA de suporte ficam fechados.
+- Operações de negócio não criadas em histórias próprias não são liberadas por autenticação; CRUD completo, auditoria AGD-004 e APIs de catálogo/agenda permanecem posteriores.
+
+## Implementação e evidência local (15/10/2026)
+
+- ADR-0006 e OPEN-QUESTIONS atualizados; Keycloak `26.8.1` fixado no digest `sha256:79c623a22abacf3fe6c00a5fb30f5b7843d717b234033b80995891c06116d244`; `.env.keycloak` ignorado e secrets gerados por `scripts/dev/prepare-keycloak.sh`.
+- Migrations V3 (identidade/vínculo) e V4 (Spring Session JDBC); V1/V2 preservadas. Flyway fresh V1–V4, upgrade desde V1 e desde V2, validate/rerun e teste de autorização passaram em PostgreSQL 16.13 real.
+- Keycloak real importou realm e client confidencial; Chrome headless validou login associado, usuário sem associação negado, cookie HttpOnly/SameSite=Lax, rotação de sessão, tenant de vínculo apesar de query adulterada, usuário/vínculo inativos, CSRF inválido, logout e cookie revogado rejeitado.
+- Gate local `./mvnw -B -ntp -Dmaven.repo.local=/tmp/agendamento-m2 spotless:check verify`: `BUILD SUCCESS`, 21 unitários/arquiteturais + 11 integrações; frontend `format:check`, lint, 2 testes e `check` passaram.
+- Até o push: faltam os SHAs finais, runs App CI/CodeQL/E2E e a revisão dos resultados remotos. A evidência detalhada e os links serão registrados em `docs/development/VALIDATION.md`.
+
+## Passos restantes
+
+1. Push da branch e PR dependente do PR #1; acompanhar App CI, CodeQL e `oidc-browser-e2e`.
+2. Confirmar expiração temporal da sessão, infraestrutura HTTPS/Secure e comportamento de hospedagem/homologação quando houver ambiente aprovado.
+3. Evoluir E2E cross-tenant nas rotas de negócio assim que forem implementadas; a API atual não possui endpoint de mutação de negócio.
+4. Obter matriz RBAC e política de MFA de suporte antes de habilitar papéis de operação.
+5. Manter AGD-003 parcial enquanto esses critérios aplicáveis não tiverem prova; AGD-001 segue aberta pelo scan completo de dependências e homologação. AGD-002 continua parcial até integração deste PR e cobertura das rotas de negócio futuras.

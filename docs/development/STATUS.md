@@ -1,10 +1,11 @@
 # Estado do projeto
 
-**Atualização:** 14/10/2026.
+**Atualização:** 15/10/2026.
 **Entrega:** documentação organizada, backend/frontend base, gates locais e execução remota bem-sucedida de App CI/CodeQL no commit `3a4653442762abc5b0a64f32c633394b733715de`.
 **AGD-001:** em andamento; não marcar como concluída.
 **Plano:** [AGD-001-fundacao.md](../plans/AGD-001-fundacao.md).
 **AGD-002:** parcial no [PR #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1), branch `agd-002-tenant-isolamento`; código `e6bbcf3b920c1c6c6220d181e10f86d88c11ae32`, evidências no head `5b8b6f0c3038823b70b918ea7ab93a8b1299008d`. App CI e CodeQL passaram em push/PR; identidade real e garantias HTTP permanecem pendentes de AGD-003. Ver [plano AGD-002](../plans/AGD-002-tenant-isolamento.md).
+**AGD-003:** em andamento na branch `agd-003-autenticacao-autorizacao`, derivada do head `9a4f6b2` do PR #1 aberto e dependente dele. Keycloak/OIDC, sessão PostgreSQL, associação server-side, papéis mínimos, UI, migrations V3/V4 e E2E local em Chrome implementados. Verify local e Chrome/Keycloak/PostgreSQL reais passaram; links CI remotos serão anexados após publicar. Ver [plano AGD-003](../plans/AGD-003-identidade-keycloak.md) e [ADR-0006](../decisions/ADR-0006-keycloak-oidc-sessao-administrativa.md).
 
 ## Já disponível
 
@@ -18,6 +19,7 @@
 - Workflow de CI com job isolado de teste e build do frontend.
 - Compose identifica a prontidão da aplicação pelo endpoint Actuator readiness.
 - AGD-002: tabela Tenant em V2, slug canonicalizado e globalmente único, timezone IANA, status/version e casos de uso de leitura/renomeação limitados pelo `tenant_id` do contexto; sem rotas de negócio liberadas.
+- AGD-003: AdminUser e associação ativos em V3; tabelas Spring Session JDBC no schema Flyway em V4; realm compartilhado Keycloak local 26.8.1; Authorization Code/PKCE; rotas administrativas mínimas e autorização revalidada no banco em cada requisição. V1/V2 preservadas.
 
 ## Evidência
 
@@ -27,11 +29,11 @@ Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. AG
 
 1. App CI (`38663531502`) e CodeQL (`38663531528`) passaram no commit publicado `3a4653442762abc5b0a64f32c633394b733715de`; histórico da falha HTTP 429 no run anterior está em VALIDATION.md.
 2. Executar o scan Trivy completo de dependências quando Maven Central aceitar as consultas; o sucesso do scan limitado ao Dockerfile não cobre esse critério.
-3. **Concluído em AGD-002:** migration funcional V2 aplicada do zero e como upgrade desde V1; testes locais e App CI passaram. V1 preservada.
+3. **Concluído em AGD-002:** migration funcional V2 aplicada do zero e como upgrade desde V1; testes locais e App CI passaram. V1 preservada. **Concluído localmente em AGD-003, aguardando CI/integração do PR #1:** V1–V4 aplicadas em banco vazio; upgrade desde V1 e V2 em PostgreSQL real; V1/V2 imutáveis.
 4. Definir UX, hospedagem e staging antes do smoke/E2E de produto, homologação e gates de promoção da DoD.
 
 ## Próximo passo
 
-O [PR #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1) está aberto. App CI `38665441992`/`38665495754` e CodeQL `38665441831`/`38665495668` passaram no head `5b8b6f0c3038823b70b918ea7ab93a8b1299008d`; detalhes em VALIDATION.md. O scan Trivy filesystem completo segue pendente e não é substituído pelo scan de imagem/configuração. Próximo: completar AGD-003 com identidade/sessão, associação administrativa verificada server-side, resolver tenant do principal, proteger endpoints e provar respostas HTTP não reveladoras. Manter AGD-001 e AGD-002 abertas até fechar os gates.
+O [PR #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1) está aberto. App CI e CodeQL passaram no head AGD-002 anterior, conforme VALIDATION.md. O PR #2 de AGD-003 será derivado do PR #1, com dependência declarada. Próximo: publicar e acompanhar App CI/CodeQL/E2E de Keycloak; homologar expiração e infraestrutura HTTPS; evoluir endpoints de negócio e testes cross-tenant HTTP. AGD-003 e AGD-002 permanecem parciais; AGD-001 segue aberta pelo scan completo e homologação.
 
 As demais histórias permanecem não implementadas. Nenhuma integração de WhatsApp/cobrança ou implantação foi realizada.
