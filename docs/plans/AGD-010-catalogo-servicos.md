@@ -47,7 +47,7 @@
 
 - [x] 15/10/2026 — `origin/main` confirmou merge #3 (`1138395`) e #4 (`1090b44`); working tree limpa; branch derivada da main atualizada.
 - [x] Implementação funcional, revisão independente em leitura e validação local; achados pertinentes corrigidos. Código testado em `4678f2481b11b427b77502523eab9638f0013b30`.
-- [x] App CI e CodeQL push/PR passaram no head publicado `c096954f14dca012960de1cfa0c304ef2c07e7ed`; App CI incluiu browser E2E com Keycloak/PostgreSQL/Chrome. Links em `VALIDATION.md`.
+- [ ] App CI e CodeQL passam na correção final. Head `c096954f14dca012960de1cfa0c304ef2c07e7ed` passou push/PR, mas execução no head documental `cd61e601c9aab87e8c247f67851b3bb72ae37ac8` falhou no browser E2E ao obter CSRF; correção local em `eaddf0f543616559955db0f1945c9220b473517d`, CI pendente.
 - [x] PR [#5](https://github.com/LsaBarbosa/kronos_agendamento/pull/5) aberto para `main`; não fazer merge/deploy.
 - [ ] Homologação e critérios dependentes de agenda/publicação.
 
@@ -58,7 +58,7 @@
 | Dependências frontend e sintaxe browser | `npm audit --audit-level=high` e `node --check scripts/dev/test-keycloak-browser.mjs` | Passaram no commit de código: 0 vulnerabilidades; sintaxe válida. Audit precisou de rede autorizada após DNS indisponível no sandbox. |
 | Qualidade de patch | `git diff --cached --check` antes do commit; scanner de secrets existente no App CI | Diff sem whitespace inválido. Trivy não está instalado localmente; scan de secrets/imagem fica pendente do CI, sem alegar aprovação local. |
 | Migração | suíte `verify` em DB limpo e upgrade V6→V7 | Esperado: aplicação limpa/upgrade, validate e rerun idempotente | Passou em PostgreSQL real: fresh V1–V7, upgrade V6→V7, `validate` e reexecução com zero mudanças; V1–V6 preservadas. |
-| CI remoto | App CI/CodeQL push e PR | esperado: todos os jobs passam | Passou no `c096954f14dca012960de1cfa0c304ef2c07e7ed`; App CI `38797399485`/`38797414999`, CodeQL `38797399450`/`38797414867`. Browser E2E passou; execuções identificadas em `VALIDATION.md`. |
+| CI remoto | App CI/CodeQL push e PR | esperado: todos os jobs da correção final passam | `c096954f14dca012960de1cfa0c304ef2c07e7ed` passou (App CI `38797399485`/`38797414999`; CodeQL `38797399450`/`38797414867`). Em `cd61e601c9aab87e8c247f67851b3bb72ae37ac8`, App CI falhou no browser E2E; CodeQL passou. `eaddf0f` serializa confirmação de sessão e CSRF; reexecução remota pendente. |
 
 ## Encerramento ou retomada
 
