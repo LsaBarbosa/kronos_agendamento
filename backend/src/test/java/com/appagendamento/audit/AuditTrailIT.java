@@ -57,7 +57,8 @@ class AuditTrailIT {
     request.setAttribute(CorrelationIdFilter.ATTRIBUTE, traceId.toString());
     RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
     try {
-      renameTenant.execute(actor, own.tenantId(), "Novo nome secreto", 0);
+      renameTenant.execute(
+          actor, own.tenantId(), "rename-key-" + UUID.randomUUID(), "Novo nome secreto", 0);
     } finally {
       RequestContextHolder.resetRequestAttributes();
     }
@@ -231,7 +232,11 @@ class AuditTrailIT {
       assertThatThrownBy(
               () ->
                   renameTenant.execute(
-                      actor(tenant.tenantId()), tenant.tenantId(), "Uncommitted rename", 0))
+                      actor(tenant.tenantId()),
+                      tenant.tenantId(),
+                      "rename-key-" + UUID.randomUUID(),
+                      "Uncommitted rename",
+                      0))
           .isInstanceOf(DataAccessException.class);
       assertThat(
               migrationJdbc.queryForObject(
@@ -258,8 +263,18 @@ class AuditTrailIT {
     }
   }
 
-  private static AuthenticatedAdmin actor(UUID tenantId) {
+  private AuthenticatedAdmin actor(UUID tenantId) {
     UUID adminId = UUID.randomUUID();
+    String subject = UUID.randomUUID().toString();
+    migrationJdbc.update(
+        "INSERT INTO agendamento.admin_user (user_id, identity_issuer, identity_subject) VALUES (?, ?, ?)",
+        adminId,
+        "https://identity.test/realms/agendamento",
+        subject);
+    migrationJdbc.update(
+        "INSERT INTO agendamento.admin_tenant_membership (user_id, tenant_id, role) VALUES (?, ?, 'TENANT_ADMIN')",
+        adminId,
+        tenantId);
     return new AuthenticatedAdmin() {
       @Override
       public UUID adminUserId() {
@@ -273,7 +288,7 @@ class AuditTrailIT {
 
       @Override
       public String subject() {
-        return UUID.randomUUID().toString();
+        return subject;
       }
 
       @Override

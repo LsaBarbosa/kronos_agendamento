@@ -1,0 +1,59 @@
+# AGD-005 — Idempotência e outbox reutilizáveis
+
+## Identificação e objetivo
+
+- Incremento derivado do PR #3 (AGD-004), branch de origem `agd-004-auditoria-correlacao`, head confirmado `23731b8036861683e0353e18a1b164fe0ce9a47b`. PR #3 está aberto e sem decisão de review; AGD-005 depende da integração de AGD-004.
+- Objetivo: fornecer idempotência persistida e outbox/consumer reutilizáveis, demonstrados em `RenameTenant`.
+- Referências: documentos 01 §3/14; 02 §§11/14/16; 03 §§1/2/8/12; 04 §§7/11/12; documento 05 §22; documento 06 critérios AGD-005 e DoD.
+- Inclui migrations V6, chave/digest/operationId, replay com autorização atual, atomização rename+auditoria+outbox+resposta, worker lease/retry/reprocessamento manual interno e consumer local deduplicado.
+- Exclui endpoints de reserva/catálogo, publicação real para WhatsApp/cobrança/broker, política de retenção/expurgo e alegação de entrega exatamente uma vez.
+
+## Estado e dependências
+
+- PR #3 continua aberto em `main` (estado `CLEAN`, sem reviews humanas registradas), head `23731b8`; branch atual AGD-005 parte desse commit.
+- V1–V5, `RenameTenant`, auditoria append-only e PostgreSQL/Testcontainers existem. O rename é a operação escolhida por validar versão esperada, mutação de domínio e auditoria já implementada, sem inventar endpoint de produto.
+- Não há serviços de negócio externos nem destino real configurado; a prova de consumo usa efeito local persistido em PostgreSQL.
+- Subagentes independentes não estavam disponíveis nesta sessão; revisão será sequencial com a skill local de leitura.
+
+## Estratégia e decisões
+
+1. Criar V6 sem modificar V1–V5; manter os grants de auditoria append-only e conceder apenas privilégios necessários às tabelas novas.
+2. Registrar chave como SHA-256 da chave recebida (a chave/header bruto não é persistido); unicidade é `(tenant_id, command_scope, key_digest)`. O scope inclui versão do comando.
+3. Canonicalizar o comando `tenant.rename.v1` depois da validação/normalização por campos fixos, em codificação UTF-8 com comprimento prefixado, e SHA-256 versionado; inclui tenant autenticado, alvo, `expectedVersion` e nome normalizado. Não serializa request, headers ou principal OIDC.
+4. Criar o operationId uma vez no servidor. Requisição, correlation ID e operação lógica são identidades distintas. Guardar só resultado JSON allowlisted necessário ao replay; sem cookie/token/header.
+5. Inserção da chave, mutação, auditoria, outbox e resultado `COMPLETED` compartilham a transação. Em corrida, a constraint única do PostgreSQL serializa contenders; o segundo espera o commit/rollback e, após commit, reproduz o resultado sem incrementar versão, auditar novamente ou gerar novo event ID. Como o comando síncrono não confirma `IN_PROGRESS` fora da transação, o estado normalmente não é observável; se houver registro `IN_PROGRESS` assíncrono, retornar `OPERATION_IN_PROGRESS` com operationId, nunca executar em paralelo. Falha/rollback local remove também o registro e não fixa a chave para conteúdo futuro; erro determinístico não é armazenado por este comando síncrono.
+6. Antes de replay, validar principal atual pela política de segurança por requisição e carregar o alvo sob o tenant do contexto. Digest diferente dá `IDEMPOTENCY_KEY_REUSED`; resultado/estado externo ambíguo não é executado de novo.
+7. Outbox é pelo menos uma vez. Worker reivindica lote em transação curta por `FOR UPDATE SKIP LOCKED`, grava token/lease e incrementa tentativas; publica fora da transação; confirma apenas se token ainda for atual e lease ainda válido. Backoff exponencial limitado e número de tentativas são parâmetros operacionais, não retenção de produto. Timeout/resultado desconhecido vai para `RECONCILIATION_REQUIRED`, não retry automático. Reprocessamento é método interno controlado, com identidade original preservada.
+8. Consumer registra `(consumer_name,event_id)` e efeito local na mesma transação; redelivery vira no-op. Falha antes do commit reverte ambos.
+9. Sem prazo aprovado de retenção, nenhuma tabela terá job de expurgo. Idempotency records, receipts e outbox terminal permanecem persistidos até política aprovada; questionamento registrado em OPEN-QUESTIONS.md.
+10. Adapter externo classifica sucesso, falha retryable, falha terminal e outcome desconhecido. Não há destino real neste incremento; nenhuma mensagem/cobrança é declarada publicada.
+
+## Provas
+
+- PostgreSQL real: migração limpa/upgrade/validate/rerun; chaves equivalentes/divergentes, tenant/scope diferentes, concorrência com conexões, replay após commit, rollback cruzado, injeção de falhas de auditoria/outbox e grants runtime.
+- Outbox: lease/crash, reclaim por segundo worker, stale token incapaz de confirmar, backoff/terminal/unknown, chamada externa fora da transação e reprocessamento com a mesma identidade.
+- Consumer PostgreSQL: duplicate no-op, erro antes do commit reverte receipt e efeito, redelivery após efeito/antes do ack permanece segura.
+- Gates existentes: Spotless/Maven verify (Testcontainers), frontend, `npm audit`, secret scan, scan de imagem e CodeQL; CI remoto por commit entregue.
+
+## Progresso
+
+- [x] 15/10/2026 — PR #3 confirmado aberto e branch AGD-005 criada a partir do head publicado; escolhas do incremento registradas.
+- [x] Implementar V6 e serviços idempotency/outbox/consumer; V1–V5 permanecem imutáveis.
+- [x] Integrar `RenameTenant` e provar riscos PostgreSQL reais, incluindo transações/conexões independentes.
+- [x] Revisar entrega sequencialmente e executar gates locais; CI remoto continua pendente para o novo commit.
+- [ ] Atualizar os registros com SHA e resultados remotos após publicação.
+
+## Validação
+
+| Critério | Comando/procedimento | Resultado esperado | Observado |
+|---|---|---|---|
+| PostgreSQL, migração e invariantes | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw -B -ntp spotless:check verify` em `backend/` | Testes reais de V6, concorrência, replay, worker, consumer e grants passam | Passou em 15/10/2026: BUILD SUCCESS; 25 testes unitários/arquiteturais e 29 testes de integração, PostgreSQL 16.13/Testcontainers. |
+| Frontend e dependências | `npm run format:check && npm run lint && npm test && npm run check && npm audit --audit-level=high` em `frontend/` | Sem regressão; audit high+ não encontra vulnerabilidades | Passou em 15/10/2026; 2 testes, build Vite e `found 0 vulnerabilities`. |
+| App CI e CodeQL | execuções push/PR no SHA publicado | `success`; links associados ao SHA | Pendente de publicação do commit AGD-005. |
+
+## Pendências e retomada
+
+- Política de retenção de auditoria, idempotência, outbox e receipts, prazos por categoria, tombstones e expurgo precisa de aprovação; nenhum expurgo será implementado.
+- WhatsApp, cobrança e broker reais dependem de AGD-024/030/041 e contratos/destinos de fornecedor; integração de teste não comprova tais fornecedores.
+- PR #3 precisa de decisão de integração humana; esta branch mantém dependência explícita até AGD-004 integrada. Seu head e CI atuais foram conferidos em 15/10/2026; revisão humana não consta.
+- Após AGD-005, próximo incremento recomendado é AGD-010 — Catálogo de serviços.

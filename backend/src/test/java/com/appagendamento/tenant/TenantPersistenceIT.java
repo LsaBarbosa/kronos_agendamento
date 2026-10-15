@@ -50,7 +50,7 @@ class TenantPersistenceIT {
     String schema = isolatedSchemaName();
     Flyway fresh = isolatedFlyway(schema);
 
-    assertThat(fresh.migrate().migrationsExecuted).isEqualTo(5);
+    assertThat(fresh.migrate().migrationsExecuted).isEqualTo(6);
     fresh.validate();
     assertThat(fresh.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -59,7 +59,7 @@ class TenantPersistenceIT {
                     + schema
                     + ".flyway_schema_history WHERE success ORDER BY installed_rank",
                 String.class))
-        .containsExactly(null, "1", "2", "3", "4", "5");
+        .containsExactly(null, "1", "2", "3", "4", "5", "6");
     assertThat(
             jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = ? AND table_name = 'tenant')",
@@ -82,7 +82,7 @@ class TenantPersistenceIT {
 
     assertThat(v1.info().current().getVersion().getVersion()).isEqualTo("1");
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(5);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -91,7 +91,7 @@ class TenantPersistenceIT {
                     + schema
                     + ".flyway_schema_history WHERE success ORDER BY installed_rank",
                 String.class))
-        .containsExactly(null, "1", "2", "3", "4", "5");
+        .containsExactly(null, "1", "2", "3", "4", "5", "6");
     assertThat(
             jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = ? AND table_name = 'tenant')",
@@ -107,7 +107,7 @@ class TenantPersistenceIT {
     assertThat(v2.migrate().migrationsExecuted).isEqualTo(2);
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(4);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -116,10 +116,38 @@ class TenantPersistenceIT {
                     + schema
                     + ".flyway_schema_history WHERE success ORDER BY installed_rank",
                 String.class))
-        .containsExactly(null, "1", "2", "3", "4", "5");
+        .containsExactly(null, "1", "2", "3", "4", "5", "6");
     assertThat(
             jdbc.queryForObject("SELECT to_regclass(?||'.spring_session')", String.class, schema))
         .isEqualTo(schema + ".spring_session");
+  }
+
+  @Test
+  void upgradesAgd004V5SchemaWithAppendOnlyAuditToV6() {
+    String schema = isolatedSchemaName();
+    Flyway v5 = isolatedFlyway(schema, MigrationVersion.fromVersion("5"));
+    assertThat(v5.migrate().migrationsExecuted).isEqualTo(5);
+    assertThat(v5.info().current().getVersion().getVersion()).isEqualTo("5");
+
+    Flyway upgrade = isolatedFlyway(schema);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(1);
+    upgrade.validate();
+    assertThat(upgrade.migrate().migrationsExecuted).isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM " + schema + ".flyway_schema_history WHERE success",
+                Integer.class))
+        .isEqualTo(7);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT has_table_privilege('agendamento_app', ?, 'SELECT') "
+                    + "AND has_table_privilege('agendamento_app', ?, 'INSERT') "
+                    + "AND NOT has_table_privilege('agendamento_app', ?, 'UPDATE')",
+                Boolean.class,
+                schema + ".audit_event",
+                schema + ".audit_event",
+                schema + ".audit_event"))
+        .isTrue();
   }
 
   @Test
@@ -129,13 +157,20 @@ class TenantPersistenceIT {
     AuthenticatedAdmin actor = adminActor(own.tenantId());
 
     assertThat(getTenant.execute(actor, own.tenantId()).tenantId()).isEqualTo(own.tenantId());
-    Tenant renamed = renameTenant.execute(actor, own.tenantId(), "Clínica A Atualizada", 0);
+    Tenant renamed =
+        renameTenant
+            .execute(
+                actor, own.tenantId(), "rename-" + UUID.randomUUID(), "Clínica A Atualizada", 0)
+            .value();
     assertThat(renamed.name()).isEqualTo("Clínica A Atualizada");
     assertThat(renamed.version()).isEqualTo(1);
 
     assertThatThrownBy(() -> getTenant.execute(actor, foreign.tenantId()))
         .isExactlyInstanceOf(TenantNotFoundException.class);
-    assertThatThrownBy(() -> renameTenant.execute(actor, foreign.tenantId(), "Vazamento", 0))
+    assertThatThrownBy(
+            () ->
+                renameTenant.execute(
+                    actor, foreign.tenantId(), "rename-" + UUID.randomUUID(), "Vazamento", 0))
         .isExactlyInstanceOf(TenantNotFoundException.class);
     assertThat(getTenant.execute(() -> foreign.tenantId(), foreign.tenantId()).name())
         .isEqualTo("Clínica B");
@@ -192,8 +227,18 @@ class TenantPersistenceIT {
     return UUID.randomUUID().toString().substring(0, 8);
   }
 
-  private static AuthenticatedAdmin adminActor(UUID tenantId) {
+  private AuthenticatedAdmin adminActor(UUID tenantId) {
     UUID adminId = UUID.randomUUID();
+    String subject = UUID.randomUUID().toString();
+    jdbc.update(
+        "INSERT INTO agendamento.admin_user (user_id, identity_issuer, identity_subject) VALUES (?, ?, ?)",
+        adminId,
+        "https://identity.test/realms/agendamento",
+        subject);
+    jdbc.update(
+        "INSERT INTO agendamento.admin_tenant_membership (user_id, tenant_id, role) VALUES (?, ?, 'TENANT_ADMIN')",
+        adminId,
+        tenantId);
     return new AuthenticatedAdmin() {
       @Override
       public UUID adminUserId() {
@@ -207,7 +252,7 @@ class TenantPersistenceIT {
 
       @Override
       public String subject() {
-        return UUID.randomUUID().toString();
+        return subject;
       }
 
       @Override

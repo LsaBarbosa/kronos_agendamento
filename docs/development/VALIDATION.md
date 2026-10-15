@@ -57,6 +57,22 @@ AGD-001 permanece **em andamento**. App CI e CodeQL passaram no SHA publicado `3
 
 Próximo incremento recomendado: AGD-002 para tenant e isolamento, com migration V2 funcional e testes PostgreSQL de banco vazio e upgrade a partir de V1.
 
+## AGD-005 — Idempotência e outbox
+
+**Data:** 15/10/2026. **Branch:** `agd-005-idempotencia-outbox`, derivada do head `23731b8036861683e0353e18a1b164fe0ce9a47b` do PR #3, ainda aberto. Revisão humana do PR #3 não consta. AGD-005 depende da integração de AGD-004. O SHA próprio de implementação será registrado após o commit e as execuções remotas serão associadas ao head publicado.
+
+| Critério/gate | Comando/procedimento | Resultado observado |
+|---|---|---|
+| Formatação, arquitetura, build e testes PostgreSQL | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw -B -ntp spotless:check verify` (`backend/`) | Passou em 15/10/2026 com PostgreSQL 16.13 via Testcontainers: `BUILD SUCCESS`, 25 testes unitários/arquiteturais e 29 de integração, zero falhas/erros. Inclui migração limpa V1–V6, upgrade V5→V6, validação/reexecução Flyway, corridas em conexões independentes, replay/conflito/isolamento, rollback conjunto, auditoria/outbox falhando, recuperação de lease, rejeição de claim obsoleto, consumer duplicate/rollback e permissões runtime. SHA será associado após commit. |
+| Gates frontend | `PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH npm run format:check && npm run lint && npm test && npm run check` (`frontend/`) | Passou: Prettier/Oxlint limpos, 2 testes, TypeScript e build Vite de produção. |
+| Dependências frontend | `PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH npm audit --audit-level=high` (`frontend/`) | Repetição com rede autorizada passou: `found 0 vulnerabilities`. A execução inicial no sandbox falhou por `EAI_AGAIN registry.npmjs.org`, sem resultado de audit. |
+| App CI e CodeQL | GitHub Actions no novo SHA do PR dependente | Pendente até publicar. PR #3 (base) foi rechecado em 15/10/2026 e permanece aberto/`CLEAN`, sem review humana; App CI push/PR e CodeQL push/PR verdes nos runs `38778395548`, `38778404280`, `38778395142`, `38778404283`. Isso é somente evidência da base AGD-004, não valida AGD-005. |
+| Security scan completo | App CI Trivy / npm audit | npm audit passou. Trivy local não está instalado; no CI atual, Trivy de configuração de backend analisa apenas `backend/Dockerfile` e imagem Keycloak, não substitui scan completo do filesystem/dependências. Pendência de AGD-001 continua explícita. |
+
+### Limites comprovados
+
+`RenameTenant` é a única operação funcional integrada. Não existem destinos reais, integração broker/WhatsApp/cobrança, efeito externo ou reconciliação específica de fornecedor; o publisher permanece uma porta e o consumer PostgreSQL é evidência da infraestrutura. Falhas ambíguas vão para `RECONCILIATION_REQUIRED` sem reprocessamento automático; o método interno só reabre `DEAD_LETTER`. Política de retenção de idempotency records, outbox e receipts está em `OPEN-QUESTIONS.md`; não existe expurgo. Homologação/staging pendente. Subagentes não estavam disponíveis nesta sessão; a revisão foi sequencial, não independente. Próximo incremento recomendado: AGD-010 — Catálogo de serviços.
+
 ## AGD-002 — Tenant e isolamento (branch local)
 
 **Branch:** `agd-002-tenant-isolamento`, baseada no `main` em `271569fcb1de0f98c695ecacfeccd19ba6608777`. **Commit de código:** `e6bbcf3b920c1c6c6220d181e10f86d88c11ae32`. O head remoto `5b8b6f0c3038823b70b918ea7ab93a8b1299008d` acrescenta documentação de evidência; nenhum código mudou após o SHA local testado.
