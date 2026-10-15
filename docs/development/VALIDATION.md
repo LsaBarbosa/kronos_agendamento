@@ -187,3 +187,7 @@ Revisão atual: backend revisado independentemente em leitura; não equivale a a
 Sem mudanças em backend ou migrations. Mantidas pendências de homologação, retenção, fornecedores e scan completo. Listagem sem paginação e reforço de CHECK SQL de detalhes de auditoria são melhorias conhecidas, sem caminho HTTP de bypass demonstrado. A implementação Java aplica allowlist.
 
 Regressão browser adicional: perde deliberadamente a resposta HTTP após commit de criação e repete o submit com a mesma chave; consulta autenticada exige exatamente um serviço. Sintaxe `node --check scripts/dev/test-keycloak-browser.mjs` passou; execução depende do App CI do head entregue.
+
+### Head de código da revisão
+
+Código e regressão browser publicados em `2e304520654eff6b50e0fc0276063fed3354edf5`. CodeQL [push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38803508460) e [PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38803515302) confirmados success. App CI [push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38803508276) e [PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38803515299) em andamento no momento deste registro. A integração está autorizada somente após sucesso do head final; os resultados finais ficam vinculados no PR #5. Não inferir homologação a partir deles.
