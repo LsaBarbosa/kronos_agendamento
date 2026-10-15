@@ -39,7 +39,7 @@
 - [x] 14/10/2026 — implementar domínio, casos de uso, persistência e V2; V1 permanece sem alteração.
 - [x] 14/10/2026 — testes de domínio/arquitetura e PostgreSQL 16 real cobrem fresh V1+V2, upgrade V1→V2, validate/rerun sem alterações, isolamento de leitura/mutação e corrida de slug.
 - [x] 14/10/2026 — revisão independente somente leitura do diff atual: nenhum achado reproduzível em isolamento, slug concorrente, V2/Flyway, timezone/status ou arquitetura; reviewer executou `-Dit.test=TenantPersistenceIT verify` (21 testes + 4 testes tenant, PostgreSQL 16.13).
-- [ ] Finalizar revisão do diff e criar commit local; registrar SHA da evidência.
+- [x] 14/10/2026 — revisão final e commit de código `e6bbcf3b920c1c6c6220d181e10f86d88c11ae32`; working tree de código validado antes do commit.
 - [ ] Publicar branch, abrir PR e acompanhar execuções remotas, quando autenticação GitHub estiver válida.
 - [ ] Homologar identidade real e garantias HTTP em AGD-003; manter AGD-002 parcial até os critérios aplicáveis serem satisfeitos.
 
@@ -52,7 +52,7 @@
 | Unicidade concorrente | `TenantPersistenceIT.concurrentInsertsOfSameCanonicalSlugHaveOneWinner` | exatamente um slug persistido e conflito estável no outro writer | passou; dois writers PostgreSQL simultâneos, 1 linha |
 | Fresh V1+V2; upgrade V1→V2 | `TenantPersistenceIT` com schemas isolados no Testcontainers | V1/V2 aplicadas do zero; schema em V1 recebe V2 sem alterar V1 | passou em PostgreSQL 16.13 |
 | Histórico/reexecução Flyway | `validate()` + segunda `migrate()` nos dois schemas | valida; segunda execução aplica zero migrations | passou; nenhum delta na reexecução |
-| Arquitetura/formatação | `./mvnw -B -ntp spotless:check verify` | camadas/modularidade preservadas, sem diferenças de formatação | passou: 21 testes unitários/arquitetura + 9 integrações; Docker/Testcontainers |
+| Arquitetura/formatação | `./mvnw -B -ntp -Dmaven.repo.local=/tmp/agendamento-m2 spotless:check verify` | camadas/modularidade preservadas, sem diferenças de formatação | passou: 21 testes unitários/arquitetura + 9 integrações; Docker/Testcontainers |
 | CI remoto | GitHub App CI e CodeQL na branch/PR | execuções concluídas em sucesso | pendente; `gh auth status` informa token inválido; branch ainda sem push/PR |
 
 ## Descobertas e decisões

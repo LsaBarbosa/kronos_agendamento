@@ -56,3 +56,25 @@ Para a imagem, da raiz: `docker build --pull --iidfile /tmp/agendamento-image-id
 AGD-001 permanece **em andamento**. App CI e CodeQL passaram no SHA publicado `3a4653442762abc5b0a64f32c633394b733715de`. Permanecem pendentes o scan Trivy completo de dependências sem rate limit (o Dockerfile é apenas o escopo da checagem de configuração verde), upgrade real V1→V2 e DoD de staging/homologação. A aplicação-base não tem contratos OpenAPI de produto nem fluxo funcional para smoke/E2E; adicionar esses gates quando houver contrato/fluxo aprovado, sem alegar que compilação os substitui.
 
 Próximo incremento recomendado: AGD-002 para tenant e isolamento, com migration V2 funcional e testes PostgreSQL de banco vazio e upgrade a partir de V1.
+
+## AGD-002 — Tenant e isolamento (branch local)
+
+**Branch:** `agd-002-tenant-isolamento`, baseada no `main` em `271569fcb1de0f98c695ecacfeccd19ba6608777`. **Commit de código:** `e6bbcf3b920c1c6c6220d181e10f86d88c11ae32`. A execução é local, não CI remoto.
+
+| Critério | Comando/escopo | Resultado observado |
+|---|---|---|
+| Formatação, build, testes unitários, arquitetura e integração | `export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH; ./mvnw -B -ntp -Dmaven.repo.local=/tmp/agendamento-m2 spotless:check verify` (`backend/`) | `BUILD SUCCESS`; 21 testes unitários/arquiteturais e 9 integrações, zero falhas; JDK 21.0.11, Docker 28.5.2, PostgreSQL Testcontainers 16.13. Spotless sem alterações. |
+| Banco vazio | `TenantPersistenceIT.appliesV1AndV2ToFreshSchemaAndCanRerunWithoutChanges` | Em schema descartável real: Flyway aplicou V1 e V2, tabela Tenant presente, `validate()` passou e segunda `migrate()` aplicou zero migrações. |
+| Upgrade pré-migrado V1 | `TenantPersistenceIT.upgradesV1SchemaToV2AndKeepsMigrationHistoryValid` | Em schema isolado real: aplicou V1, depois somente V2; histórico validado, tabela presente e reexecução aplicou zero migrações. V1 não foi alterada no diff. |
+| Isolamento por tenant | `TenantPersistenceIT.permitsOwnTenantOperationsAndConcealsForeignTenantForReadAndMutation` | Contextos de identidade controlados em teste: leitura/renomeação do próprio tenant passou; leitura e tentativa de mutação de outro tenant produziram `TenantNotFoundException` idêntica; registro alheio permaneceu intacto. Isto não comprova identidade real nem HTTP. |
+| Corrida de slug | `TenantPersistenceIT.concurrentInsertsOfSameCanonicalSlugHaveOneWinner` | Dois writers simultâneos no PostgreSQL, slug após canonicalização: um sucesso, um conflito; uma única linha. Garantia final por `UNIQUE (slug)` e `ON CONFLICT` dirigido à constraint. |
+| Campos, canonicalização e timezone | `TenantDomainTest` | 3 testes passaram: trimming/NFKC/lowercase, formato slug, timezone IANA, campos/status e incremento de version em renomeação. |
+| CI remoto e PR | `gh auth status`; branch ainda não publicada | Não executado no commit `e6bbcf3b920c1c6c6220d181e10f86d88c11ae32`: o CLI reconhece `LsaBarbosa`, mas informa token inválido. Não há URL de PR nem run associado à branch; reautenticar antes de push/PR e acompanhar App CI/CodeQL. |
+
+### Limites ainda abertos em AGD-002
+
+- `AuthenticatedTenant` é apenas contrato interno; atores dos testes são fabricados. AGD-003 precisa autenticar a identidade, verificar a associação `AdminUser`–tenant no servidor e derivar o tenant do principal.
+- As rotas de negócio permanecem deny-all. A resposta HTTP não reveladora ao cruzar tenants, login/logout, expiração/revogação, papéis e eventos de segurança não estão demonstrados.
+- Nenhuma tabela de negócio além da raiz `tenant` existe no incremento; entidades futuras devem tornar `tenant_id` obrigatório e impedir referências cruzadas.
+- `ACTIVE` não significa onboarding completo, assinatura elegível ou publicação. Política de palavra reservada/liberação de slug e efeito de troca de timezone continuam em `OPEN-QUESTIONS.md`.
+- AGD-002 permanece parcial até identidade real e os demais critérios aplicáveis. AGD-001 também continua aberta pelo scan Trivy completo de dependências e homologação/staging.
