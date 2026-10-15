@@ -30,6 +30,7 @@ const keycloakEnvironment = Object.fromEntries(
             return [line.slice(0, separator), line.slice(separator + 1)];
         }),
 );
+const recentHttpResponses = [];
 const browser = spawn(
     chromePath,
     [
@@ -66,6 +67,19 @@ try {
     const pending = new Map();
     socket.addEventListener('message', ({ data }) => {
         const message = JSON.parse(data);
+        if (message.method === 'Network.responseReceived') {
+            try {
+                const responseUrl = new URL(message.params.response.url);
+                if (responseUrl.hostname === 'localhost') {
+                    recentHttpResponses.push({
+                        path: responseUrl.pathname,
+                        status: message.params.response.status,
+                        type: message.params.type,
+                    });
+                    if (recentHttpResponses.length > 20) recentHttpResponses.shift();
+                }
+            } catch {}
+        }
         if (!message.id || !pending.has(message.id)) return;
         const { resolve, reject } = pending.get(message.id);
         pending.delete(message.id);
@@ -477,7 +491,7 @@ async function waitForText(text, evaluate, selector = false) {
         });
     } catch (error) {
         const diagnostic = await evaluate(
-            'JSON.stringify({page: location.origin + location.pathname, title: document.title, heading: document.querySelector("h1")?.innerText, output: document.querySelector("output")?.innerText})',
+            `JSON.stringify({page: location.origin + location.pathname, title: document.title, heading: document.querySelector("h1")?.innerText, output: document.querySelector("output")?.innerText, recentHttpResponses: ${JSON.stringify(recentHttpResponses)}})`,
         );
         throw new Error(`Estado ${text} não alcançado: ${diagnostic}`, { cause: error });
     }

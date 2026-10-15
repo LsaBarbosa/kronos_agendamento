@@ -1,39 +1,32 @@
 # Estado do projeto
 
 **Atualização:** 15/10/2026.
-**Entrega:** base backend/frontend, migrations, identidade administrativa e provas locais/remotas registradas; incremento de expiração JDBC publicado até `6c46d578740e2590969ce60aaf09f4ab509ba13b`, com App CI e CodeQL aprovados em push e PR.
-**AGD-001:** em andamento; não marcar como concluída.
-**Plano:** [AGD-001-fundacao.md](../plans/AGD-001-fundacao.md).
-**AGD-002:** parcial; PR #1 foi integrado em `main` pelo merge commit `a708dcf358e551304018cde22a428a1275de4d13`. Testes de isolamento de casos de uso passaram; rotas HTTP de negócio/cross-tenant ainda não existem. Ver [plano AGD-002](../plans/AGD-002-tenant-isolamento.md).
-**AGD-003:** em andamento na branch `agd-003-autenticacao-autorizacao`; PR #2 agora tem base `main` (`a708dcf`) e head `db1387f6b1bbd9aef12cb25689fb09f88bf49c48`. App CI push/PR (`38767072349`, `38767089103`) e CodeQL push/PR (`38767072125`, `38767088614`) passaram. A correção de revogação invalida a sessão quando o banco nega associação/admin; E2E local prova que reativar a identidade não restaura o cookie antigo. Prova local/Testcontainers e browser também comprova expiração 25/31m e SSO preservado. Homologação HTTPS hospedada permanece pendente; consulte VALIDATION.md, [plano AGD-003](../plans/AGD-003-identidade-keycloak.md), [runbook HTTPS](../plans/AGD-003-homologacao-https.md) e [ADR-0006](../decisions/ADR-0006-keycloak-oidc-sessao-administrativa.md).
+**AGD-001:** em andamento; scan Trivy completo de dependências e homologação/staging continuam pendentes. Scan limitado ao Dockerfile não substitui o completo.
+**AGD-002:** parcial; PR #1 integrado em `main` pelo merge commit `a708dcf358e551304018cde22a428a1275de4d13`. A prova de isolamento dos casos de uso está disponível; não há rotas de negócio para comprovar isolamento HTTP. Ver [plano AGD-002](../plans/AGD-002-tenant-isolamento.md).
+**AGD-003:** parcial/em andamento; PR #2 integrado em `main` pelo merge commit `81ce55d944c8c09a1a29ab1cb91ed03e5d97f4c5`. OIDC, sessão JDBC, associação server-side e expiração local de 30 minutos têm evidências locais e CI. Homologação HTTPS hospedada permanece pendente; papéis de suporte seguem fechados até decisão de RBAC/MFA. Ver [plano AGD-003](../plans/AGD-003-identidade-keycloak.md), [runbook HTTPS](../plans/AGD-003-homologacao-https.md) e [ADR-0006](../decisions/ADR-0006-keycloak-oidc-sessao-administrativa.md).
+**AGD-004:** parcial, PR [#3](https://github.com/LsaBarbosa/kronos_agendamento/pull/3) aberto, head `a6e3dc957485b3367aecca897f8bee63d1e547cd`, branch `agd-004-auditoria-correlacao`, baseada em `main` integrada (`81ce55d944c8c09a1a29ab1cb91ed03e5d97f4c5`). V5, auditoria transacional das mutações Tenant existentes, correlação e grants runtime passaram nos gates locais; App CI e CodeQL push/PR passaram nesse head. O browser E2E falhou uma vez no head anterior ao reautenticar; adicionamos diagnóstico seguro e o teste completo passou no head atual em ambas execuções push/PR, mantendo a ressalva de possível intermitência. Review humana ainda não consta no GitHub. Revisões independentes por agentes encontraram e ajudaram a corrigir riscos de privilégios e provisionamento; isso não equivale a aprovação humana. Ver [plano AGD-004](../plans/AGD-004-auditoria-correlacao.md) e [VALIDATION.md](VALIDATION.md).
 
-## Já disponível
+## Base disponível
 
-- Sete documentos originais em `docs/spec/`, sem alteração de conteúdo.
-- `AGENTS.md`, prompts, planos, três skills locais e dois perfis de revisão.
-- Backend Java 21/Spring Boot 4.1.1, Maven Wrapper e estrutura modular; baseline de segurança registrada na ADR-0004.
-- `TimeInterval`, correlação e fronteira inicial de segurança com testes.
-- Migração Flyway preparatória, PostgreSQL no Compose e suíte de integração.
-- Dockerfile com bases Java 21 Ubuntu 24.04 fixadas por digest; workflows incluem format/lint, npm audit, Trivy de configuração/segredos/imagem e CodeQL Java/TypeScript.
-- Frontend React/TypeScript com Vite, testes da configuração de API e comandos documentados.
-- Workflow de CI com job isolado de teste e build do frontend.
-- Compose identifica a prontidão da aplicação pelo endpoint Actuator readiness.
-- AGD-002: tabela Tenant em V2, slug canonicalizado e globalmente único, timezone IANA, status/version e casos de uso de leitura/renomeação limitados pelo `tenant_id` do contexto; sem rotas de negócio liberadas.
-- AGD-003: AdminUser e associação ativos em V3; tabelas Spring Session JDBC no schema Flyway em V4; starter JDBC do Spring Boot 4 ativa persistência real; realm compartilhado Keycloak local 26.8.1; Authorization Code/PKCE; rotas administrativas mínimas e autorização revalidada no banco em cada requisição. V1/V2 preservadas.
+- Java 21/Spring Boot 4.1.1, React/TypeScript/Vite, PostgreSQL 16, Maven/npm lockfiles e regras de arquitetura modular.
+- Flyway V1–V5; V1–V4 preservadas. Tenant em V2, associação administrativa em V3, Spring Session JDBC em V4 e trilha de auditoria em V5.
+- Keycloak OIDC, associação AdminUser–tenant verificada no servidor, sessão JDBC de 30 minutos, CSRF e UI de entrada/login/logout.
+- `CorrelationIdFilter` propaga UUID validado/gerado à resposta e MDC. AGD-004 grava o mesmo ID em eventos de sucesso das mutações Tenant.
+- AGD-004 inclui lista allowlist de detalhes, consulta interna filtrada pelo tenant autenticado e separação entre `agendamento_app`, `agendamento_runtime`, owner NOLOGIN da auditoria e credenciais Flyway.
+- CI existente executa Spotless/Maven verify/Testcontainers, frontend, npm audit, Trivy e CodeQL.
 
-## Evidência
+## Evidências locais atuais
 
-Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. AGD-001 continua aberta pelo scan filesystem completo de dependências e homologação; scan limitado ao Dockerfile não o substitui. AGD-003: `spotless:check verify` passou em JDK 21 (21 testes unitários/arquiteturais + 11 integrações com PostgreSQL Testcontainers 16.13); browser E2E local com Keycloak/PostgreSQL reais passou para expiração de 30m e revogação não reversível. App CI/CodeQL passaram em push/PR no head `db1387f6b1bbd9aef12cb25689fb09f88bf49c48`.
+- No branch AGD-004, `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw -B -ntp spotless:check verify` passou em PostgreSQL 16.13/Testcontainers: 23 testes unitários/arquiteturais e 15 integrações, incluindo commit/rollback, falha ao persistir auditoria, isolamento, allowlist e rejeição runtime de UPDATE/DELETE/TRUNCATE. Frontend format/lint/tests/build, `npm audit --audit-level=high`, sintaxe dos scripts, Compose config e `git diff --check` também passaram. Revisões independentes por agentes não equivalem a review/aprovação humana.
+- As evidências locais estão associadas ao commit de implementação `d24d53b`; os quatro checks remotos do head `a6e3dc9` passaram. Links, falha anterior do browser E2E e ressalva de possível flake estão em VALIDATION.md.
+- Para evidências históricas de AGD-001–003 e limitações, consultar [VALIDATION.md](VALIDATION.md) e [TRACEABILITY.md](TRACEABILITY.md).
 
-## Pendências de AGD-001
+## Pendências e retomada
 
-1. App CI (`38663531502`) e CodeQL (`38663531528`) passaram no commit publicado `3a4653442762abc5b0a64f32c633394b733715de`; histórico da falha HTTP 429 no run anterior está em VALIDATION.md.
-2. Executar o scan Trivy completo de dependências quando Maven Central aceitar as consultas; o sucesso do scan limitado ao Dockerfile não cobre esse critério.
-3. **Concluído em AGD-002:** migration funcional V2 aplicada do zero e como upgrade desde V1; PR #1 integrado em `a708dcf`. **Validado localmente e no App CI em AGD-003, PR #2 ainda aberto:** V1–V4 aplicadas em banco vazio; upgrade desde V1 e V2 em PostgreSQL real; V1/V2 imutáveis.
-4. Definir UX, hospedagem e staging antes do smoke/E2E de produto, homologação e gates de promoção da DoD.
+- **AGD-001:** executar scan Trivy completo de filesystem/dependências quando Maven Central responder, além da homologação/staging aprovada.
+- **AGD-002:** implementar operações de negócio e seus testes HTTP próprios/cross-tenant em histórias futuras.
+- **AGD-003:** disponibilizar domínio/issuer/TLS/secrets e executar smoke HTTPS observado; não inferir homologação dos testes locais. Não habilitar suporte sem RBAC/MFA aprovados.
+- **AGD-004:** review humana/decisão de merge; fechar cobertura de falhas/logout/negações de segurança conforme decisão e implementação futura; integrar auditoria a operações de negócio que ainda não existem; decidir retenção/legal hold antes de excluir qualquer evento.
+- **AGD-005:** preparar identidade estável de operação, `Idempotency-Key` ligada a digest, constraints concorrentes e outbox na mesma transação com história/auditoria, além de retries/reconciliação sem efeitos duplicados.
 
-## Próximo passo
-
-O PR #1 está integrado. O PR #2 está aberto, mergeável, sobre `main` e com App CI/CodeQL verdes no head `db1387f`; revisões por agentes não equivalem a aprovação humana, e não há review registrada no GitHub. Diff conferido: somente AGD-003, sem arquivos/migration de AGD-002. O próximo passo autorizado é integrar #2 preservando commits; depois criar branch própria de AGD-004 a partir da `main` integrada. Em paralelo, providenciar domínio/issuer/TLS/secrets e executar smoke HTTPS com 30m reais. AGD-003 e AGD-002 permanecem parciais; AGD-001 segue aberta pelo scan completo e homologação.
-
-As demais histórias permanecem não implementadas. Nenhuma integração de WhatsApp/cobrança ou implantação foi realizada.
+As demais integrações de produto permanecem fora desta fundação e não foram homologadas em produção.

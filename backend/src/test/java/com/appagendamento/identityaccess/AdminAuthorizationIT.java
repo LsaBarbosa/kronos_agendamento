@@ -6,6 +6,7 @@ import com.appagendamento.identityaccess.api.AdminAccessPolicy;
 import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import com.appagendamento.support.PostgresTestEnvironment;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -18,12 +19,17 @@ class AdminAuthorizationIT {
 
   private static final String ISSUER = "https://identity.test/realms/agendamento";
 
-  @Autowired private JdbcTemplate jdbc;
   @Autowired private AdminAccessPolicy policy;
+  private JdbcTemplate jdbc;
 
   @DynamicPropertySource
   static void database(DynamicPropertyRegistry registry) {
     PostgresTestEnvironment.configure(registry);
+  }
+
+  @BeforeEach
+  void privilegedFixtures() {
+    jdbc = new JdbcTemplate(PostgresTestEnvironment.migrationDataSource());
   }
 
   @Test

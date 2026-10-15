@@ -82,6 +82,7 @@ docker compose -p agendamento --env-file .env --env-file .env.keycloak \
 2. Provisione explicitamente Tenant, usuário `demo-admin` e vínculo ativo. Senha temporária e UUID do tenant são gravados em `.demo-admin.credentials`, ignorado pelo Git:
 
 ```bash
+bash scripts/dev/ensure-app-db-role.sh
 bash scripts/dev/provision-demo-admin.sh demo-clinica "Clínica Demonstração"
 ```
 
@@ -106,7 +107,13 @@ Suba somente o banco:
 ```bash
 docker compose up -d postgres
 cd backend
-export DB_PASSWORD='a-mesma-senha-do-arquivo-.env'
+cd ..
+bash scripts/dev/ensure-app-db-role.sh
+cd backend
+export DB_USERNAME=agendamento_app
+export DB_PASSWORD='senha APP_DB_PASSWORD do .env'
+export FLYWAY_DB_USERNAME=agendamento
+export FLYWAY_DB_PASSWORD='senha POSTGRES_PASSWORD do .env'
 ./mvnw spring-boot:run
 ```
 
@@ -115,8 +122,10 @@ Configure a variável com a senha efetivamente escolhida. O `.env` da raiz é ca
 | Variável | Padrão/necessidade |
 |---|---|
 | `DB_URL` | `jdbc:postgresql://localhost:5432/agendamento` |
-| `DB_USERNAME` | `agendamento` |
-| `DB_PASSWORD` | obrigatória; sem senha embutida na aplicação |
+| `DB_USERNAME` | `agendamento_app` (runtime, não owner) |
+| `DB_PASSWORD` | `APP_DB_PASSWORD`; obrigatória e separada |
+| `FLYWAY_DB_USERNAME` | `POSTGRES_USER`, papel privilegiado de migrations |
+| `FLYWAY_DB_PASSWORD` | `POSTGRES_PASSWORD`, segredo separado do runtime |
 | `SERVER_PORT` | `8080` |
 
 ## Executar o frontend
@@ -153,20 +162,22 @@ Se já houver um PostgreSQL 16 **descartável e dedicado aos testes**, é possí
 export TEST_DATABASE_URL='jdbc:postgresql://localhost:5432/agendamento_test'
 export TEST_DATABASE_USERNAME='usuario-dos-testes'
 export TEST_DATABASE_PASSWORD='senha-dos-testes'
+export TEST_FLYWAY_DATABASE_USERNAME='migrator-dos-testes'
+export TEST_FLYWAY_DATABASE_PASSWORD='senha-do-migrator'
 ./mvnw verify
 ```
 
-Esse banco precisa existir, e o usuário precisa criar schema/extensão para a migração. Não aponte os testes para um banco de clientes. Flyway mantém `clean` desabilitado.
+Esse banco precisa existir. O usuário runtime precisa usar login `agendamento_app` com membership no role `agendamento_runtime`; o usuário Flyway precisa criar papéis, schema e extensão. `TEST_FLYWAY_DATABASE_URL` pode apontar para outro endpoint. Não aponte os testes para um banco de clientes. Flyway mantém `clean` desabilitado.
 
 ## O que a base implementa
 
 - Entrada Spring Boot e separação por módulos e camadas.
 - Value object imutável `TimeInterval`, com semântica `[início, fim)` e testes.
-- Flyway V1 preparatória e V2 funcional do agregado Tenant, com unicidade global de slug.
-- Módulo Tenant com validação IANA/slug, persistência PostgreSQL, operações internas escopadas e versionamento otimista; endpoints administrativos e autenticação seguem fechados até AGD-003.
+- Flyway V1–V5, incluindo Tenant, identidade/sessão e trilha de auditoria com runtime separado do owner.
+- Módulo Tenant com validação IANA/slug, persistência PostgreSQL, operações internas escopadas e versionamento otimista; os endpoints de identidade/sessão administrativos estão implementados, enquanto rotas de negócio permanecem fechadas até suas histórias.
 - Hibernate em `validate`, `open-in-view` desabilitado e referência temporal UTC.
 - Fronteira de segurança fechada, sem credencial padrão, e envelope inicial de erro.
-- Correlação por `X-Correlation-ID`, com validação do valor e limpeza de MDC.
+- Correlação por `X-Correlation-ID` compartilhada entre resposta, MDC e eventos; auditoria append-only de operações Tenant já implementadas.
 - Actuator health/readiness, Dockerfile sem usuário root na imagem final e Compose.
 - ArchUnit, testes web e suíte de integração com PostgreSQL.
 - GitHub Actions executa format/lint, testes e build frontend, auditoria npm, verificação Spotless, testes backend/Testcontainers, scans Trivy de código/dependências/imagem e build local da imagem; CodeQL está separado para Java e TypeScript. Nenhuma imagem é publicada.

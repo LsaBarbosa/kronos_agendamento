@@ -61,4 +61,30 @@ class CorrelationIdFilterTest {
       MDC.remove("traceId");
     }
   }
+
+  @Test
+  void correlationMdcDoesNotLeakAcrossSequentialRequests() throws Exception {
+    String firstId = UUID.randomUUID().toString();
+    String secondId = UUID.randomUUID().toString();
+    MockHttpServletRequest firstRequest = new MockHttpServletRequest();
+    MockHttpServletResponse firstResponse = new MockHttpServletResponse();
+    firstRequest.addHeader(CorrelationIdFilter.HEADER, firstId);
+    filter.doFilter(
+        firstRequest,
+        firstResponse,
+        (request, response) -> assertThat(MDC.get("traceId")).isEqualTo(firstId));
+
+    assertThat(MDC.get("traceId")).isNull();
+    MockHttpServletRequest secondRequest = new MockHttpServletRequest();
+    MockHttpServletResponse secondResponse = new MockHttpServletResponse();
+    secondRequest.addHeader(CorrelationIdFilter.HEADER, secondId);
+    filter.doFilter(
+        secondRequest,
+        secondResponse,
+        (request, response) -> assertThat(MDC.get("traceId")).isEqualTo(secondId));
+
+    assertThat(firstResponse.getHeader(CorrelationIdFilter.HEADER)).isEqualTo(firstId);
+    assertThat(secondResponse.getHeader(CorrelationIdFilter.HEADER)).isEqualTo(secondId);
+    assertThat(MDC.get("traceId")).isNull();
+  }
 }
