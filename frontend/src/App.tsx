@@ -103,8 +103,12 @@ export function App() {
                         <p>
                             Papel: <code>{session.role}</code>
                         </p>
-                        <button type="button" onClick={() => void logout()}>
-                            Sair
+                        <button
+                            type="button"
+                            disabled={!csrf}
+                            onClick={() => void logout()}
+                        >
+                            {csrf ? 'Sair' : 'Aguardando proteção CSRF…'}
                         </button>
                     </div>
                 ) : (

@@ -235,15 +235,15 @@ try {
     }
     console.log('Browser: expiração local de 30 min, renovação por atividade e novo login via SSO validados.');
 
-    await waitUntil(async () => {
-        if ((await evaluate("document.querySelector('output')?.innerText")) === 'Sessão local encerrada.') {
-            return true;
-        }
-        await evaluate(
-            "[...document.querySelectorAll('button')].find(button => button.innerText.includes('Sair')).click()",
-        );
-        return (await evaluate("document.querySelector('output')?.innerText")) === 'Sessão local encerrada.';
-    });
+    await waitUntil(() =>
+        evaluate(
+            "Boolean([...document.querySelectorAll('button')].find(button => button.innerText.includes('Sair') && !button.disabled))",
+        ),
+    );
+    await evaluate(
+        "[...document.querySelectorAll('button')].find(button => button.innerText.includes('Sair')).click()",
+    );
+    await waitForText('Sessão local encerrada.', evaluate);
     const reusedSessionStatus = await evaluate(
         "fetch('/api/v1/admin/session', {credentials:'same-origin'}).then(response => response.status)",
     );
