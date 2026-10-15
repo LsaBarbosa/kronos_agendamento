@@ -2,7 +2,7 @@
 
 ## Identificação e objetivo
 
-- Branch `agd-011-grade-semanal-politicas`, derivada da `origin/main` `c5dbec26cf88843704c6bf1575b69666ed235ab0`; PR #6 aberto para `main` (head anterior `200f9c9070af07d274397af0f23e3c7b3aa85d3d`).
+- Branch `agd-011-grade-semanal-politicas`, derivada da `origin/main` `c5dbec26cf88843704c6bf1575b69666ed235ab0`; PR [#6](https://github.com/LsaBarbosa/kronos_agendamento/pull/6) aberto para `main`, head temporal `b2e76a590c886f14e0908355ccea62dd2c3df69e`.
 - Objetivo: permitir ao `TENANT_ADMIN` manter uma grade semanal recorrente e as políticas de reserva de forma tenant-scoped, versionada, auditável e idempotente.
 - Fontes: documento 01 §§5.2–5.5; documento 02 §§1–5 e entidades `AvailabilityPolicy`/`WeeklyPeriod`; documento 03 §§2, 5, 6, 7, 13–15 e rotas administrativas de política/grade; documento 04 §§4–8, 14, 18 e critérios AGD-011 no documento 06.
 
@@ -72,9 +72,9 @@ Se houver linhas, interromper a promoção. O responsável apresenta cada grade 
 - [x] Contratos OpenAPI, domínio/casos de uso, V8, API e UI do incremento base implementados.
 - [x] Validação Maven/PostgreSQL, frontend, npm audit, parse YAML e sintaxe do browser passaram; detalhes em `VALIDATION.md`.
 - [x] Duas revisões independentes em leitura: inconsistência documental de cobertura e lacunas de evidência de rollback de substituição/replay após revogação corrigidas com testes/documentação; pareceres não equivalem a aprovação humana.
-- [x] Commits iniciais publicados no PR #6. No head anterior `200f9c9070af07d274397af0f23e3c7b3aa85d3d`, App CI e CodeQL push/PR passaram; os checks do novo head serão acompanhados após publicação.
+- [x] Incremento temporal publicado no PR #6 em `b2e76a590c886f14e0908355ccea62dd2c3df69e`; App CI e CodeQL push/PR passaram nesse SHA (runs e links na tabela abaixo).
 - [x] Decisão temporal aprovada e refletida nos requisitos, ADR-0010, OpenAPI, domínio, API e UI.
-- [ ] Publicação e App CI/CodeQL do head final pendentes.
+- [x] Commit temporal publicado no PR #6; App CI e CodeQL em push/PR passaram no SHA `b2e76a590c886f14e0908355ccea62dd2c3df69e`.
 - [ ] Homologação/staging permanece separada e pendente.
 
 ## Validação
@@ -84,12 +84,13 @@ Se houver linhas, interromper a promoção. O responsável apresenta cada grade 
 | Domínio/API de horários e políticas | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` em `backend/` | Domínio, HTTP, Testcontainers PostgreSQL e migrations | Passou: `BUILD SUCCESS`, 32 unitários/arquiteturais e 54 integrações, zero falhas. HTTP rejeita 09:10/cruzamento; rejeições não versionam nem criam sucesso; aceitou 09:15–12:45 com slots 30/60. |
 | Persistência/CAS/atomicidade | Mesmo `verify`, PostgreSQL 16.13/Testcontainers | Fresh V1–V9, upgrades, Flyway validate/rerun, CAS, rollback, replay e constraint | Passou; V8→V9 com grade alinhada, V9 bloqueia legado 09:10 preservando dado/schema em V8 até reparo explícito e rerun; adjacência é gravada, overlap e desalinhamento/24:00 são rejeitados no PostgreSQL. V1–V8 sem alterações. |
 | Dados locais para compatibilidade | Consulta read-only do preflight V9 no PostgreSQL Compose | Detectar dados que bloqueariam upgrade | Banco dev local em V8; consulta retornou zero períodos incompatíveis. É apenas evidência da cópia local; ambiente hospedado requer preflight próprio. Dados existentes preservados. |
-| UI com OIDC real | App CI job `oidc-browser-e2e`; `node scripts/dev/test-keycloak-browser.mjs` | Keycloak/PostgreSQL/Chrome reais; 09:10 rejeitado sem salvar e save/reload | Script atualizado. Não executado localmente porque a base local contém tenant/serviço/grade de demonstração e o E2E pressupõe base vazia; não limpamos esses dados. Execução remota pendente. |
+| UI com OIDC real | App CI job `oidc-browser-e2e`; `node scripts/dev/test-keycloak-browser.mjs` | Keycloak/PostgreSQL/Chrome reais; 09:10 rejeitado sem salvar e save/reload | App CI push [38823847787](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38823847787) e PR [38823854921](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38823854921) passaram; ambos incluem `oidc-browser-e2e`. Não executado localmente para preservar banco dev com dados. |
 | Frontend e contrato | `npm run format:check && npm run check && npm run lint && npm test` em `frontend/`; `node --check scripts/dev/test-keycloak-browser.mjs`; `prettier ../docs/openapi/admin-availability.yaml >/dev/null` | Prettier, Oxlint, Vitest, TypeScript/build, sintaxe E2E e parse YAML | Passou: 2 arquivos/4 testes Vitest, build/lint/TypeScript, script do browser e parse YAML. |
 | Dependências | `npm audit --audit-level=high` em `frontend/` | Audit das dependências frontend | Passou com rede autorizada: `found 0 vulnerabilities`. Tentativa inicial no sandbox falhou `EAI_AGAIN registry.npmjs.org`; repetida com rede. Scan completo de dependências do produto continua pendente conforme AGD-001. |
-| Diff e segredos | `git diff --check`; revisão; App CI secrets/imagem/config | Sem whitespace inválido nem segredo | `git diff --check` passou. Trivy não está instalado localmente; jobs remotos deste head aguardam. Não afirmar scan completo de dependências. |
-| CI remoto (head com evidências) | App CI e CodeQL em push/PR | Head anterior `200f9c9070af07d274397af0f23e3c7b3aa85d3d`: App CI push/PR `38822070707`/`38822065650`, CodeQL push/PR `38822070711`/`38822065753` passaram. Execuções novas serão registradas após conclusão por SHA/link. |
+| Diff e segredos | `git diff --check`; revisão; App CI secrets/imagem/config | Sem whitespace inválido nem segredo | `git diff --check` passou; jobs de segredo, security e verify passaram nos dois eventos. Scan completo de dependências continua pendente. |
+| App CI push/PR | Runs [38823847787](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38823847787) / [38823854921](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38823854921) | Passar verify/Testcontainers, frontend, security, segredos e browser E2E | Ambos `success` no SHA `b2e76a590c886f14e0908355ccea62dd2c3df69e`; todos os jobs concluídos, incluindo `oidc-browser-e2e`. |
+| CodeQL push/PR | Runs [38823847890](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38823847890) / [38823854900](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38823854900) | Analisar Java/Kotlin e JavaScript/TypeScript | Ambos `success` no SHA `b2e76a590c886f14e0908355ccea62dd2c3df69e`; as duas linguagens passaram. |
 
 ## Retomada
 
-AGD-011 permanece parcial enquanto houver critério aplicável sem evidência, inclusive homologação/staging. A semântica temporal está decidida, não é pendência de produto. A próxima história é AGD-012 — Exceções e bloqueios, sem implementá-la neste incremento. Scan completo de dependências, homologação HTTPS, retenção e integrações reais continuam pendentes.
+AGD-011 permanece parcial enquanto houver critério aplicável sem evidência, inclusive homologação/staging. A semântica temporal está decidida, não é pendência de produto. A próxima história é AGD-012 — Exceções e bloqueios; sua preparação deve seguir os contratos do backlog sem antecipar implementação neste incremento. Scan completo de dependências, homologação HTTPS, retenção e integrações reais continuam pendentes.
