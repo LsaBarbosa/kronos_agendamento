@@ -9,13 +9,13 @@ Data: 15/10/2026. O usuário solicitou administrar os PRs e merges.
 - App CI e CodeQL push/PR foram conferidos como aprovados nos heads originais dos dois PRs; esses resultados não validam a correção local posterior.
 - `git diff --check` passou nos dois diffs originais. As revisões inspecionaram testes existentes; não executaram novamente PostgreSQL, Docker ou homologação.
 
-## Correção local preparada para o PR #4
+## Correção publicada no PR #4
 
 - `markOutcomeUnknown` preserva estado CLAIMED + claim_token e permite registrar reconciliação após vencimento, desde que não tenha ocorrido reassunção.
 - As confirmações de entrega/retry/terminal continuam exigindo lease válido.
 - Worker reivindica um item por vez, imediatamente antes de publicar, e respeita o limite de itens por ciclo. Uma transição rejeitada encerra o ciclo com diagnóstico seguro.
-- Regressões preparadas com PostgreSQL real: ambiguidade após expiração, proteção contra token antigo e ausência de claims antecipados para o lote.
-- Os testes de regressão ainda precisam de execução no ambiente Java 21/PostgreSQL ou CI. Não estão declarados aprovados neste registro.
+- Regressões adicionadas para PostgreSQL real: ambiguidade após expiração, proteção contra token antigo e ausência de claims antecipados para o lote.
+- App CI push `38789680677` passou no SHA `9852453`: 25 testes unitários/arquiteturais e 31 integrações, incluindo as regressões. CodeQL push/PR também passou. Evidências e limites em VALIDATION.md.
 
 ## Bloqueio observado e retomada
 
@@ -27,8 +27,8 @@ Após o usuário solicitar nova tentativa, a escrita do conector funcionou. O PR
 
 ## Continuidade
 
-1. Disponibilizar acesso autorizado de escrita a PRs/merge e conteúdo.
-2. Integrar #3 por merge commit com head esperado `23731b8036861683e0353e18a1b164fe0ce9a47b`.
-3. Aplicar a correção preparada sobre a branch do #4, executar Spotless e os testes PostgreSQL, publicar e acompanhar o CI.
-4. Atualizar a base do #4 para main, conferir que o diff contém apenas AGD-005 e a correção, e validar o commit de integração proposto.
-5. Integrar #4 com head esperado e conferir CI final de main. Manter homologação, retenção e demais pendências funcionais explicitamente abertas.
+1. Acesso de escrita restabelecido e PR #3 integrado em `1138395`.
+2. PR #4 atualizado para main; histórico incorporado sem force push.
+3. Correção e testes publicados em `01f3c62`; Spotless apontou somente o layout de uma linha de log, corrigido em `9852453`.
+4. Acompanhar App CI e CodeQL do head corrigido antes do merge protegido pelo SHA esperado.
+5. Conferir CI final de main. Homologação, retenção e demais pendências funcionais permanecem abertas.

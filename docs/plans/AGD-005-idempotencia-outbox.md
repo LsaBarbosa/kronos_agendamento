@@ -2,7 +2,7 @@
 
 ## Identificação e objetivo
 
-- Incremento derivado do PR #3 (AGD-004), branch de origem `agd-004-auditoria-correlacao`, head confirmado `23731b8036861683e0353e18a1b164fe0ce9a47b`. PR #3 está aberto e sem decisão de review; AGD-005 depende da integração de AGD-004.
+- Incremento derivado do PR #3 (AGD-004), branch de origem `agd-004-auditoria-correlacao`, head confirmado `23731b8036861683e0353e18a1b164fe0ce9a47b`. PR #3 foi integrado em `1138395acb4a5f50979461fce3894db60bd5b761`; PR #4 atualizado para base main.
 - Objetivo: fornecer idempotência persistida e outbox/consumer reutilizáveis, demonstrados em `RenameTenant`.
 - Referências: documentos 01 §3/14; 02 §§11/14/16; 03 §§1/2/8/12; 04 §§7/11/12; documento 05 §22; documento 06 critérios AGD-005 e DoD.
 - Inclui migrations V6, chave/digest/operationId, replay com autorização atual, atomização rename+auditoria+outbox+resposta, worker lease/retry/reprocessamento manual interno e consumer local deduplicado.
@@ -10,7 +10,7 @@
 
 ## Estado e dependências
 
-- PR #3 continua aberto em `main` (estado `CLEAN`, sem reviews humanas registradas), head `23731b8`; branch atual AGD-005 parte desse commit. PR #4 foi publicado sobre `agd-004-auditoria-correlacao` e depende da integração do #3.
+- Origem histórica: AGD-005 partiu do head `23731b8` do PR #3. Após o merge de AGD-004, a branch incorporou main sem reescrever histórico e o PR #4 passou a ter base main.
 - V1–V5, `RenameTenant`, auditoria append-only e PostgreSQL/Testcontainers existem. O rename é a operação escolhida por validar versão esperada, mutação de domínio e auditoria já implementada, sem inventar endpoint de produto.
 - Não há serviços de negócio externos nem destino real configurado; a prova de consumo usa efeito local persistido em PostgreSQL.
 - Subagentes independentes não estavam disponíveis nesta sessão; revisão será sequencial com a skill local de leitura.
@@ -23,7 +23,7 @@
 4. Criar o operationId uma vez no servidor. Requisição, correlation ID e operação lógica são identidades distintas. Guardar só resultado JSON allowlisted necessário ao replay; sem cookie/token/header.
 5. Inserção da chave, mutação, auditoria, outbox e resultado `COMPLETED` compartilham a transação. Em corrida, a constraint única do PostgreSQL serializa contenders; o segundo espera o commit/rollback e, após commit, reproduz o resultado sem incrementar versão, auditar novamente ou gerar novo event ID. Como o comando síncrono não confirma `IN_PROGRESS` fora da transação, o estado normalmente não é observável; se houver registro `IN_PROGRESS` assíncrono, retornar `OPERATION_IN_PROGRESS` com operationId, nunca executar em paralelo. Falha/rollback local remove também o registro e não fixa a chave para conteúdo futuro; erro determinístico não é armazenado por este comando síncrono.
 6. Antes de replay, validar principal atual pela política de segurança por requisição e carregar o alvo sob o tenant do contexto. Digest diferente dá `IDEMPOTENCY_KEY_REUSED`; resultado/estado externo ambíguo não é executado de novo.
-7. Outbox é pelo menos uma vez. Worker reivindica lote em transação curta por `FOR UPDATE SKIP LOCKED`, grava token/lease e incrementa tentativas; publica fora da transação; confirma apenas se token ainda for atual e lease ainda válido. Backoff exponencial limitado e número de tentativas são parâmetros operacionais, não retenção de produto. Timeout/resultado desconhecido vai para `RECONCILIATION_REQUIRED`, não retry automático. Reprocessamento é método interno controlado, com identidade original preservada.
+7. Outbox é pelo menos uma vez. Worker reivindica um item por vez, imediatamente antes da publicação, em transação curta por `FOR UPDATE SKIP LOCKED`, grava token/lease e incrementa tentativas; publica fora da transação; confirma apenas se token ainda for atual e lease ainda válido. Backoff exponencial limitado e número de tentativas são parâmetros operacionais, não retenção de produto. Timeout/resultado desconhecido vai para `RECONCILIATION_REQUIRED`, não retry automático. Essa transição aceita lease vencido somente enquanto CLAIMED e claim_token ainda forem atuais; após reassunção, o token antigo é rejeitado. Reprocessamento é método interno controlado, com identidade original preservada.
 8. Consumer registra `(consumer_name,event_id)` e efeito local na mesma transação; redelivery vira no-op. Falha antes do commit reverte ambos.
 9. Sem prazo aprovado de retenção, nenhuma tabela terá job de expurgo. Idempotency records, receipts e outbox terminal permanecem persistidos até política aprovada; questionamento registrado em OPEN-QUESTIONS.md.
 10. Adapter externo classifica sucesso, falha retryable, falha terminal e outcome desconhecido. Não há destino real neste incremento; nenhuma mensagem/cobrança é declarada publicada.
@@ -55,5 +55,5 @@
 
 - Política de retenção de auditoria, idempotência, outbox e receipts, prazos por categoria, tombstones e expurgo precisa de aprovação; nenhum expurgo será implementado.
 - WhatsApp, cobrança e broker reais dependem de AGD-024/030/041 e contratos/destinos de fornecedor; integração de teste não comprova tais fornecedores.
-- PR #3 precisa de decisão de integração humana; esta branch mantém dependência explícita até AGD-004 integrada. Seu head e CI atuais foram conferidos em 15/10/2026; revisão humana não consta.
+- PR #3 integrado em `1138395`; integração de AGD-005 acompanhada no PR #4, com base main e verificação do head corrigido. Autorização do mantenedor na sessão não equivale a review humana registrada no GitHub.
 - Após AGD-005, próximo incremento recomendado é AGD-010 — Catálogo de serviços.
