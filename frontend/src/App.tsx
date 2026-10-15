@@ -55,11 +55,12 @@ export function App() {
 
     useEffect(() => {
         let active = true;
-        void fetch(apiBaseUrl + '/v1/admin/session', {
-            credentials: 'same-origin',
-            cache: 'no-store',
-        })
-            .then(async (response) => {
+        void (async () => {
+            try {
+                const response = await fetch(apiBaseUrl + '/v1/admin/session', {
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                });
                 if (!active) return;
                 if (response.status === 401) {
                     setStatus('Sua sessão expirou ou ainda não foi iniciada.');
@@ -75,24 +76,23 @@ export function App() {
                     );
                     return;
                 }
-                setSession((await response.json()) as Session);
+                const authenticatedSession = (await response.json()) as Session;
+                setSession(authenticatedSession);
                 setStatus('Sessão administrativa ativa.');
-            })
-            .catch(() => {
-                if (active) setStatus('Backend indisponível. Tente novamente.');
-            });
-        void fetch(apiBaseUrl + '/v1/csrf', {
-            credentials: 'same-origin',
-            cache: 'no-store',
-        })
-            .then(async (response) => {
-                if (active && response.ok)
-                    setCsrf((await response.json()) as Csrf);
-            })
-            .catch(() => {
-                if (active)
+                const csrfResponse = await fetch(apiBaseUrl + '/v1/csrf', {
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                });
+                if (!active) return;
+                if (!csrfResponse.ok) {
                     setStatus('Não foi possível obter a proteção CSRF.');
-            });
+                    return;
+                }
+                setCsrf((await csrfResponse.json()) as Csrf);
+            } catch {
+                if (active) setStatus('Backend indisponível. Tente novamente.');
+            }
+        })();
         return () => {
             active = false;
         };
