@@ -4,8 +4,8 @@
 **Entrega:** base backend/frontend, migrations, identidade administrativa e provas locais/remotas registradas; incremento de expiração JDBC publicado até `6c46d578740e2590969ce60aaf09f4ab509ba13b`, com App CI e CodeQL aprovados em push e PR.
 **AGD-001:** em andamento; não marcar como concluída.
 **Plano:** [AGD-001-fundacao.md](../plans/AGD-001-fundacao.md).
-**AGD-002:** parcial no [PR #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1), branch `agd-002-tenant-isolamento`; código `e6bbcf3b920c1c6c6220d181e10f86d88c11ae32`, evidências no head `5b8b6f0c3038823b70b918ea7ab93a8b1299008d`. AGD-003 demonstra identidade OIDC real, associação server-side e contexto no GET do tenant próprio; essa resolução aguarda merge dos PRs #1/#2. Isolamento de futuros endpoints de negócio depende das histórias correspondentes. Ver [plano AGD-002](../plans/AGD-002-tenant-isolamento.md).
-**AGD-003:** em andamento na branch `agd-003-autenticacao-autorizacao`, PR #2 aberto sobre `agd-002-tenant-isolamento`, dependente do PR #1. No head `6c46d578740e2590969ce60aaf09f4ab509ba13b`, App CI push/PR (`38759475993`, `38759484191`) e CodeQL push/PR (`38759476198`, `38759484284`) passaram. Prova local/Testcontainers e browser comprova sessão JDBC, expiração 25/31m e SSO preservado. Homologação HTTPS hospedada permanece pendente; consulte VALIDATION.md, [plano AGD-003](../plans/AGD-003-identidade-keycloak.md), [runbook HTTPS](../plans/AGD-003-homologacao-https.md) e [ADR-0006](../decisions/ADR-0006-keycloak-oidc-sessao-administrativa.md).
+**AGD-002:** parcial; PR #1 foi integrado em `main` pelo merge commit `a708dcf358e551304018cde22a428a1275de4d13`. Testes de isolamento de casos de uso passaram; rotas HTTP de negócio/cross-tenant ainda não existem. Ver [plano AGD-002](../plans/AGD-002-tenant-isolamento.md).
+**AGD-003:** em andamento na branch `agd-003-autenticacao-autorizacao`; PR #2 agora tem base `main` (`a708dcf`) e head `db1387f6b1bbd9aef12cb25689fb09f88bf49c48`. App CI push/PR (`38767072349`, `38767089103`) e CodeQL push/PR (`38767072125`, `38767088614`) passaram. A correção de revogação invalida a sessão quando o banco nega associação/admin; E2E local prova que reativar a identidade não restaura o cookie antigo. Prova local/Testcontainers e browser também comprova expiração 25/31m e SSO preservado. Homologação HTTPS hospedada permanece pendente; consulte VALIDATION.md, [plano AGD-003](../plans/AGD-003-identidade-keycloak.md), [runbook HTTPS](../plans/AGD-003-homologacao-https.md) e [ADR-0006](../decisions/ADR-0006-keycloak-oidc-sessao-administrativa.md).
 
 ## Já disponível
 
@@ -23,17 +23,17 @@
 
 ## Evidência
 
-Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. AGD-001 continua aberta pelo scan filesystem completo de dependências e homologação; scan limitado ao Dockerfile não o substitui. AGD-003: `spotless:check verify` passou em JDK 21 (21 testes unitários/arquiteturais + 11 integrações com PostgreSQL Testcontainers 16.13); browser E2E local com Keycloak/PostgreSQL reais passou para expiração de 30m. App CI/CodeQL passaram em push/PR no head `6c46d578740e2590969ce60aaf09f4ab509ba13b`.
+Consultar [VALIDATION.md](VALIDATION.md) para comandos, resultados e limites. AGD-001 continua aberta pelo scan filesystem completo de dependências e homologação; scan limitado ao Dockerfile não o substitui. AGD-003: `spotless:check verify` passou em JDK 21 (21 testes unitários/arquiteturais + 11 integrações com PostgreSQL Testcontainers 16.13); browser E2E local com Keycloak/PostgreSQL reais passou para expiração de 30m e revogação não reversível. App CI/CodeQL passaram em push/PR no head `db1387f6b1bbd9aef12cb25689fb09f88bf49c48`.
 
 ## Pendências de AGD-001
 
 1. App CI (`38663531502`) e CodeQL (`38663531528`) passaram no commit publicado `3a4653442762abc5b0a64f32c633394b733715de`; histórico da falha HTTP 429 no run anterior está em VALIDATION.md.
 2. Executar o scan Trivy completo de dependências quando Maven Central aceitar as consultas; o sucesso do scan limitado ao Dockerfile não cobre esse critério.
-3. **Concluído em AGD-002:** migration funcional V2 aplicada do zero e como upgrade desde V1; testes locais e App CI passaram. V1 preservada. **Validado localmente e no App CI em AGD-003; aguardando integração do PR #1:** V1–V4 aplicadas em banco vazio; upgrade desde V1 e V2 em PostgreSQL real; V1/V2 imutáveis.
+3. **Concluído em AGD-002:** migration funcional V2 aplicada do zero e como upgrade desde V1; PR #1 integrado em `a708dcf`. **Validado localmente e no App CI em AGD-003, PR #2 ainda aberto:** V1–V4 aplicadas em banco vazio; upgrade desde V1 e V2 em PostgreSQL real; V1/V2 imutáveis.
 4. Definir UX, hospedagem e staging antes do smoke/E2E de produto, homologação e gates de promoção da DoD.
 
 ## Próximo passo
 
-Os [PRs #1](https://github.com/LsaBarbosa/kronos_agendamento/pull/1) e [#2](https://github.com/LsaBarbosa/kronos_agendamento/pull/2) estão abertos e mergeáveis, sem review registrada; o #2 depende do #1. Os checks do head `6c46d57` passaram em push/PR. Obter decisão/revisão do #1 e integrá-lo antes do #2; só então atualizar a base do #2 para `main` e revalidar diff/checks. Em paralelo, providenciar domínio/issuer/TLS/secrets e executar smoke HTTPS com 30m reais. AGD-003 e AGD-002 permanecem parciais; AGD-001 segue aberta pelo scan completo e homologação.
+O PR #1 está integrado. O PR #2 está aberto, mergeável, sobre `main` e com App CI/CodeQL verdes no head `db1387f`; revisões por agentes não equivalem a aprovação humana, e não há review registrada no GitHub. Diff conferido: somente AGD-003, sem arquivos/migration de AGD-002. O próximo passo autorizado é integrar #2 preservando commits; depois criar branch própria de AGD-004 a partir da `main` integrada. Em paralelo, providenciar domínio/issuer/TLS/secrets e executar smoke HTTPS com 30m reais. AGD-003 e AGD-002 permanecem parciais; AGD-001 segue aberta pelo scan completo e homologação.
 
 As demais histórias permanecem não implementadas. Nenhuma integração de WhatsApp/cobrança ou implantação foi realizada.
