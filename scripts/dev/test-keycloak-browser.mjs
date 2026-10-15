@@ -164,6 +164,16 @@ try {
     } finally {
         setAccessStatus('admin_tenant_membership', 'ACTIVE', credentials, appEnvironment);
     }
+    const revokedMembershipReuseStatus = await evaluate(
+        "fetch('/api/v1/admin/session', {credentials:'same-origin'}).then(response => response.status)",
+    );
+    if (revokedMembershipReuseStatus !== 401) {
+        throw new Error('Cookie revogado foi aceito após reativar a associação.');
+    }
+    await navigate('http://localhost:5173/admin', command, evaluate);
+    await waitForText('Entrar como administrador', evaluate);
+    await evaluate("document.querySelector('a[href*=oauth2]').click()");
+    await waitForText('Sessão administrativa ativa.', evaluate);
     setAccessStatus('admin_user', 'DISABLED', credentials, appEnvironment);
     try {
         const disabledAdminStatus = await evaluate(
@@ -175,6 +185,16 @@ try {
     } finally {
         setAccessStatus('admin_user', 'ACTIVE', credentials, appEnvironment);
     }
+    const disabledAdminReuseStatus = await evaluate(
+        "fetch('/api/v1/admin/session', {credentials:'same-origin'}).then(response => response.status)",
+    );
+    if (disabledAdminReuseStatus !== 401) {
+        throw new Error('Cookie revogado foi aceito após reativar o administrador.');
+    }
+    await navigate('http://localhost:5173/admin', command, evaluate);
+    await waitForText('Entrar como administrador', evaluate);
+    await evaluate("document.querySelector('a[href*=oauth2]').click()");
+    await waitForText('Sessão administrativa ativa.', evaluate);
 
     const sessionBeforeExpiry = (await cookies(command)).find(
         (cookie) => cookie.name === 'AGDSESSION',

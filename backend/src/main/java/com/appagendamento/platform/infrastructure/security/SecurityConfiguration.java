@@ -77,6 +77,13 @@ public class SecurityConfiguration {
                           if (!currentAdmin) {
                             LOGGER.warn(
                                 "admin_authorization_denied category=inactive_database_access");
+                            var session = context.getRequest().getSession(false);
+                            if (session != null) {
+                              try {
+                                session.invalidate();
+                              } catch (IllegalStateException ignored) {
+                              }
+                            }
                           }
                           return new AuthorizationDecision(currentAdmin);
                         })
