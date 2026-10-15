@@ -72,7 +72,7 @@ Se houver linhas, interromper a promoção. O responsável apresenta cada grade 
 - [x] Contratos OpenAPI, domínio/casos de uso, V8, API e UI do incremento base implementados.
 - [x] Validação Maven/PostgreSQL, frontend, npm audit, parse YAML e sintaxe do browser passaram; detalhes em `VALIDATION.md`.
 - [x] Duas revisões independentes em leitura: inconsistência documental de cobertura e lacunas de evidência de rollback de substituição/replay após revogação corrigidas com testes/documentação; pareceres não equivalem a aprovação humana.
-- [x] Incremento temporal publicado no PR #6 em `b2e76a590c886f14e0908355ccea62dd2c3df69e`; App CI e CodeQL push/PR passaram nesse SHA (runs e links na tabela abaixo).
+- [x] Incremento temporal publicado no PR #6 em `b2e76a590c886f14e0908355ccea62dd2c3df69e`; quatro checks push/PR passaram nesse SHA. Head documental `9f170e8cd39e1f1bcef04e148d09d872ea9f2f53` também passou nos quatro checks após rerun do App CI PR por indisponibilidade de download do Maven Wrapper; falha inicial registrada abaixo.
 - [x] Decisão temporal aprovada e refletida nos requisitos, ADR-0010, OpenAPI, domínio, API e UI.
 - [x] Commit temporal publicado no PR #6; App CI e CodeQL em push/PR passaram no SHA `b2e76a590c886f14e0908355ccea62dd2c3df69e`.
 - [ ] Homologação/staging permanece separada e pendente.
@@ -90,6 +90,7 @@ Se houver linhas, interromper a promoção. O responsável apresenta cada grade 
 | Diff e segredos | `git diff --check`; revisão; App CI secrets/imagem/config | Sem whitespace inválido nem segredo | `git diff --check` passou; jobs de segredo, security e verify passaram nos dois eventos. Scan completo de dependências continua pendente. |
 | App CI push/PR | Runs [38823847787](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38823847787) / [38823854921](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38823854921) | Passar verify/Testcontainers, frontend, security, segredos e browser E2E | Ambos `success` no SHA `b2e76a590c886f14e0908355ccea62dd2c3df69e`; todos os jobs concluídos, incluindo `oidc-browser-e2e`. |
 | CodeQL push/PR | Runs [38823847890](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38823847890) / [38823854900](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38823854900) | Analisar Java/Kotlin e JavaScript/TypeScript | Ambos `success` no SHA `b2e76a590c886f14e0908355ccea62dd2c3df69e`; as duas linguagens passaram. |
+| Checks do head documental | App CI push/PR [38824442067](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38824442067)/[38824448440](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38824448440); CodeQL push/PR [38824442019](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38824442019)/[38824448419](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38824448419) | Revalidar head atual, incluindo browser E2E | Todos `success` em `9f170e8cd39e1f1bcef04e148d09d872ea9f2f53`. A primeira tentativa App CI PR falhou por `wget: Failed to fetch` do Maven Wrapper no Maven Central na etapa Docker do E2E; rerun passou sem alteração de código/gates. |
 
 ## Retomada
 
