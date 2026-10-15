@@ -71,7 +71,8 @@ public class OutboxWorker {
             case OUTCOME_UNKNOWN -> store.markOutcomeUnknown(claim, "DESTINATION_OUTCOME_UNKNOWN");
           };
       if (!recorded) {
-        log.warn("Outbox claim transition rejected: eventId={}, outcome={}", claim.eventId(), result);
+        log.warn(
+            "Outbox claim transition rejected: eventId={}, outcome={}", claim.eventId(), result);
         break;
       }
     }
