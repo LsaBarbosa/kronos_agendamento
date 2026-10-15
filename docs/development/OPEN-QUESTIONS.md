@@ -3,6 +3,8 @@
 | Tema | Referência | Efeito | Tratamento atual |
 |---|---|---|---|
 | Identidade administrativa | AGD-003; documento 04 | login, sessão e autorização | endpoints de negócio fechados; escolher provedor antes da integração; ADR-0003 |
+| Slugs e ciclo de vida do tenant | AGD-002; documentos 01–03 | palavras reservadas, liberação após encerramento e relação do status com onboarding/assinatura | AGD-002 fixa somente canonicalização técnica e unicidade global persistente; sem lista reservada ou reciclagem. `ACTIVE` não publica nem libera rotas. Aprovar semântica comercial e política de liberação antes de onboarding público; ADR-0005 |
+| Troca de timezone do tenant | documento 03, seção 5.1 | impacto em horários futuros e auditoria | a recomendação de bloquear alteração é pendente, não decisão; não há mutação de timezone em AGD-002 |
 | WhatsApp e templates | documento 01; AGD-024/030 | códigos e notificações | não implementados; isolar por adapter; ADR-0003 |
 | Cobrança e sandbox | AGD-041 | assinatura e reconciliação | não implementadas; não assumir fornecedor; ADR-0003 |
 | Identidade visual, fluxo UX e hospedagem | AGD-001/014; documento 04 | identidade, telas finais e entrega | tecnologia React/Vite adotada em ADR-0002; decisões de produto/UX permanecem pendentes; ADR-0003 |

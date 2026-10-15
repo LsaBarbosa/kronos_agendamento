@@ -133,7 +133,8 @@ Esse banco precisa existir, e o usuário precisa criar schema/extensão para a m
 
 - Entrada Spring Boot e separação por módulos e camadas.
 - Value object imutável `TimeInterval`, com semântica `[início, fim)` e testes.
-- Flyway V1 para schema e extensão `btree_gist`, preparatória para AGD-015.
+- Flyway V1 preparatória e V2 funcional do agregado Tenant, com unicidade global de slug.
+- Módulo Tenant com validação IANA/slug, persistência PostgreSQL, operações internas escopadas e versionamento otimista; endpoints administrativos e autenticação seguem fechados até AGD-003.
 - Hibernate em `validate`, `open-in-view` desabilitado e referência temporal UTC.
 - Fronteira de segurança fechada, sem credencial padrão, e envelope inicial de erro.
 - Correlação por `X-Correlation-ID`, com validação do valor e limpeza de MDC.
@@ -141,10 +142,10 @@ Esse banco precisa existir, e o usuário precisa criar schema/extensão para a m
 - ArchUnit, testes web e suíte de integração com PostgreSQL.
 - GitHub Actions executa format/lint, testes e build frontend, auditoria npm, verificação Spotless, testes backend/Testcontainers, scans Trivy de código/dependências/imagem e build local da imagem; CodeQL está separado para Java e TypeScript. Nenhuma imagem é publicada.
 
-Os pacotes com `package-info.java` delimitam responsabilidades, sem inventar entidades ou endpoints de negócio. Os testes atuais não demonstram reserva concorrente, isolamento multi-tenant, idempotência de negócio nem entrega de mensagens: essas capacidades continuam pendentes nas histórias correspondentes.
+Os módulos ainda não implementados mantêm pacotes `package-info.java`. A integração AGD-002 testa acesso próprio/cruzado em casos de uso e constraints PostgreSQL, mas usa atores controlados em teste; não demonstra autenticação HTTP real. Reservas concorrentes, idempotência de negócio e entrega de mensagens continuam pendentes nas histórias correspondentes.
 
 ## Versionar
 
 Se esta pasta ainda não estiver dentro de um repositório Git, inicialize-o nela e revise os arquivos antes do primeiro commit. Versione código, documentação, skills e configuração sem segredos. O ZIP não inclui `.git`, caches, JDK, Maven instalado, banco de testes, `.env` ou binários de build.
 
-Os comandos locais estão documentados em `backend/README.md` e `frontend/README.md`. AGD-001 ainda exige execução do CI remoto, staging/homologação e a atualização funcional da migration que depende de AGD-002; workflows escritos ou builds locais não substituem esses gates.
+Os comandos locais estão documentados em `backend/README.md` e `frontend/README.md`. AGD-001 ainda exige scan Trivy completo de dependências e staging/homologação; o upgrade funcional V1→V2 foi exercitado pela suíte AGD-002 local. AGD-002 segue parcial até identidade/associação reais e garantias HTTP integradas em AGD-003; workflows escritos ou builds locais não substituem CI remoto.

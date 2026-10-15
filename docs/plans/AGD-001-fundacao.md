@@ -25,7 +25,7 @@ Referências: documento 04; documento 06, incremento A e AGD-001; ADRs 0001, 000
 - [x] Revisar fast-forward e diff após `git fetch origin`: `origin/main` em `0f06ed92e47345909233fd04b2559a90b9814894`; commits locais `38efcc8` e `3a46534`, sem divergência.
 - [x] Publicar os commits locais em fast-forward sem force push, preservando `38efcc8977bf0ca7d45f935aab3b1ad31d676e5c` e `3a4653442762abc5b0a64f32c633394b733715de`.
 - [x] Acompanhar App CI e CodeQL no SHA `3a4653442762abc5b0a64f32c633394b733715de`; App CI run `38663531502` e CodeQL run `38663531528` concluíram com sucesso.
-- [ ] Demonstrar migração funcional V1→V2 junto de AGD-002; também aplicar ambas do zero.
+- [x] Demonstrar migração funcional V1→V2 junto de AGD-002 e aplicar ambas do zero em PostgreSQL 16.13; V1 preservada. Evidência em `TenantPersistenceIT` e VALIDATION.md; associar ao SHA de código AGD-002.
 - [ ] Executar staging/homologação, smoke/E2E e promoção autorizada quando destino e fluxos estiverem definidos.
 
 ## Descobertas e decisões
@@ -50,10 +50,10 @@ Referências: documento 04; documento 06, incremento A e AGD-001; ADRs 0001, 000
 | Formatação, lint e segredos/config | Prettier, Oxlint, Spotless e Trivy config/secret | sem violações | passou localmente; VALIDATION.md |
 | Dependências fonte | npm audit e Trivy FS | sem high/critical | npm audit passou; scan FS não concluiu por Maven Central HTTP 429. Imagem runtime passou; repetir fonte após rate limit; VALIDATION.md |
 | SAST/CI remoto | runs `38663531502` (App CI) e `38663531528` (CodeQL) | workflows aprovados no commit corrigido publicado | os dois passaram integralmente no SHA `3a4653442762abc5b0a64f32c633394b733715de`; falha anterior e HTTP 429 estão detalhados em VALIDATION.md |
-| Migration compatível | `./mvnw verify` com cenários de schema vazio e upgrade V1→V2 | duas trajetórias aprovadas | pendente da migration funcional AGD-002; V1 vazia passou, sem segunda versão |
+| Migration compatível | `./mvnw -B -ntp -Dmaven.repo.local=/tmp/agendamento-m2 spotless:check verify` com cenários de schema vazio e upgrade V1→V2 | duas trajetórias aprovadas | passou localmente em PostgreSQL 16.13 no commit `e6bbcf3b920c1c6c6220d181e10f86d88c11ae32`: fresh V1+V2, upgrade V1→V2, validate e rerun sem migrations adicionais; detalhes em VALIDATION.md |
 | Staging/DoD | deploy em staging autorizado e smoke/E2E | evidência funcional e aprovação do ambiente | pendente: UX, ambiente e credenciais não definidos |
 | Pipeline limpo | execução dos workflows no commit de correção publicado | todos os jobs aprovados | App CI e CodeQL concluíram com sucesso em `3a4653442762abc5b0a64f32c633394b733715de`; links em VALIDATION.md |
 
 ## Encerramento ou retomada
 
-Manter AGD-001 aberta. App CI/CodeQL passaram no commit publicado; executar o scan completo de dependências quando o rate limit do Maven Central permitir e concluir staging/homologação. Em paralelo, iniciar AGD-002 com tenant e isolamento; criar migration V2 funcional e testar banco vazio e upgrade de V1 antes de fechar versionamento. O scan restrito a `backend/Dockerfile` não comprova o scan completo.
+Manter AGD-001 aberta. App CI/CodeQL passaram no commit publicado; executar o scan completo de dependências quando o rate limit do Maven Central permitir e concluir staging/homologação. AGD-002 implementou V2 e passou localmente os cenários PostgreSQL vazio e V1→V2; aguarda CI remoto associado ao commit da branch. O scan restrito a `backend/Dockerfile` não comprova o scan completo.
