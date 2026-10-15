@@ -39,7 +39,7 @@ Consulta é apenas contrato interno: recebe identidade autenticada, deriva `tena
 
 - [x] 15/10/2026 — V5, papéis runtime/owner e contratos/eventos Tenant implementados; V1–V4 preservadas.
 - [x] 15/10/2026 — Testes PostgreSQL reais cobrem fresh/upgrade, isolamento, privilégios, rollback e falha ao gravar auditoria na criação e renomeação; revisão independente executada e achados pertinentes corrigidos.
-- [x] Publicar PR #3 (head `544c016c1ccbcbac70299af43d551228bd22744e`); App CI e CodeQL push/PR concluíram com sucesso. Review humana/merge seguem pendentes.
+- [x] Publicar PR #3 (head final `708205aa6db54bd1525173eda24250baabb56370`); App CI e CodeQL push/PR concluíram com sucesso. Review humana/merge seguem pendentes.
 - [ ] Resolver cobertura de segurança e retenção conforme decisão de produto/operação; adicionar eventos às operações críticas futuras junto aos seus casos de uso.
 
 ## Validação
@@ -50,7 +50,8 @@ Consulta é apenas contrato interno: recebe identidade autenticada, deriva `tena
 | Append-only e privilégios | `AuditTrailIT` em `verify` | Runtime só lê/insere; UPDATE/DELETE/TRUNCATE e membership ao owner falham | Passou sob `agendamento_app` em PostgreSQL 16.13 em 15/10/2026 no commit `d24d53bd0bbdfa63ecc1c29cc6db52a74cd9e149` |
 | Atomicidade criação/renomeação | `AuditTrailIT` em `verify` | Commit persiste ambos; rollback ou erro de auditoria não deixa alteração/evento de sucesso isolado | Passou em PostgreSQL 16.13 em 15/10/2026 no commit `d24d53bd0bbdfa63ecc1c29cc6db52a74cd9e149` |
 | Correlação e allowlist | `CorrelationIdFilterTest`, `AuditEventTest`, `AuditTrailIT` | Response/MDC/evento compartilham UUID; dados sensíveis não são aceitos em details | Passou localmente em 15/10/2026 no commit `d24d53bd0bbdfa63ecc1c29cc6db52a74cd9e149`; revisão de cobertura de logs HTTP permanece pendente |
-| CI remoto | [App CI push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38773326787), [App CI PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38773334702), [CodeQL push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38773326727), [CodeQL PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38773334839) | Todos os checks verdes no mesmo SHA publicado | Quatro execuções `success` em `544c016c1ccbcbac70299af43d551228bd22744e`, incluindo Testcontainers, Trivy de imagem/config, OIDC browser E2E e CodeQL Java/JS. PR #3 aberto; nenhuma review humana registrada. |
+| CI remoto — correção de provisioning | [App CI push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38773326787), [App CI PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38773334702), [CodeQL push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38773326727), [CodeQL PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38773334839) | Todos os checks verdes | Quatro execuções `success` em `544c016c1ccbcbac70299af43d551228bd22744e`, incluindo Testcontainers, Trivy, OIDC browser E2E e CodeQL. |
+| CI remoto — head com registros finais | [App CI push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38774003394), [App CI PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38774007947), [CodeQL push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38774003424), [CodeQL PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38774007941) | Todos os checks verdes | Quatro execuções `success` em `708205aa6db54bd1525173eda24250baabb56370`. App CI completo inclui Testcontainers, Trivy, browser OIDC e secrets; CodeQL Java/JS. PR #3 aberto, sem review humana registrada. |
 
 ## Pendências e limites
 
