@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { apiBaseUrl } from './config';
 import { commandKey } from './commandKey';
 import { SchedulePanel } from './SchedulePanel';
+import { ScheduleExceptionsPanel } from './ScheduleExceptionsPanel';
 
 type Session = { authenticated: boolean; tenantId: string; role: string };
 type Csrf = { headerName: string; token: string };
@@ -492,6 +493,19 @@ export function App() {
                     </a>
                 )}
                 <SchedulePanel
+                    enabled={Boolean(session)}
+                    csrf={csrf}
+                    onSessionInvalid={(responseStatus) => {
+                        setSession(null);
+                        setCsrf(null);
+                        setStatus(
+                            responseStatus === 401
+                                ? 'Sua sessão expirou. Entre novamente para continuar.'
+                                : 'Sua associação administrativa foi revogada ou o acesso foi negado.',
+                        );
+                    }}
+                />
+                <ScheduleExceptionsPanel
                     enabled={Boolean(session)}
                     csrf={csrf}
                     onSessionInvalid={(responseStatus) => {

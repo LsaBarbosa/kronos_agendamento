@@ -36,7 +36,7 @@ public record AuditEvent(
                     || actorRef.equals("CONTROLLED_DEMO_PROVISIONER")))
         || !result.equals("COMMITTED")
         || !action.matches(
-            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED")) {
+            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)")) {
       throw new IllegalArgumentException("Ator ou resultado de auditoria inválido");
     }
     if ((actorType.equals("ADMIN") && actorId == null)
@@ -73,6 +73,16 @@ public record AuditEvent(
               actorType.equals("ADMIN")
                   && detailsJson.matches(
                       "\\{\\\"changed_fields\\\":\\[\\\"availability_policy\\\"\\],\\\"version_before\\\":[0-9]+,\\\"version_after\\\":[0-9]+\\}");
+          case "SCHEDULE_EXCEPTION_CREATED",
+              "SCHEDULE_EXCEPTION_UPDATED",
+              "SCHEDULE_EXCEPTION_REMOVED" ->
+              actorType.equals("ADMIN")
+                  && detailsJson.matches(
+                      "\\{\\\"changed_fields\\\":\\[\\\"schedule_exception\\\"\\],\\\"version_before\\\":[0-9]+,\\\"version_after\\\":[0-9]+\\}");
+          case "BLOCKED_PERIOD_CREATED", "BLOCKED_PERIOD_CANCELLED" ->
+              actorType.equals("ADMIN")
+                  && detailsJson.matches(
+                      "\\{\\\"changed_fields\\\":\\[\\\"blocked_period\\\"\\],\\\"version_before\\\":[0-9]+,\\\"version_after\\\":[0-9]+\\}");
           default -> false;
         };
     if (!validDetails) {

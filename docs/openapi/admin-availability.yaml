@@ -15,16 +15,16 @@ paths:
       security:
         - backendSession: []
       responses:
-        '200':
+        "200":
           description: Grade semanal; configuração ausente é diferente de semana fechada.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WeeklySchedule'
-        '401':
-          $ref: '#/components/responses/AuthenticationRequired'
-        '403':
-          $ref: '#/components/responses/ActionNotAllowed'
+                $ref: "#/components/schemas/WeeklySchedule"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ActionNotAllowed"
     put:
       operationId: replaceAdminWeeklySchedule
       summary: Substituir atomicamente todos os períodos semanais
@@ -32,15 +32,15 @@ paths:
         - backendSession: []
           csrfToken: []
       parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ReplaceWeeklySchedule'
+              $ref: "#/components/schemas/ReplaceWeeklySchedule"
       responses:
-        '200':
+        "200":
           description: Configuração persistida ou replay do resultado original.
           headers:
             Idempotency-Replayed:
@@ -50,15 +50,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WeeklySchedule'
-        '400':
-          $ref: '#/components/responses/ValidationError'
-        '401':
-          $ref: '#/components/responses/AuthenticationRequired'
-        '403':
-          $ref: '#/components/responses/ActionNotAllowed'
-        '409':
-          $ref: '#/components/responses/CommandConflict'
+                $ref: "#/components/schemas/WeeklySchedule"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ActionNotAllowed"
+        "409":
+          $ref: "#/components/responses/CommandConflict"
   /admin/availability-policy:
     get:
       operationId: getAdminAvailabilityPolicy
@@ -66,16 +66,16 @@ paths:
       security:
         - backendSession: []
       responses:
-        '200':
+        "200":
           description: Política; valores null indicam que ainda não foi configurada.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AvailabilityPolicy'
-        '401':
-          $ref: '#/components/responses/AuthenticationRequired'
-        '403':
-          $ref: '#/components/responses/ActionNotAllowed'
+                $ref: "#/components/schemas/AvailabilityPolicy"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ActionNotAllowed"
     put:
       operationId: replaceAdminAvailabilityPolicy
       summary: Substituir atomicamente todas as políticas de disponibilidade
@@ -83,15 +83,15 @@ paths:
         - backendSession: []
           csrfToken: []
       parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ReplaceAvailabilityPolicy'
+              $ref: "#/components/schemas/ReplaceAvailabilityPolicy"
       responses:
-        '200':
+        "200":
           description: Política persistida ou replay do resultado original.
           headers:
             Idempotency-Replayed:
@@ -101,15 +101,245 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AvailabilityPolicy'
-        '400':
-          $ref: '#/components/responses/ValidationError'
-        '401':
-          $ref: '#/components/responses/AuthenticationRequired'
-        '403':
-          $ref: '#/components/responses/ActionNotAllowed'
-        '409':
-          $ref: '#/components/responses/CommandConflict'
+                $ref: "#/components/schemas/AvailabilityPolicy"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/AuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ActionNotAllowed"
+        "409":
+          $ref: "#/components/responses/CommandConflict"
+  /admin/schedule/exceptions:
+    get:
+      operationId: listAdminScheduleExceptions
+      summary: Consultar exceções por intervalo de datas locais
+      security: [{ backendSession: [] }]
+      parameters:
+        - {
+            name: from,
+            in: query,
+            required: true,
+            description: Data local inicial inclusiva; intervalo total limitado a 366 datas.,
+            schema: { type: string, format: date },
+          }
+        - {
+            name: to,
+            in: query,
+            required: true,
+            description: Data local final inclusiva; intervalo total limitado a 366 datas.,
+            schema: { type: string, format: date },
+          }
+      responses:
+        "200":
+          {
+            description: Ausência de item mantém a grade semanal.,
+            content:
+              {
+                application/json:
+                  {
+                    schema:
+                      { $ref: "#/components/schemas/ScheduleExceptionList" },
+                  },
+              },
+          }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ActionNotAllowed" }
+    post:
+      operationId: createAdminScheduleException
+      summary: Criar exceção fechada ou com horários especiais
+      security: [{ backendSession: [], csrfToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          {
+            application/json:
+              {
+                schema:
+                  { $ref: "#/components/schemas/CreateScheduleException" },
+              },
+          }
+      responses:
+        "200":
+          {
+            description: Criada ou replay idempotente.,
+            content:
+              {
+                application/json:
+                  {
+                    schema: { $ref: "#/components/schemas/ScheduleException" },
+                  },
+              },
+          }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ActionNotAllowed" }
+        "409": { $ref: "#/components/responses/CommandConflict" }
+  /admin/schedule/exceptions/{id}:
+    parameters:
+      - {
+          name: id,
+          in: path,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    patch:
+      operationId: updateAdminScheduleException
+      summary: Atualizar exceção com CAS
+      security: [{ backendSession: [], csrfToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          {
+            application/json:
+              {
+                schema:
+                  { $ref: "#/components/schemas/UpdateScheduleException" },
+              },
+          }
+      responses:
+        "200":
+          {
+            description: Atualizada ou replay.,
+            content:
+              {
+                application/json:
+                  {
+                    schema: { $ref: "#/components/schemas/ScheduleException" },
+                  },
+              },
+          }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ActionNotAllowed" }
+        "404": { description: Recurso inexistente ou inacessível. }
+        "409": { $ref: "#/components/responses/CommandConflict" }
+    delete:
+      operationId: removeAdminScheduleException
+      summary: Remover exceção e restaurar a grade semanal
+      security: [{ backendSession: [], csrfToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          {
+            application/json:
+              {
+                schema:
+                  {
+                    type: object,
+                    required: [expectedVersion],
+                    properties:
+                      { expectedVersion: { type: integer, minimum: 1 } },
+                  },
+              },
+          }
+      responses:
+        "200": { description: Removida ou replay idempotente. }
+        "401": { $ref: "#/components/responses/AuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ActionNotAllowed" }
+        "409": { $ref: "#/components/responses/CommandConflict" }
+  /admin/blocked-periods:
+    get:
+      operationId: listAdminBlockedPeriods
+      summary: Consultar bloqueios que intersectam datas locais
+      security: [{ backendSession: [] }]
+      parameters:
+        - name: from
+          in: query
+          required: true
+          description: Primeiro dia local inclusivo na zona do tenant; intervalo máximo de 366 dias.
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: true
+          description: Último dia local inclusivo na zona do tenant.
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: Bloqueios ativos ou cancelados no intervalo.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BlockedPeriod" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ActionNotAllowed" }
+    post:
+      operationId: createAdminBlockedPeriod
+      summary: Criar bloqueio com motivo obrigatório
+      security: [{ backendSession: [], csrfToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          {
+            application/json:
+              { schema: { $ref: "#/components/schemas/CreateBlockedPeriod" } },
+          }
+      responses:
+        "200":
+          {
+            description: Criado ou replay.,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/BlockedPeriod" } },
+              },
+          }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ActionNotAllowed" }
+        "409": { $ref: "#/components/responses/CommandConflict" }
+  /admin/blocked-periods/{id}:
+    delete:
+      operationId: cancelAdminBlockedPeriod
+      summary: Cancelar logicamente bloqueio com motivo e CAS
+      security: [{ backendSession: [], csrfToken: [] }]
+      parameters:
+        - {
+            name: id,
+            in: path,
+            required: true,
+            schema: { type: string, format: uuid },
+          }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          {
+            application/json:
+              {
+                schema:
+                  {
+                    type: object,
+                    required: [expectedVersion, reason],
+                    properties:
+                      {
+                        expectedVersion: { type: integer, minimum: 1 },
+                        reason: { type: string, minLength: 1, maxLength: 500 },
+                      },
+                  },
+              },
+          }
+      responses:
+        "200":
+          {
+            description: Cancelado ou replay.,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/BlockedPeriod" } },
+              },
+          }
+        "401": { $ref: "#/components/responses/AuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ActionNotAllowed" }
+        "404": { description: Recurso inexistente ou inacessível. }
+        "409": { $ref: "#/components/responses/CommandConflict" }
 components:
   securitySchemes:
     backendSession:
@@ -140,11 +370,11 @@ components:
           enum: [MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY, SATURDAY, SUNDAY]
         localStart:
           type: string
-          pattern: '^(?:[01][0-9]|2[0-3]):(?:00|15|30|45)$'
+          pattern: "^(?:[01][0-9]|2[0-3]):(?:00|15|30|45)$"
           description: Hora local do tenant em HH:mm, com minuto múltiplo de 15.
         localEnd:
           type: string
-          pattern: '^(?:[01][0-9]|2[0-3]):(?:00|15|30|45)$'
+          pattern: "^(?:[01][0-9]|2[0-3]):(?:00|15|30|45)$"
           description: Limite exclusivo no mesmo dia; deve ser posterior a localStart e alinhado a 15 minutos.
     WeeklySchedule:
       type: object
@@ -160,7 +390,7 @@ components:
           minimum: 0
         periods:
           type: array
-          items: { $ref: '#/components/schemas/WeeklyPeriod' }
+          items: { $ref: "#/components/schemas/WeeklyPeriod" }
     ReplaceWeeklySchedule:
       type: object
       additionalProperties: false
@@ -171,7 +401,7 @@ components:
           minimum: 0
         periods:
           type: array
-          items: { $ref: '#/components/schemas/WeeklyPeriod' }
+          items: { $ref: "#/components/schemas/WeeklyPeriod" }
           description: Array vazio configura explicitamente todos os dias como fechados. Intervalos são [início,fim), adjacentes são permitidos, sobreposição e cruzamento de meia-noite são rejeitados.
     AvailabilityPolicy:
       type: object
@@ -187,11 +417,14 @@ components:
       properties:
         configured: { type: boolean }
         version: { type: integer, minimum: 0 }
-        slotStepMinutes: { type: [integer, 'null'], enum: [15, 30, 60, null] }
-        minimumNoticeHours: { type: [integer, 'null'], minimum: 1, maximum: 24 }
-        bookingHorizonDays: { type: [integer, 'null'], enum: [7, 30, 60, 90, null] }
-        cancellationCutoffHours: { type: [integer, 'null'], minimum: 2, maximum: 24 }
-        reminderOffsetHours: { type: [integer, 'null'], enum: [2, 6, 12, 24, null] }
+        slotStepMinutes: { type: [integer, "null"], enum: [15, 30, 60, null] }
+        minimumNoticeHours: { type: [integer, "null"], minimum: 1, maximum: 24 }
+        bookingHorizonDays:
+          { type: [integer, "null"], enum: [7, 30, 60, 90, null] }
+        cancellationCutoffHours:
+          { type: [integer, "null"], minimum: 2, maximum: 24 }
+        reminderOffsetHours:
+          { type: [integer, "null"], enum: [2, 6, 12, 24, null] }
     ReplaceAvailabilityPolicy:
       type: object
       additionalProperties: false
@@ -209,6 +442,114 @@ components:
         bookingHorizonDays: { type: integer, enum: [7, 30, 60, 90] }
         cancellationCutoffHours: { type: integer, minimum: 2, maximum: 24 }
         reminderOffsetHours: { type: integer, enum: [2, 6, 12, 24] }
+    SpecialPeriod:
+      type: object
+      additionalProperties: false
+      required: [localStart, localEnd]
+      properties:
+        localStart:
+          { type: string, pattern: "^(?:[01][0-9]|2[0-3]):(?:00|15|30|45)$" }
+        localEnd:
+          {
+            type: string,
+            pattern: "^(?:[01][0-9]|2[0-3]):(?:00|15|30|45)$",
+            description: Limite exclusivo no mesmo dia.,
+          }
+    ScheduleException:
+      type: object
+      required: [exceptionId, localDate, kind, periods, version, timeZone]
+      properties:
+        exceptionId: { type: string, format: uuid }
+        localDate: { type: string, format: date }
+        kind: { type: string, enum: [CLOSED, SPECIAL] }
+        periods:
+          { type: array, items: { $ref: "#/components/schemas/SpecialPeriod" } }
+        reason: { type: [string, "null"], maxLength: 500 }
+        version: { type: integer, minimum: 1 }
+        timeZone: { type: string, description: Fuso IANA confiável do tenant. }
+    ScheduleExceptionList:
+      type: object
+      additionalProperties: false
+      required: [from, to, timeZone, exceptions]
+      properties:
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        timeZone: { type: string, description: Fuso IANA confiável do tenant. }
+        exceptions:
+          {
+            type: array,
+            items: { $ref: "#/components/schemas/ScheduleException" },
+          }
+    CreateScheduleException:
+      type: object
+      additionalProperties: false
+      required: [localDate, kind, periods]
+      properties:
+        localDate: { type: string, format: date }
+        kind: { type: string, enum: [CLOSED, SPECIAL] }
+        periods:
+          { type: array, items: { $ref: "#/components/schemas/SpecialPeriod" } }
+        reason: { type: [string, "null"], maxLength: 500 }
+    UpdateScheduleException:
+      allOf:
+        - { $ref: "#/components/schemas/CreateScheduleException" }
+        - type: object
+          required: [expectedVersion]
+          properties: { expectedVersion: { type: integer, minimum: 1 } }
+    CreateBlockedPeriod:
+      type: object
+      additionalProperties: false
+      required: [startsAt, endsAt, reason]
+      properties:
+        startsAt:
+          oneOf:
+            - type: string
+              pattern: '^\\d{4}-\\d{2}-\\d{2}T(?:[01]\\d|2[0-3]):(?:00|15|30|45)(?::00)?$'
+              description: Data/hora local do tenant sem offset; limites em múltiplos de 15 minutos.
+            - type: string
+              format: date-time
+              description: Data/hora com offset explícito, que deve corresponder à zona IANA do tenant.
+        endsAt:
+          oneOf:
+            - type: string
+              pattern: '^\\d{4}-\\d{2}-\\d{2}T(?:[01]\\d|2[0-3]):(?:00|15|30|45)(?::00)?$'
+              description: Data/hora local do tenant sem offset; limites em múltiplos de 15 minutos.
+            - type: string
+              format: date-time
+              description: Data/hora com offset explícito, que deve corresponder à zona IANA do tenant.
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    BlockedPeriod:
+      type: object
+      required:
+        [
+          blockId,
+          startsAt,
+          endsAt,
+          localStartsAt,
+          localEndsAt,
+          timeZone,
+          reason,
+          status,
+          version,
+        ]
+      properties:
+        blockId: { type: string, format: uuid }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        localStartsAt:
+          type: string
+          pattern: '^\\d{4}-\\d{2}-\\d{2}T(?:[01]\\d|2[0-3]):[0-5]\\d:00$'
+          description: Data/hora local sem offset, calculada na zona persistida do tenant.
+        localEndsAt:
+          type: string
+          pattern: '^\\d{4}-\\d{2}-\\d{2}T(?:[01]\\d|2[0-3]):[0-5]\\d:00$'
+          description: Limite exclusivo local sem offset, calculado na zona persistida do tenant.
+        timeZone: { type: string }
+        reason: { type: string }
+        status: { type: string, enum: [ACTIVE, CANCELLED] }
+        version: { type: integer, minimum: 1 }
+        cancelledAt: { type: [string, "null"], format: date-time }
+        cancellationReason: { type: [string, "null"], maxLength: 500 }
     ApiError:
       type: object
       properties:
@@ -226,19 +567,19 @@ components:
       description: Sessão local ausente ou expirada.
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ApiError' }
+          schema: { $ref: "#/components/schemas/ApiError" }
     ActionNotAllowed:
       description: Vínculo administrativo não ativo ou CSRF inválido.
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ApiError' }
+          schema: { $ref: "#/components/schemas/ApiError" }
     ValidationError:
       description: Período ou política fora das regras do contrato.
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ApiError' }
+          schema: { $ref: "#/components/schemas/ApiError" }
     CommandConflict:
       description: Versão concorrente, chave idempotente reutilizada ou operação em andamento.
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ApiError' }
+          schema: { $ref: "#/components/schemas/ApiError" }

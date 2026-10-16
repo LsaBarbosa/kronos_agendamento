@@ -7,7 +7,11 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.appagendamento.audit.api.AuditCorrelationId;
+import com.appagendamento.availability.application.GetBlockedPeriods;
 import com.appagendamento.availability.application.GetScheduleConfiguration;
+import com.appagendamento.availability.application.GetScheduleExceptions;
+import com.appagendamento.availability.application.ManageBlockedPeriods;
+import com.appagendamento.availability.application.ManageScheduleExceptions;
 import com.appagendamento.availability.application.ReplaceAvailabilityPolicy;
 import com.appagendamento.availability.application.ReplaceWeeklySchedule;
 import com.appagendamento.catalog.application.CreateService;
@@ -46,6 +50,10 @@ class SecurityBoundaryTest {
   @MockitoBean private GetScheduleConfiguration getScheduleConfiguration;
   @MockitoBean private ReplaceWeeklySchedule replaceWeeklySchedule;
   @MockitoBean private ReplaceAvailabilityPolicy replaceAvailabilityPolicy;
+  @MockitoBean private GetScheduleExceptions getScheduleExceptions;
+  @MockitoBean private GetBlockedPeriods getBlockedPeriods;
+  @MockitoBean private ManageScheduleExceptions manageScheduleExceptions;
+  @MockitoBean private ManageBlockedPeriods manageBlockedPeriods;
   @MockitoBean private AuditCorrelationId auditCorrelationId;
 
   @Test

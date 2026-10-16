@@ -4,7 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -17,6 +20,7 @@ import com.appagendamento.availability.domain.WeeklyPeriod;
 import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import com.appagendamento.support.PostgresTestEnvironment;
 import java.time.DayOfWeek;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
 import java.util.UUID;
@@ -29,6 +33,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -290,6 +295,449 @@ class AvailabilityScheduleIT {
 
     assertThat(count("audit_event", "AVAILABILITY_POLICY_UPDATED")).isEqualTo(1);
     assertThat(count("outbox_event", "AvailabilityPolicyChanged")).isEqualTo(1);
+  }
+
+  @Test
+  void exceptionLifecycleUsesTenantZoneCasIdempotencyAndAtomicAuditOutbox() throws Exception {
+    LocalDate date = java.time.LocalDate.now().plusDays(40);
+    String closedBody =
+        "{\"localDate\":\"%s\",\"kind\":\"CLOSED\",\"periods\":[],\"reason\":\"Feriado\"}"
+            .formatted(date);
+    String key = "exception-create-" + UUID.randomUUID();
+    mvc.perform(
+            post("/api/v1/admin/schedule/exceptions")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(closedBody))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.kind").value("CLOSED"))
+        .andExpect(jsonPath("$.timeZone").value("America/Sao_Paulo"));
+    mvc.perform(
+            post("/api/v1/admin/schedule/exceptions")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(closedBody))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"));
+    mvc.perform(
+            post("/api/v1/admin/schedule/exceptions")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(closedBody.replace("Feriado", "Outro motivo")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_KEY_REUSED"));
+    mvc.perform(
+            get("/api/v1/admin/schedule/exceptions")
+                .param("from", date.toString())
+                .param("to", date.toString())
+                .with(authentication(token(actor))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.timeZone").value("America/Sao_Paulo"))
+        .andExpect(jsonPath("$.exceptions[0].kind").value("CLOSED"));
+    UUID exceptionId =
+        appJdbc.queryForObject(
+            "SELECT exception_id FROM agendamento.schedule_exception WHERE tenant_id = ? AND local_date = ?",
+            UUID.class,
+            tenantId,
+            date);
+    String invalid =
+        "{\"localDate\":\"%s\",\"kind\":\"SPECIAL\",\"periods\":[{\"localStart\":\"09:10\",\"localEnd\":\"12:00\"}],\"expectedVersion\":1}"
+            .formatted(date);
+    mvc.perform(
+            patch("/api/v1/admin/schedule/exceptions/{id}", exceptionId)
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "invalid-exception-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(invalid))
+        .andExpect(status().isBadRequest());
+    String special =
+        "{\"localDate\":\"%s\",\"kind\":\"SPECIAL\",\"periods\":[{\"localStart\":\"09:00\",\"localEnd\":\"10:00\"},{\"localStart\":\"10:00\",\"localEnd\":\"11:00\"}],\"expectedVersion\":1}"
+            .formatted(date);
+    mvc.perform(
+            patch("/api/v1/admin/schedule/exceptions/{id}", exceptionId)
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "exception-update-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(special))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.kind").value("SPECIAL"))
+        .andExpect(jsonPath("$.periods.length()").value(2))
+        .andExpect(jsonPath("$.periods[0].localStart").value("09:00"))
+        .andExpect(jsonPath("$.periods[1].localEnd").value("11:00"));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.schedule_exception_period WHERE exception_id = ?",
+                Integer.class,
+                exceptionId))
+        .isEqualTo(2);
+    assertThatThrownBy(
+            () ->
+                appJdbc.update(
+                    "INSERT INTO agendamento.schedule_exception_period(tenant_id, exception_id, local_start, local_end) VALUES (?, ?, '10:30', '11:30')",
+                    tenantId,
+                    exceptionId))
+        .isInstanceOf(DataIntegrityViolationException.class);
+    mvc.perform(
+            patch("/api/v1/admin/schedule/exceptions/{id}", exceptionId)
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "stale-exception-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(special))
+        .andExpect(status().isConflict());
+    mvc.perform(
+            delete("/api/v1/admin/schedule/exceptions/{id}", exceptionId)
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "exception-remove-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":2}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.removed").value(true));
+    mvc.perform(
+            get("/api/v1/admin/schedule/exceptions")
+                .param("from", date.toString())
+                .param("to", date.toString())
+                .with(authentication(token(actor))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.exceptions").isEmpty());
+    assertThat(count("audit_event", "SCHEDULE_EXCEPTION_CREATED")).isEqualTo(1);
+    assertThat(count("audit_event", "SCHEDULE_EXCEPTION_UPDATED")).isEqualTo(1);
+    assertThat(count("audit_event", "SCHEDULE_EXCEPTION_REMOVED")).isEqualTo(1);
+    assertThat(count("outbox_event", "ScheduleChanged")).isEqualTo(3);
+  }
+
+  @Test
+  void scheduleChangedRevisionIsMonotonicAcrossWeeklyAndExceptionMutations() throws Exception {
+    replaceWeeklySchedule.execute(
+        actor, "revision-weekly-" + UUID.randomUUID(), 0, List.of(period("09:00", "12:00")));
+    var date = LocalDate.now().plusDays(60);
+    mvc.perform(
+            post("/api/v1/admin/schedule/exceptions")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "revision-exception-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    "{\"localDate\":\"%s\",\"kind\":\"CLOSED\",\"periods\":[]}".formatted(date)))
+        .andExpect(status().isOk());
+    assertThat(
+            appJdbc.queryForList(
+                "SELECT aggregate_version FROM agendamento.outbox_event WHERE tenant_id = ? AND event_type = 'ScheduleChanged' ORDER BY aggregate_version",
+                Long.class,
+                tenantId))
+        .containsExactly(1L, 2L);
+  }
+
+  @Test
+  void concurrentExceptionCreationForSameTenantDateHasOneWinner() throws Exception {
+    LocalDate date = LocalDate.now().plusDays(70);
+    CountDownLatch ready = new CountDownLatch(2);
+    CountDownLatch start = new CountDownLatch(1);
+    try (ExecutorService writers = Executors.newFixedThreadPool(2)) {
+      Future<Integer> first = writers.submit(() -> createExceptionAfterBarrier(ready, start, date));
+      Future<Integer> second =
+          writers.submit(() -> createExceptionAfterBarrier(ready, start, date));
+      ready.await();
+      start.countDown();
+      assertThat(List.of(first.get(), second.get())).containsExactlyInAnyOrder(200, 409);
+    }
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.schedule_exception WHERE tenant_id = ? AND local_date = ?",
+                Integer.class,
+                tenantId,
+                date))
+        .isEqualTo(1);
+    assertThat(count("audit_event", "SCHEDULE_EXCEPTION_CREATED")).isEqualTo(1);
+  }
+
+  @Test
+  void exceptionAuditFailureRollsBackMutationIdempotencyAndOutbox() {
+    migrationJdbc.execute(
+        """
+        CREATE OR REPLACE FUNCTION agendamento.reject_exception_audit() RETURNS trigger
+        LANGUAGE plpgsql AS $$ BEGIN
+          IF NEW.action = 'SCHEDULE_EXCEPTION_CREATED' THEN
+            RAISE EXCEPTION 'injected exception audit failure' USING ERRCODE = '23514';
+          END IF;
+          RETURN NEW;
+        END $$
+        """);
+    migrationJdbc.execute(
+        "CREATE TRIGGER reject_exception_audit BEFORE INSERT ON agendamento.audit_event "
+            + "FOR EACH ROW EXECUTE FUNCTION agendamento.reject_exception_audit()");
+    try {
+      var date = LocalDate.now().plusDays(80);
+      assertThatThrownBy(
+              () ->
+                  mvc.perform(
+                      post("/api/v1/admin/schedule/exceptions")
+                          .with(authentication(token(actor)))
+                          .with(csrf())
+                          .header("Idempotency-Key", "audit-exception-" + UUID.randomUUID())
+                          .contentType(MediaType.APPLICATION_JSON)
+                          .content(
+                              "{\"localDate\":\"%s\",\"kind\":\"CLOSED\",\"periods\":[]}"
+                                  .formatted(date))))
+          .isInstanceOf(Exception.class);
+    } catch (Exception exception) {
+      throw new AssertionError(exception);
+    } finally {
+      migrationJdbc.execute("DROP TRIGGER reject_exception_audit ON agendamento.audit_event");
+      migrationJdbc.execute("DROP FUNCTION agendamento.reject_exception_audit()");
+    }
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.schedule_exception WHERE tenant_id = ?",
+                Integer.class,
+                tenantId))
+        .isZero();
+    assertThat(count("audit_event", "SCHEDULE_EXCEPTION_CREATED")).isZero();
+    assertThat(count("outbox_event", "ScheduleChanged")).isZero();
+    assertThat(count("idempotency_record", "availability.schedule-exception.create.v1")).isZero();
+  }
+
+  @Test
+  void exceptionReplayRequiresStillActiveTenantAssociation() throws Exception {
+    var date = LocalDate.now().plusDays(75);
+    String key = "exception-revoked-replay-" + UUID.randomUUID();
+    String body = "{\"localDate\":\"%s\",\"kind\":\"CLOSED\",\"periods\":[]}".formatted(date);
+    mvc.perform(
+            post("/api/v1/admin/schedule/exceptions")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isOk());
+    migrationJdbc.update(
+        "UPDATE agendamento.admin_tenant_membership SET status = 'DISABLED' WHERE user_id = ? AND tenant_id = ?",
+        adminId,
+        tenantId);
+    mvc.perform(
+            post("/api/v1/admin/schedule/exceptions")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isForbidden());
+    assertThat(count("audit_event", "SCHEDULE_EXCEPTION_CREATED")).isEqualTo(1);
+  }
+
+  @Test
+  void blocksCrossDatesAndRetainCancellationHistoryAndReason() throws Exception {
+    var startDate = java.time.LocalDate.now().plusDays(50);
+    String start = startDate + "T23:45";
+    String end = startDate.plusDays(1) + "T00:15";
+    String body =
+        "{\"startsAt\":\"%s\",\"endsAt\":\"%s\",\"reason\":\"Manutenção\"}".formatted(start, end);
+    mvc.perform(
+            post("/api/v1/admin/blocked-periods")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "block-create-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("ACTIVE"));
+    UUID blockId =
+        appJdbc.queryForObject(
+            "SELECT block_id FROM agendamento.blocked_period WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    mvc.perform(
+            get("/api/v1/admin/blocked-periods")
+                .param("from", startDate.toString())
+                .param("to", startDate.toString())
+                .with(authentication(token(actor))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$[0].blockId").value(blockId.toString()));
+    mvc.perform(
+            delete("/api/v1/admin/blocked-periods/{id}", blockId)
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "block-cancel-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1,\"reason\":\"Reprogramado\"}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CANCELLED"))
+        .andExpect(jsonPath("$.reason").value("Manutenção"))
+        .andExpect(jsonPath("$.cancellationReason").value("Reprogramado"));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status FROM agendamento.blocked_period WHERE block_id = ?",
+                String.class,
+                blockId))
+        .isEqualTo("CANCELLED");
+    assertThat(count("audit_event", "BLOCKED_PERIOD_CREATED")).isEqualTo(1);
+    assertThat(count("audit_event", "BLOCKED_PERIOD_CANCELLED")).isEqualTo(1);
+  }
+
+  @Test
+  void invalidExceptionAndMissingCsrfDoNotMutateOrAudit() throws Exception {
+    LocalDate date = java.time.LocalDate.now().plusDays(60);
+    mvc.perform(
+            post("/api/v1/admin/schedule/exceptions")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "invalid-period-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    "{\"localDate\":\"%s\",\"kind\":\"SPECIAL\",\"periods\":[{\"localStart\":\"09:00\",\"localEnd\":\"09:00\"}]}"
+                        .formatted(date)))
+        .andExpect(status().isBadRequest());
+    mvc.perform(
+            post("/api/v1/admin/blocked-periods")
+                .with(authentication(token(actor)))
+                .header("Idempotency-Key", "missing-csrf-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    "{\"startsAt\":\"2026-11-01T09:00\",\"endsAt\":\"2026-11-01T10:00\",\"reason\":\"test\"}"))
+        .andExpect(status().isForbidden());
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.schedule_exception WHERE tenant_id = ?",
+                Integer.class,
+                tenantId))
+        .isZero();
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.blocked_period WHERE tenant_id = ?",
+                Integer.class,
+                tenantId))
+        .isZero();
+    assertThat(count("audit_event", "SCHEDULE_EXCEPTION_CREATED")).isZero();
+    assertThat(count("audit_event", "BLOCKED_PERIOD_CREATED")).isZero();
+    UUID closedId = UUID.randomUUID();
+    LocalDate closedDate = date.plusDays(1);
+    appJdbc.update(
+        "INSERT INTO agendamento.schedule_exception(exception_id, tenant_id, local_date, kind) VALUES (?, ?, ?, 'CLOSED')",
+        closedId,
+        tenantId,
+        closedDate);
+    assertThatThrownBy(
+            () ->
+                appJdbc.update(
+                    "INSERT INTO agendamento.schedule_exception_period(tenant_id, exception_id, local_start, local_end) VALUES (?, ?, '09:00', '10:00')",
+                    tenantId,
+                    closedId))
+        .isInstanceOf(DataIntegrityViolationException.class);
+    appJdbc.update(
+        "DELETE FROM agendamento.schedule_exception WHERE tenant_id = ? AND exception_id = ?",
+        tenantId,
+        closedId);
+    UUID emptySpecialId = UUID.randomUUID();
+    assertThatThrownBy(
+            () ->
+                appJdbc.update(
+                    "INSERT INTO agendamento.schedule_exception(exception_id, tenant_id, local_date, kind) VALUES (?, ?, ?, 'SPECIAL')",
+                    emptySpecialId,
+                    tenantId,
+                    closedDate.plusDays(1)))
+        .isInstanceOf(DataIntegrityViolationException.class);
+  }
+
+  @Test
+  void foreignExceptionAndBlockIdsAreNonRevealingAndDoNotWriteSuccessEvents() throws Exception {
+    UUID foreignTenant = insertTenant("America/Fortaleza");
+    UUID foreignException = UUID.randomUUID();
+    UUID foreignBlock = UUID.randomUUID();
+    LocalDate date = LocalDate.now().plusDays(80);
+    migrationJdbc.update(
+        "INSERT INTO agendamento.schedule_exception(exception_id, tenant_id, local_date, kind, version) VALUES (?, ?, ?, 'CLOSED', 1)",
+        foreignException,
+        foreignTenant,
+        date);
+    migrationJdbc.update(
+        "INSERT INTO agendamento.blocked_period(block_id, tenant_id, starts_at, ends_at, time_zone, reason, status, version) VALUES (?, ?, ?, ?, 'America/Fortaleza', 'Privado', 'ACTIVE', 1)",
+        foreignBlock,
+        foreignTenant,
+        java.sql.Timestamp.from(
+            date.atTime(9, 0).atZone(java.time.ZoneId.of("America/Fortaleza")).toInstant()),
+        java.sql.Timestamp.from(
+            date.atTime(10, 0).atZone(java.time.ZoneId.of("America/Fortaleza")).toInstant()));
+    mvc.perform(
+            get("/api/v1/admin/schedule/exceptions")
+                .param("from", date.toString())
+                .param("to", date.toString())
+                .with(authentication(token(actor))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.exceptions").isEmpty());
+    mvc.perform(
+            patch("/api/v1/admin/schedule/exceptions/{id}", foreignException)
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "foreign-exception-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    "{\"localDate\":\"%s\",\"kind\":\"CLOSED\",\"periods\":[],\"expectedVersion\":1}"
+                        .formatted(date)))
+        .andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.error.code").value("RESOURCE_NOT_FOUND"));
+    mvc.perform(
+            delete("/api/v1/admin/blocked-periods/{id}", foreignBlock)
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "foreign-block-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1,\"reason\":\"Não aplicável\"}"))
+        .andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.error.code").value("RESOURCE_NOT_FOUND"));
+    assertThat(count("audit_event", "SCHEDULE_EXCEPTION_UPDATED")).isZero();
+    assertThat(count("audit_event", "BLOCKED_PERIOD_CANCELLED")).isZero();
+  }
+
+  @Test
+  void outboxFailureRollsBackExceptionMutationAndIdempotencyResult() {
+    migrationJdbc.execute(
+        """
+        CREATE OR REPLACE FUNCTION agendamento.reject_agd012_outbox() RETURNS trigger
+        LANGUAGE plpgsql AS $$ BEGIN
+          IF NEW.event_type = 'ScheduleChanged' THEN RAISE EXCEPTION 'injected schedule outbox failure' USING ERRCODE = '23514'; END IF;
+          RETURN NEW;
+        END $$
+        """);
+    migrationJdbc.execute(
+        "CREATE TRIGGER reject_agd012_outbox BEFORE INSERT ON agendamento.outbox_event FOR EACH ROW EXECUTE FUNCTION agendamento.reject_agd012_outbox()");
+    try {
+      var date = LocalDate.now().plusDays(90);
+      assertThatThrownBy(
+              () ->
+                  mvc.perform(
+                      post("/api/v1/admin/schedule/exceptions")
+                          .with(authentication(token(actor)))
+                          .with(csrf())
+                          .header("Idempotency-Key", "rollback-exception-" + UUID.randomUUID())
+                          .contentType(MediaType.APPLICATION_JSON)
+                          .content(
+                              "{\"localDate\":\"%s\",\"kind\":\"CLOSED\",\"periods\":[]}"
+                                  .formatted(date))))
+          .isInstanceOf(Exception.class);
+    } catch (Exception exception) {
+      throw new AssertionError(exception);
+    } finally {
+      migrationJdbc.execute("DROP TRIGGER reject_agd012_outbox ON agendamento.outbox_event");
+      migrationJdbc.execute("DROP FUNCTION agendamento.reject_agd012_outbox()");
+    }
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.schedule_exception WHERE tenant_id = ?",
+                Integer.class,
+                tenantId))
+        .isZero();
+    assertThat(count("audit_event", "SCHEDULE_EXCEPTION_CREATED")).isZero();
+    assertThat(count("outbox_event", "ScheduleChanged")).isZero();
+    assertThat(count("idempotency_record", "availability.schedule-exception.create.v1")).isZero();
   }
 
   @Test
@@ -570,6 +1018,24 @@ class AvailabilityScheduleIT {
                     + "AND NOT has_table_privilege('agendamento_app', 'agendamento.availability_policy', 'DELETE')",
                 Boolean.class))
         .isTrue();
+    assertThat(
+            migrationJdbc.queryForObject(
+                "SELECT has_column_privilege('agendamento_app', 'agendamento.blocked_period', 'status', 'UPDATE') "
+                    + "AND has_column_privilege('agendamento_app', 'agendamento.blocked_period', 'cancellation_reason', 'UPDATE') "
+                    + "AND NOT has_column_privilege('agendamento_app', 'agendamento.blocked_period', 'starts_at', 'UPDATE') "
+                    + "AND NOT has_table_privilege('agendamento_app', 'agendamento.blocked_period', 'DELETE') "
+                    + "AND has_column_privilege('agendamento_app', 'agendamento.schedule_exception', 'local_date', 'UPDATE') "
+                    + "AND NOT has_column_privilege('agendamento_app', 'agendamento.schedule_exception', 'tenant_id', 'UPDATE') "
+                    + "AND has_column_privilege('agendamento_app', 'agendamento.schedule_revision', 'revision', 'UPDATE') "
+                    + "AND NOT has_table_privilege('agendamento_app', 'agendamento.schedule_revision', 'DELETE')",
+                Boolean.class))
+        .isTrue();
+    assertThatThrownBy(
+            () ->
+                appJdbc.update(
+                    "UPDATE agendamento.blocked_period SET starts_at = starts_at + interval '1 day' WHERE tenant_id = ?",
+                    tenantId))
+        .isInstanceOf(DataAccessException.class);
   }
 
   private boolean updateAfterBarrier(
@@ -582,6 +1048,23 @@ class AvailabilityScheduleIT {
     } catch (ScheduleVersionConflictException conflict) {
       return false;
     }
+  }
+
+  private int createExceptionAfterBarrier(
+      CountDownLatch ready, CountDownLatch start, LocalDate date) throws Exception {
+    ready.countDown();
+    start.await();
+    return mvc.perform(
+            post("/api/v1/admin/schedule/exceptions")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "exception-race-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    "{\"localDate\":\"%s\",\"kind\":\"CLOSED\",\"periods\":[]}".formatted(date)))
+        .andReturn()
+        .getResponse()
+        .getStatus();
   }
 
   private WeeklyPeriod period(String start, String end) {

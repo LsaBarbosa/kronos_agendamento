@@ -116,10 +116,13 @@ A disponibilidade de um serviço é a interseção de:
 
 ### 5.3 Exceções e bloqueios
 
-- Exceção substitui a grade de uma data: fechado, horário especial ou períodos adicionais.
-- Bloqueio administrativo ocupa um intervalo e pode ter motivo.
-- Não é permitido criar bloqueio sobre reserva confirmada sem resolver explicitamente o conflito.
-- Cancelar ou reduzir um bloqueio torna o intervalo novamente elegível após recomputação.
+- Ausência de exceção mantém a grade semanal. Exceção `CLOSED` fecha a data; `SPECIAL` substitui integralmente a grade pela lista final de períodos da data. A lista final pode manter períodos semanais e incluir períodos adicionais, escolhidos explicitamente pelo administrador. Remover a exceção restaura a aplicação da grade semanal.
+- Horários especiais usam a data e o timezone IANA do tenant. Cada limite local é múltiplo de 15 minutos, independentemente do slot; os intervalos são `[início,fim)`, adjacência é permitida, sobreposição é rejeitada, início é anterior ao fim e períodos não cruzam meia-noite.
+- Limites locais inexistentes por DST são rejeitados. Limites locais ambíguos sem offset explícito são rejeitados; a aplicação não ajusta horário nem escolhe offset implicitamente. Quando a entrada inclui offset, ele deve ser um offset válido para aquela data/hora na zona IANA confiável do tenant.
+- Bloqueio administrativo ocupa `[início,fim)`, pode atravessar meia-noite e datas diferentes, e seus limites locais são alinhados a 15 minutos. Motivo é obrigatório na criação e no cancelamento. A criação usa a zona IANA do tenant, rejeita hora local inexistente ou ambígua sem offset e valida offsets explícitos contra as regras da zona. A persistência guarda instantes UTC e a zona usada; um intervalo pode cruzar mudança de offset e sua duração real é a diferença entre os instantes, não uma duração presumida de dias civis.
+- Bloqueio que intersecta reserva confirmada é recusado. Não cancelar, mover ou ocultar reserva automaticamente. A confirmação de reserva e a criação de bloqueio precisarão de proteção transacional/constraint compartilhada quando reservas forem implementadas; um precheck isolado não resolve a corrida.
+- Cancelamento é lógico, preserva identidade, versão e histórico, e torna o intervalo elegível após recomputação. Não há regra geral de proibição de sobreposição entre bloqueios administrativos.
+- Exceções e bloqueios administrativos usam as rotas tenant-scoped do contrato administrativo; consultas exigem intervalo válido limitado a, no máximo, 366 datas locais inclusivas. Mudanças confirmadas emitem `ScheduleChanged` após gravação transacional. O mecanismo de cache/invalidação de disponibilidade depende de AGD-013.
 
 ### 5.4 Configurações
 
@@ -137,6 +140,7 @@ A disponibilidade de um serviço é a interseção de:
 - Em horário local inexistente devido à mudança de relógio, não oferecer o slot.
 - Em horário local ambíguo, representar cada instante possível separadamente ou omitir o horário até existir regra explícita; nunca confirmar usando conversão implícita.
 - A API devolve timestamps ISO 8601 com offset e o `timeZone` do tenant.
+- Para exceções e bloqueios administrativos, horários locais inexistentes ou ambíguos sem offset não são ajustados nem desambiguados automaticamente; entradas com offset precisam corresponder a uma ocorrência válida na zona IANA do tenant. Para bloqueios, os instantes UTC e a zona usada são persistidos.
 
 ## 6. Fluxo público de reserva
 

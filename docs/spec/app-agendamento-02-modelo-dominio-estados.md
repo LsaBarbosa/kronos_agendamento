@@ -77,7 +77,18 @@ Os relacionamentos com provedores externos usam referências opacas. Payload bru
 - Dois intervalos podem se tocar no limite: `[09:00, 10:00)` e `[10:00, 11:00)` não se sobrepõem.
 - Apenas reservas em estado ocupante entram na restrição; no MVP, `CONFIRMED`.
 
-### 4.4 Reserva
+### 4.4 Exceções e bloqueios administrativos
+
+- Não existir `ScheduleException` para tenant/data significa aplicar a grade semanal. `CLOSED` representa data sem atendimento; `SPECIAL` substitui a grade pela lista final de períodos, incluindo somente períodos que o administrador deseja manter ou adicionar. Remover o registro volta a aplicar a grade semanal.
+- Uma exceção é única por `(tenant_id, local_date)`, tem versão CAS e não atravessa meia-noite. Seus períodos são locais, `[start,end)`, limites em múltiplos de 15 minutos, início menor que fim, adjacência válida e sobreposição proibida por constraint PostgreSQL.
+- `SPECIAL` exige ao menos um período; `CLOSED` não contém períodos. Motivo da exceção é opcional e não participa de auditoria/outbox.
+- Cada limite local de horário especial precisa resolver para exatamente um instante na zona IANA do tenant. Sem offset, horário inexistente ou ambíguo é rejeitado. Offset explícito precisa pertencer aos offsets válidos da zona para aquela data/hora.
+- Bloqueio tem `starts_at < ends_at` em `timestamptz`, sem limite de mesma data; persiste `time_zone` usada na interpretação e os dois instantes UTC. Limites na representação local são alinhados a 15 minutos.
+- Motivo da criação é obrigatório. Cancelamento lógico exige novo motivo, mantém motivo original, `block_id`, instante de cancelamento e incrementa a versão CAS. Não há exclusão física nem restrição de não sobreposição entre bloqueios.
+- Criação de bloqueio deve consultar a porta de conflitos com reservas confirmadas. Enquanto appointments não tiver persistência, um adapter explicitamente limitado pode indicar que não há fonte de reservas; essa evidência não comprova integração nem concorrência futura. AGD-015 deverá integrar o armazenamento de reservas à proteção transacional compartilhada.
+- Mudança de exceção/bloqueio grava auditoria e `ScheduleChanged` na mesma transação. Payloads e detalhes de auditoria usam allowlist e não incluem motivos livres. A invalidação de cache real depende da implementação de disponibilidade em AGD-013.
+
+### 4.5 Reserva
 
 - Uma reserva confirmada referencia tenant, cliente e serviço existentes no mesmo tenant.
 - O intervalo escolhido é revalidado no commit.
@@ -86,21 +97,21 @@ Os relacionamentos com provedores externos usam referências opacas. Payload bru
 - Cancelamento e encerramento são idempotentes quando repetidos com o mesmo comando.
 - Uma transição inválida não é corrigida por `UPDATE` genérico.
 
-### 4.5 Cliente e falta
+### 4.6 Cliente e falta
 
 - Telefone normalizado é único por tenant entre clientes ativos, com política explícita para mesclagem.
 - Uma falta corresponde a uma transição confirmada de uma reserva.
 - Restrição de autoagendamento não apaga faltas e não impede acesso/cancelamento.
 - Desbloqueio manual registra autor e motivo.
 
-### 4.6 Assinatura
+### 4.7 Assinatura
 
 - Um tenant possui uma assinatura corrente.
 - Trial não é concedido novamente por simples cancelamento/recriação.
 - Transições financeiras dependem de fato autenticado ou consulta autoritativa ao provedor.
 - Evento do provedor é processado no máximo uma vez do ponto de vista lógico.
 
-### 4.7 Exportação
+### 4.8 Exportação
 
 - Critérios e snapshot não mudam depois do início.
 - No máximo um job ativo por tenant.

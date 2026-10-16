@@ -1,7 +1,11 @@
 package com.appagendamento.availability.api;
 
 import com.appagendamento.audit.api.AuditCorrelationId;
+import com.appagendamento.availability.domain.BlockedPeriodStateConflictException;
+import com.appagendamento.availability.domain.ConfirmedAppointmentConflictException;
 import com.appagendamento.availability.domain.ScheduleAccessDeniedException;
+import com.appagendamento.availability.domain.ScheduleExceptionAlreadyExistsException;
+import com.appagendamento.availability.domain.ScheduleResourceNotFoundException;
 import com.appagendamento.availability.domain.ScheduleValidationException;
 import com.appagendamento.availability.domain.ScheduleVersionConflictException;
 import com.appagendamento.idempotency.application.IdempotencyKeyReusedException;
@@ -14,7 +18,8 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-@RestControllerAdvice(assignableTypes = AdminScheduleController.class)
+@RestControllerAdvice(
+    assignableTypes = {AdminScheduleController.class, ScheduleExceptionMutationController.class})
 public class ScheduleExceptionHandler {
 
   private final AuditCorrelationId correlationId;
@@ -48,6 +53,27 @@ public class ScheduleExceptionHandler {
   ResponseEntity<ApiErrorResponse> accessDenied(
       ScheduleAccessDeniedException exception, HttpServletRequest request) {
     return error(request, HttpStatus.FORBIDDEN, "ACTION_NOT_ALLOWED", "Ação não permitida.");
+  }
+
+  @ExceptionHandler({ScheduleResourceNotFoundException.class})
+  ResponseEntity<ApiErrorResponse> notFound(
+      RuntimeException exception, HttpServletRequest request) {
+    return error(request, HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", "Recurso não encontrado.");
+  }
+
+  @ExceptionHandler({
+    ScheduleExceptionAlreadyExistsException.class,
+    BlockedPeriodStateConflictException.class,
+    ConfirmedAppointmentConflictException.class
+  })
+  ResponseEntity<ApiErrorResponse> stateConflict(
+      RuntimeException exception, HttpServletRequest request) {
+    String code =
+        exception instanceof ConfirmedAppointmentConflictException
+            ? "CONFIRMED_APPOINTMENT_CONFLICT"
+            : "STATE_CONFLICT";
+    return error(
+        request, HttpStatus.CONFLICT, code, "A operação não pode ser aplicada ao estado atual.");
   }
 
   @ExceptionHandler(IdempotencyKeyReusedException.class)

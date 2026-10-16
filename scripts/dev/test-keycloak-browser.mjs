@@ -139,10 +139,20 @@ try {
     if (!sessionAfterLogin.httpOnly || sessionAfterLogin.sameSite !== 'Lax') {
         throw new Error('Cookie autenticado não tem HttpOnly e SameSite=Lax.');
     }
+    const authenticatedSession = await evaluate(
+        "fetch('/api/v1/admin/session', {credentials:'same-origin'}).then(response => response.json())",
+    );
+    if (
+        !authenticatedSession.authenticated ||
+        authenticatedSession.tenantId !== credentials.DEMO_TENANT_ID
+    ) {
+        throw new Error(
+            `Sessão autenticada diverge do tenant de demonstração: esperado ${credentials.DEMO_TENANT_ID}, recebido ${authenticatedSession.tenantId}.`,
+        );
+    }
     const tenantDisplayed = await evaluate(
-        "document.body.innerText.includes(" +
-            JSON.stringify(credentials.DEMO_TENANT_ID) +
-            ')',
+        "document.querySelector('p code')?.textContent === " +
+            JSON.stringify(authenticatedSession.tenantId),
     );
     if (!tenantDisplayed) throw new Error('Tenant autorizado não apareceu na UI.');
     await waitForText('Catálogo de serviços', evaluate);
@@ -247,6 +257,95 @@ try {
         throw new Error('Grade/políticas não persistiram ou divergiram após recarregar.');
     }
     console.log('Browser: grade semanal e políticas salvas, recarregadas e confirmadas pela API.');
+    const exceptionDate = new Date(Date.now() + 45 * 86400_000)
+        .toISOString()
+        .slice(0, 10);
+    await setFieldByLabel('Data local', exceptionDate, evaluate);
+    await waitForText('Nenhuma exceção nesta data; aplica-se a grade semanal.', evaluate);
+    await setSelectByLabel('Tratamento da data', 'CLOSED', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        if (String(args[0]).endsWith('/v1/admin/schedule/exceptions') && args[1]?.method === 'POST' && response.ok) {
+          window.fetch = originalFetch;
+          throw new TypeError('Falha de rede simulada após commit');
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Salvar exceção', evaluate);
+    await waitForText('Falha de rede simulada após commit', evaluate);
+    await clickButtonByText('Salvar exceção', evaluate);
+    await waitForText('Exceção persistida.', evaluate);
+    let exceptionRows = await evaluate(
+        `fetch('/api/v1/admin/schedule/exceptions?from=${exceptionDate}&to=${exceptionDate}', {credentials:'same-origin'}).then(response => response.json())`,
+    );
+    if (exceptionRows.exceptions.length !== 1 || exceptionRows.exceptions[0].kind !== 'CLOSED') {
+        throw new Error('Exceção fechada não persistiu.');
+    }
+    await clickButtonByText('Remover exceção e restaurar grade', evaluate);
+    await waitForText('Exceção removida; a grade semanal volta a ser aplicada.', evaluate);
+    await waitUntil(async () => (await evaluate(
+        `fetch('/api/v1/admin/schedule/exceptions?from=${exceptionDate}&to=${exceptionDate}', {credentials:'same-origin'}).then(response => response.json()).then(result => result.exceptions.length)`,
+    )) === 0);
+    await setSelectByLabel('Tratamento da data', 'SPECIAL', evaluate);
+    await evaluate(`(() => {
+      const section = document.querySelector('section[aria-labelledby="exceptions-title"]');
+      [...section.querySelectorAll('button')].find(button => button.innerText.trim() === 'Adicionar período').click();
+    })()`);
+    await setFieldByLabel('Início local', '09:00', evaluate);
+    await setFieldByLabel('Fim local', '11:00', evaluate);
+    await clickButtonByText('Salvar exceção', evaluate);
+    await waitForText('Exceção persistida.', evaluate);
+    await clickButtonByText('Recarregar', evaluate);
+    exceptionRows = await evaluate(
+        `fetch('/api/v1/admin/schedule/exceptions?from=${exceptionDate}&to=${exceptionDate}', {credentials:'same-origin'}).then(response => response.json())`,
+    );
+    if (exceptionRows.exceptions.length !== 1 || exceptionRows.exceptions[0].kind !== 'SPECIAL' || exceptionRows.exceptions[0].periods[0].localStart !== '09:00') {
+        throw new Error(`Horário especial não persistiu após recarregar: ${JSON.stringify(exceptionRows.exceptions.map(item => ({kind:item.kind,periods:item.periods,version:item.version,timeZone:item.timeZone})))}`);
+    }
+    const outsideRangeDate = new Date(Date.now() + 60 * 86400_000)
+        .toISOString()
+        .slice(0, 10);
+    await setFieldByLabel('Data local', outsideRangeDate, evaluate);
+    await waitForText('Nenhuma exceção nesta data; aplica-se a grade semanal.', evaluate);
+    await setFieldByLabel('Data local', exceptionDate, evaluate);
+    await waitForText(`Editar ${exceptionDate}: SPECIAL (v1)`, evaluate);
+    await clickButtonByText(`Editar ${exceptionDate}: SPECIAL (v1)`, evaluate);
+    await setFieldByLabel('Motivo (opcional)', 'Edição E2E', evaluate);
+    await clickButtonByText('Salvar exceção', evaluate);
+    await waitForText('Exceção persistida.', evaluate);
+    exceptionRows = await evaluate(
+        `fetch('/api/v1/admin/schedule/exceptions?from=${exceptionDate}&to=${exceptionDate}', {credentials:'same-origin'}).then(response => response.json())`,
+    );
+    if (
+        exceptionRows.exceptions.length !== 1 ||
+        exceptionRows.exceptions[0].version !== 2 ||
+        exceptionRows.exceptions[0].reason !== 'Edição E2E'
+    ) {
+        throw new Error('Edição da exceção fora do intervalo inicial não persistiu.');
+    }
+    await clickButtonByText('Remover exceção e restaurar grade', evaluate);
+    await waitForText('Exceção removida; a grade semanal volta a ser aplicada.', evaluate);
+    const blockDay = exceptionDate;
+    await setFieldByLabel('Início local', blockDay + 'T09:00', evaluate);
+    await setFieldByLabel('Fim local', blockDay + 'T10:00', evaluate);
+    await setFieldByLabel('Motivo obrigatório', 'Manutenção E2E', evaluate);
+    await clickButtonByText('Criar bloqueio', evaluate);
+    await waitForText('Bloqueio persistido.', evaluate);
+    const createdBlocks = await evaluate(
+        `fetch('/api/v1/admin/blocked-periods?from=${blockDay}&to=${blockDay}', {credentials:'same-origin'}).then(response => response.json())`,
+    );
+    if (createdBlocks.length !== 1 || createdBlocks[0].status !== 'ACTIVE') {
+        throw new Error('Bloqueio não apareceu na consulta após criação.');
+    }
+    await setFieldByLabel('Motivo do cancelamento', 'Concluído E2E', evaluate);
+    await clickButtonByText('Cancelar bloqueio', evaluate);
+    await waitUntil(async () => (await evaluate(
+        `fetch('/api/v1/admin/blocked-periods?from=${blockDay}&to=${blockDay}', {credentials:'same-origin'}).then(response => response.json()).then(rows => rows[0]?.status)`,
+    )) === 'CANCELLED');
+    console.log('Browser: exceção fechada, horário especial, restauração e bloqueio cancelado persistem após reload.');
     await setFieldByAriaLabel('Segunda-feira início 1', '08:00', evaluate);
     const concurrentUpdateStatus = await evaluate(`(async () => {
       const [currentResponse, csrfResponse] = await Promise.all([
@@ -674,7 +773,7 @@ async function waitForText(text, evaluate, selector = false) {
         });
     } catch (error) {
         const diagnostic = await evaluate(
-            `JSON.stringify({page: location.origin + location.pathname, title: document.title, heading: document.querySelector("h1")?.innerText, output: document.querySelector("output")?.innerText, recentHttpResponses: ${JSON.stringify(recentHttpResponses)}})`,
+            `JSON.stringify({page: location.origin + location.pathname, title: document.title, heading: document.querySelector("h1")?.innerText, output: document.querySelector("output")?.innerText, alerts: [...document.querySelectorAll('[role="alert"]')].map(item => item.innerText).filter(Boolean).slice(0, 5), recentHttpResponses: ${JSON.stringify(recentHttpResponses)}})`,
         );
         throw new Error(`Estado ${text} não alcançado: ${diagnostic}`, { cause: error });
     }
