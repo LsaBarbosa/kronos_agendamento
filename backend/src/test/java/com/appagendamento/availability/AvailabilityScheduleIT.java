@@ -13,15 +13,30 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.appagendamento.availability.application.AppointmentOccupancyQuery;
+import com.appagendamento.availability.application.CalculateAvailabilityForDate;
+import com.appagendamento.availability.application.ManageBlockedPeriods;
+import com.appagendamento.availability.application.ManageScheduleExceptions;
 import com.appagendamento.availability.application.ReplaceAvailabilityPolicy;
 import com.appagendamento.availability.application.ReplaceWeeklySchedule;
+import com.appagendamento.availability.application.ScheduleRepository;
+import com.appagendamento.availability.domain.BoundaryInclusion;
+import com.appagendamento.availability.domain.ScheduleExceptionKind;
 import com.appagendamento.availability.domain.ScheduleVersionConflictException;
+import com.appagendamento.availability.domain.SlotGridAnchor;
+import com.appagendamento.availability.domain.SpecialPeriod;
 import com.appagendamento.availability.domain.WeeklyPeriod;
+import com.appagendamento.catalog.api.ServiceAvailabilityQuery;
+import com.appagendamento.catalog.application.CreateService;
+import com.appagendamento.catalog.domain.ServiceStatus;
 import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import com.appagendamento.support.PostgresTestEnvironment;
+import java.time.Clock;
 import java.time.DayOfWeek;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -65,6 +80,11 @@ class AvailabilityScheduleIT {
   @Autowired private JdbcTemplate appJdbc;
   @Autowired private ReplaceWeeklySchedule replaceWeeklySchedule;
   @Autowired private ReplaceAvailabilityPolicy replaceAvailabilityPolicy;
+  @Autowired private CreateService createService;
+  @Autowired private ServiceAvailabilityQuery serviceAvailabilityQuery;
+  @Autowired private ScheduleRepository scheduleRepository;
+  @Autowired private ManageBlockedPeriods manageBlockedPeriods;
+  @Autowired private ManageScheduleExceptions manageScheduleExceptions;
   @Autowired private MockMvc mvc;
   private JdbcTemplate migrationJdbc;
   private UUID tenantId;
@@ -122,6 +142,135 @@ class AvailabilityScheduleIT {
         .andExpect(jsonPath("$.configured").value(true))
         .andExpect(jsonPath("$.version").value(1))
         .andExpect(jsonPath("$.periods").isEmpty());
+  }
+
+  @Test
+  void calculatesFromPostgresSourcesWithClockAndTestOccupancyWithoutWriting() {
+    LocalDate date = LocalDate.of(2026, 10, 19);
+    replaceWeeklySchedule.execute(
+        actor,
+        "availability-calc-week-" + UUID.randomUUID(),
+        0,
+        List.of(new WeeklyPeriod(DayOfWeek.MONDAY, LocalTime.of(9, 0), LocalTime.NOON)));
+    replaceAvailabilityPolicy.execute(
+        actor, "availability-calc-policy-" + UUID.randomUUID(), 0, 30, 1, 7, 2, 2);
+    var service =
+        createService
+            .execute(
+                actor,
+                "availability-calc-service-" + UUID.randomUUID(),
+                "Availability service",
+                null,
+                30,
+                15,
+                ServiceStatus.ACTIVE)
+            .value();
+    var block =
+        manageBlockedPeriods
+            .create(
+                actor,
+                "availability-calc-block-" + UUID.randomUUID(),
+                "2026-10-19T09:45:00-03:00",
+                "2026-10-19T10:00:00-03:00",
+                "test fixture")
+            .value();
+    Instant occupiedStart = Instant.parse("2026-10-19T13:15:00Z");
+    AppointmentOccupancyQuery testOccupancies =
+        (requestedTenant, from, to) -> {
+          assertThat(requestedTenant).isEqualTo(tenantId);
+          assertThat(from).isEqualTo(date.atStartOfDay(ZoneId.of("America/Sao_Paulo")).toInstant());
+          assertThat(to)
+              .isEqualTo(date.plusDays(1).atStartOfDay(ZoneId.of("America/Sao_Paulo")).toInstant());
+          return List.of(
+              new com.appagendamento.availability.domain.OccupiedInterval(
+                  occupiedStart, occupiedStart.plusSeconds(15 * 60L)));
+        };
+    CalculateAvailabilityForDate calculation =
+        new CalculateAvailabilityForDate(
+            scheduleRepository,
+            serviceAvailabilityQuery,
+            testOccupancies,
+            Clock.fixed(Instant.parse("2026-10-19T11:00:00Z"), ZoneId.of("UTC")));
+    int auditBefore = countForTenant("audit_event");
+    int outboxBefore = countForTenant("outbox_event");
+
+    var result =
+        calculation.execute(
+            tenantId,
+            service.serviceId(),
+            date,
+            SlotGridAnchor.PERIOD_START,
+            BoundaryInclusion.INCLUSIVE,
+            BoundaryInclusion.INCLUSIVE);
+
+    assertThat(result.configured()).isTrue();
+    assertThat(result.timeZone()).isEqualTo("America/Sao_Paulo");
+    assertThat(result.slots())
+        .extracting(slot -> slot.startsAt(ZoneId.of(result.timeZone())).toLocalTime().toString())
+        .containsExactly("09:00", "10:30", "11:00");
+    assertThat(result.offsetAwareSlots().getFirst().startsAt().getOffset().getId())
+        .isEqualTo("-03:00");
+    assertThat(countForTenant("audit_event")).isEqualTo(auditBefore);
+    assertThat(countForTenant("outbox_event")).isEqualTo(outboxBefore);
+
+    manageBlockedPeriods.cancel(
+        actor,
+        "availability-calc-cancel-" + UUID.randomUUID(),
+        block.blockId(),
+        block.version(),
+        "block ended");
+    var restoredByBlockCancellation =
+        calculation.execute(
+            tenantId,
+            service.serviceId(),
+            date,
+            SlotGridAnchor.PERIOD_START,
+            BoundaryInclusion.INCLUSIVE,
+            BoundaryInclusion.INCLUSIVE);
+    assertThat(localStarts(restoredByBlockCancellation))
+        .containsExactly("09:00", "09:30", "10:30", "11:00");
+
+    var special =
+        manageScheduleExceptions
+            .create(
+                actor,
+                "availability-calc-special-" + UUID.randomUUID(),
+                date,
+                ScheduleExceptionKind.SPECIAL,
+                List.of(new SpecialPeriod(LocalTime.of(13, 0), LocalTime.of(14, 0))),
+                null)
+            .value();
+    var specialResult =
+        calculation.execute(
+            tenantId,
+            service.serviceId(),
+            date,
+            SlotGridAnchor.PERIOD_START,
+            BoundaryInclusion.INCLUSIVE,
+            BoundaryInclusion.INCLUSIVE);
+    assertThat(localStarts(specialResult)).containsExactly("13:00");
+    manageScheduleExceptions.remove(
+        actor,
+        "availability-calc-remove-special-" + UUID.randomUUID(),
+        special.exceptionId(),
+        special.version());
+    var restoredByExceptionRemoval =
+        calculation.execute(
+            tenantId,
+            service.serviceId(),
+            date,
+            SlotGridAnchor.PERIOD_START,
+            BoundaryInclusion.INCLUSIVE,
+            BoundaryInclusion.INCLUSIVE);
+    assertThat(localStarts(restoredByExceptionRemoval))
+        .containsExactly("09:00", "09:30", "10:30", "11:00");
+  }
+
+  private static List<String> localStarts(
+      com.appagendamento.availability.application.AvailabilityDayResult result) {
+    return result.slots().stream()
+        .map(slot -> slot.startsAt(ZoneId.of(result.timeZone())).toLocalTime().toString())
+        .toList();
   }
 
   @Test
@@ -1293,6 +1442,13 @@ class AvailabilityScheduleIT {
         Integer.class,
         tenantId,
         key);
+  }
+
+  private int countForTenant(String table) {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento." + table + " WHERE tenant_id = ?",
+        Integer.class,
+        tenantId);
   }
 
   private static AuthenticatedAdmin authenticatedAdmin(

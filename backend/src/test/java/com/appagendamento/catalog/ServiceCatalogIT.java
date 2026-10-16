@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.appagendamento.catalog.api.ServiceAvailabilityQuery;
 import com.appagendamento.catalog.application.CreateService;
 import com.appagendamento.catalog.application.GetService;
 import com.appagendamento.catalog.application.ListServices;
@@ -66,6 +67,7 @@ class ServiceCatalogIT {
   @Autowired private SetServiceStatus setServiceStatus;
   @Autowired private GetService getService;
   @Autowired private ListServices listServices;
+  @Autowired private ServiceAvailabilityQuery serviceAvailabilityQuery;
   @Autowired private MockMvc mvc;
   private JdbcTemplate migrationJdbc;
 
@@ -151,6 +153,62 @@ class ServiceCatalogIT {
     assertThat(count("service", tenant)).isEqualTo(1);
     assertThat(count("audit_event", tenant)).isEqualTo(1);
     assertThat(count("outbox_event", tenant)).isEqualTo(1);
+  }
+
+  @Test
+  void availabilityReadIsTenantScopedAndReportsServiceActivityAndOccupancyInputs() {
+    UUID firstTenant = tenant();
+    UUID secondTenant = tenant();
+    AuthenticatedAdmin firstActor = actor(firstTenant);
+    AuthenticatedAdmin secondActor = actor(secondTenant);
+    Service active =
+        createService
+            .execute(
+                firstActor,
+                "availability-active-" + suffix(),
+                "Active",
+                null,
+                45,
+                15,
+                ServiceStatus.ACTIVE)
+            .value();
+    Service inactive =
+        createService
+            .execute(
+                firstActor,
+                "availability-inactive-" + suffix(),
+                "Inactive",
+                null,
+                30,
+                0,
+                ServiceStatus.INACTIVE)
+            .value();
+    Service otherTenantService =
+        createService
+            .execute(
+                secondActor,
+                "availability-other-" + suffix(),
+                "Other",
+                null,
+                60,
+                30,
+                ServiceStatus.ACTIVE)
+            .value();
+
+    assertThat(serviceAvailabilityQuery.findForAvailability(firstTenant, active.serviceId()))
+        .hasValueSatisfying(
+            value -> {
+              assertThat(value.tenantId()).isEqualTo(firstTenant);
+              assertThat(value.active()).isTrue();
+              assertThat(value.durationMinutes()).isEqualTo(45);
+              assertThat(value.bufferAfterMinutes()).isEqualTo(15);
+            });
+    assertThat(serviceAvailabilityQuery.findForAvailability(firstTenant, inactive.serviceId()))
+        .hasValueSatisfying(value -> assertThat(value.active()).isFalse());
+    assertThat(
+            serviceAvailabilityQuery.findForAvailability(
+                firstTenant, otherTenantService.serviceId()))
+        .isEmpty();
   }
 
   @Test

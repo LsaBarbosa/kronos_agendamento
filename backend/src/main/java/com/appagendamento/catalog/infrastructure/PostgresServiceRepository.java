@@ -1,5 +1,7 @@
 package com.appagendamento.catalog.infrastructure;
 
+import com.appagendamento.catalog.api.ServiceAvailabilityQuery;
+import com.appagendamento.catalog.api.ServiceAvailabilityView;
 import com.appagendamento.catalog.application.ServiceRepository;
 import com.appagendamento.catalog.domain.Service;
 import com.appagendamento.catalog.domain.ServiceNameAlreadyExistsException;
@@ -16,7 +18,7 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public class PostgresServiceRepository implements ServiceRepository {
+public class PostgresServiceRepository implements ServiceRepository, ServiceAvailabilityQuery {
 
   private static final RowMapper<Service> SERVICE_ROW_MAPPER =
       PostgresServiceRepository::mapService;
@@ -69,6 +71,28 @@ public class PostgresServiceRepository implements ServiceRepository {
             WHERE tenant_id = ? AND service_id = ?
             """,
             SERVICE_ROW_MAPPER,
+            tenantId,
+            serviceId)
+        .stream()
+        .findFirst();
+  }
+
+  @Override
+  public Optional<ServiceAvailabilityView> findForAvailability(UUID tenantId, UUID serviceId) {
+    return jdbc
+        .query(
+            """
+            SELECT service_id, tenant_id, status, duration_minutes, buffer_after_minutes
+            FROM agendamento.service
+            WHERE tenant_id = ? AND service_id = ?
+            """,
+            (result, row) ->
+                new ServiceAvailabilityView(
+                    result.getObject("service_id", UUID.class),
+                    result.getObject("tenant_id", UUID.class),
+                    ServiceStatus.valueOf(result.getString("status")) == ServiceStatus.ACTIVE,
+                    result.getInt("duration_minutes"),
+                    result.getInt("buffer_after_minutes")),
             tenantId,
             serviceId)
         .stream()
