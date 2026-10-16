@@ -87,3 +87,12 @@ Correção da revisão do PR #4 (`01f3c62`, formatação `9852453`): resultado d
 | Schema e arquitetura de cache | ADR-0012, V1–V11 e revisão do módulo `appointments` | Nenhuma migration: schema existente basta. Sem cache, Redis, broker ou invalidação real. `ScheduleChanged` não é considerado invalidação. `appointments` ainda não contém reserva persistida/consulta produtiva. |
 | Decisões e pendências | Requisitos 01 §5.6, 02 §12, 03 disponibilidade, ADR-0012 e `OPEN-QUESTIONS.md` | Decisões temporais agora aprovadas em 16/10/2026 e removidas das dúvidas abertas. Pendem: gate/experiência pública AGD-014, ocupações e proteção concorrente AGD-015, homologação HTTPS/staging, preflight hospedado, retenção e scan completo de dependências. |
 | Publicação e CI do contrato por janela | [PR #8](https://github.com/LsaBarbosa/kronos_agendamento/pull/8), branch `agd-013-motor-disponibilidade` | No head `94dbf11c035e86f27f68629e0b2075ed317ff297`, App CI push/PR [38921233486](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38921233486)/[38921243280](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38921243280) e CodeQL push/PR [38921233589](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38921233589)/[38921243619](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38921243619) passaram. O PR foi retirado do draft para revisão; sem merge/deploy. |
+
+### Revisão corretiva PR #8
+
+| Achado/requisito | Correção e evidência | Estado |
+|---|---|---|
+| Serviço inativo não pode produzir oferta | Caso de uso agora falha com erro não revelador; `AvailabilityScheduleIT` verifica status persistido | Gate local completo passou: 58 testes unitários/arquiteturais e 74 integrações PostgreSQL 16.13/Testcontainers; novo CI aguarda publicação |
+| Offset explícito em início SPECIAL ambíguo | Gerador usa o offset persistido somente na âncora; candidatos ambíguos seguintes continuam omitidos | Testes de domínio passaram no gate completo; nenhuma escolha implícita de offset |
+| `explicitlyClosed` fora do horizonte | Consulta carrega exceções em toda a janela e mantém o marcador com slots vazios fora do horizonte | Teste PostgreSQL de janela passou |
+| Revisão e integração | Dois agentes independentes em leitura; nenhuma aprovação humana registrada até esta revisão | PR #8 ainda aberto; aguardar checks do head final e confirmar regras GitHub |

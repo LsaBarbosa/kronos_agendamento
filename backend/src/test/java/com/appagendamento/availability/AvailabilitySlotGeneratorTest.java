@@ -93,7 +93,7 @@ class AvailabilitySlotGeneratorTest {
   }
 
   @Test
-  void explicitValidOffsetsResolvePeriodEdgesButDoNotChooseAmbiguousSlotStarts() {
+  void explicitStartOffsetSelectsAmbiguousAnchorButDoesNotSelectLaterAmbiguousCandidates() {
     ZoneId newYork = ZoneId.of("America/New_York");
     List<AvailabilitySlot> slots =
         generate(
@@ -107,7 +107,9 @@ class AvailabilitySlotGeneratorTest {
             15,
             0);
 
-    assertThat(slots).isEmpty();
+    assertThat(slots).hasSize(1);
+    assertThat(slots.getFirst().startsAt())
+        .isEqualTo(LocalDate.of(2026, 11, 1).atTime(1, 0).toInstant(ZoneOffset.ofHours(-4)));
   }
 
   @Test

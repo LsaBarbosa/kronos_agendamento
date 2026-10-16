@@ -74,10 +74,16 @@ public final class AvailabilitySlotGenerator {
       LocalTime candidateTime = LocalTime.of(minuteOfDay / 60, minuteOfDay % 60);
       LocalDateTime candidateLocal = date.atTime(candidateTime);
       List<ZoneOffset> validOffsets = zone.getRules().getValidOffsets(candidateLocal);
-      if (validOffsets.size() != 1) {
+      ZoneOffset candidateOffset =
+          validOffsets.size() == 1
+              ? validOffsets.getFirst()
+              : candidateLocal.equals(localPeriodStart) && validOffsets.contains(startOffset)
+                  ? startOffset
+                  : null;
+      if (candidateOffset == null) {
         continue;
       }
-      var startsAt = candidateLocal.toInstant(validOffsets.getFirst());
+      var startsAt = candidateLocal.toInstant(candidateOffset);
       var serviceEndsAt = startsAt.plus(serviceDuration);
       var occupiedUntil = serviceEndsAt.plus(buffer);
       if (!startsAt.isBefore(periodStart) && !occupiedUntil.isAfter(periodEnd)) {

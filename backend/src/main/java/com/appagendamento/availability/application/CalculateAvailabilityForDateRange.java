@@ -9,6 +9,7 @@ import com.appagendamento.availability.domain.AvailabilityTemporalWindow;
 import com.appagendamento.availability.domain.BlockedPeriodStatus;
 import com.appagendamento.availability.domain.OccupiedInterval;
 import com.appagendamento.availability.domain.ScheduleException;
+import com.appagendamento.availability.domain.ScheduleExceptionKind;
 import com.appagendamento.availability.domain.WeeklySchedule;
 import com.appagendamento.catalog.api.ServiceAvailabilityQuery;
 import com.appagendamento.catalog.api.ServiceAvailabilityView;
@@ -67,6 +68,9 @@ public class CalculateAvailabilityForDateRange {
         || !weekly.tenantId().equals(tenantId)) {
       throw new AvailabilityServiceNotFoundException();
     }
+    if (!serviceView.active()) {
+      throw new AvailabilityServiceNotFoundException();
+    }
     ZoneId zone = ScheduleException.zone(weekly.timeZone());
     Optional<AvailabilityPolicy> policy = schedules.findAvailabilityPolicy(tenantId);
     if (policy.isPresent() && !policy.get().tenantId().equals(tenantId)) {
@@ -91,10 +95,9 @@ public class CalculateAvailabilityForDateRange {
     AvailabilityTemporalWindow temporalWindow =
         policy.map(value -> AvailabilityTemporalWindow.from(generatedAt, zone, value)).orElse(null);
 
-    List<ScheduleException> exceptions = List.of();
+    List<ScheduleException> exceptions = schedules.findScheduleExceptions(tenantId, from, to);
     List<OccupiedInterval> allOccupied = List.of();
     if (hasEligibleDates && weekly.configured() && policy.isPresent() && service.active()) {
-      exceptions = schedules.findScheduleExceptions(tenantId, fromEligible, toEligible);
       Instant rangeStart = fromEligible.atStartOfDay(zone).toInstant();
       Instant rangeEnd = toEligible.plusDays(1).atStartOfDay(zone).toInstant();
       List<OccupiedInterval> blocked =
@@ -116,7 +119,9 @@ public class CalculateAvailabilityForDateRange {
     for (long offset = 0; offset < requestedDates; offset++) {
       LocalDate date = from.plusDays(offset);
       List<AvailabilityDateResult.AvailabilitySlotView> slots = List.of();
-      boolean explicitlyClosed = false;
+      ScheduleException exception = exceptionsByDate.get(date);
+      boolean explicitlyClosed =
+          exception != null && exception.kind() == ScheduleExceptionKind.CLOSED;
       if (hasEligibleDates
           && !date.isBefore(fromEligible)
           && !date.isAfter(toEligible)
@@ -124,8 +129,7 @@ public class CalculateAvailabilityForDateRange {
           && policy.isPresent()
           && service.active()) {
         AvailabilityDaySchedule day =
-            AvailabilityDaySchedule.resolve(
-                tenantId, date, weekly, Optional.ofNullable(exceptionsByDate.get(date)));
+            AvailabilityDaySchedule.resolve(tenantId, date, weekly, Optional.ofNullable(exception));
         explicitlyClosed = day.explicitlyClosed();
         AvailabilityCalculation calculation =
             AvailabilitySlotCalculator.calculate(

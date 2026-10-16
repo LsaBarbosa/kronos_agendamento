@@ -42,4 +42,6 @@
 
 Incremento corrente: AGD-013 — Motor de disponibilidade. Não habilitar publicação pública.
 
+Revisão corretiva final do PR #8: revisores independentes encontraram e a implementação corrigiu comportamento de serviço inativo, âncora SPECIAL com offset explícito na repetição DST e marcador `explicitlyClosed` fora do horizonte. `spotless:check verify` passou no conteúdo corrigido com 58 testes unitários/arquiteturais e 74 integrações PostgreSQL 16.13/Testcontainers; V1–V11 preservadas. O SHA remoto anterior e seus checks não validam esse delta; o head final corrigido e novas execuções ainda precisam ser registrados. Revisão por agentes não é aprovação humana.
+
 Revisão de integração AGD-010 em 15/10/2026: corrigida a identidade idempotente de retries na UI; decisões de buffer/bloqueio público registradas em ADR-0009 e requisitos. Validação do novo head e integração serão registradas no PR #5. Sem deploy.

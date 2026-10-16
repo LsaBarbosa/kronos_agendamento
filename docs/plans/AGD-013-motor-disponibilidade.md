@@ -90,3 +90,10 @@ Pendências não pertencentes a esse contrato: publicação/gate e experiência 
 
 - Próxima ação imediata: publicar contrato e implementação no mesmo PR #8 e revisar checks remotos. Revisores independentes não estavam disponíveis neste ambiente; a revisão local foi sequencial.
 - Próxima história prevista após AGD-013: AGD-014 — Página pública. Confirmação de reserva e exclusão concorrente final seguem em AGD-015.
+
+### Revisão final corretiva
+
+- Dois revisores independentes em leitura identificaram três desalinhamentos: serviço inativo parecia uma oferta vazia; uma âncora SPECIAL com offset explícito na repetição DST era omitida; `explicitlyClosed` não era preservado fora do horizonte.
+- Corrigido: serviço inativo retorna erro não revelador; somente a âncora ambígua pode usar o offset explicitamente persistido; exceções são carregadas na janela solicitada para manter o marcador de fechamento, sem gerar slots fora do horizonte.
+- `spotless:check verify` no conteúdo corrigido (antes do commit) passou em JDK 21: 58 testes unitários/arquiteturais e 74 integrações em PostgreSQL 16.13/Testcontainers. V1–V11 validadas e preservadas. Checks remotos do SHA anterior não cobrem esta correção.
+- Revisão por agentes não equivale à aprovação humana no GitHub. A integração segue condicionada a checks finais e regras do repositório.

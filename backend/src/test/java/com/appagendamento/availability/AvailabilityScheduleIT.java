@@ -15,6 +15,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.appagendamento.availability.application.AppointmentOccupancyQuery;
 import com.appagendamento.availability.application.AvailabilityReadTransaction;
+import com.appagendamento.availability.application.AvailabilityServiceNotFoundException;
 import com.appagendamento.availability.application.CalculateAvailabilityForDateRange;
 import com.appagendamento.availability.application.InvalidAvailabilityWindowException;
 import com.appagendamento.availability.application.ManageBlockedPeriods;
@@ -290,6 +291,13 @@ class AvailabilityScheduleIT {
                 ServiceStatus.ACTIVE)
             .value()
             .serviceId();
+    manageScheduleExceptions.create(
+        actor,
+        "range-closed-outside-horizon-" + UUID.randomUUID(),
+        first.plusDays(7),
+        ScheduleExceptionKind.CLOSED,
+        List.of(),
+        null);
 
     var oneDate = calculator.execute(tenantId, serviceId, first, first);
     assertThat(oneDate.days()).hasSize(1).extracting(day -> day.date()).containsExactly(first);
@@ -300,12 +308,48 @@ class AvailabilityScheduleIT {
     assertThat(thirtyOneDates.days().get(6).slots()).isNotEmpty();
     assertThat(thirtyOneDates.days().get(7).date()).isEqualTo(LocalDate.of(2026, 10, 23));
     assertThat(thirtyOneDates.days().get(7).slots()).isEmpty();
+    assertThat(thirtyOneDates.days().get(7).explicitlyClosed()).isTrue();
     assertThat(thirtyOneDates.days().get(3).slots()).isNotEmpty();
     assertThat(countingClock.calls()).isEqualTo(2);
     assertThatThrownBy(() -> calculator.execute(tenantId, serviceId, first, first.plusDays(31)))
         .isInstanceOf(InvalidAvailabilityWindowException.class);
     assertThatThrownBy(() -> calculator.execute(tenantId, serviceId, first.plusDays(1), first))
         .isInstanceOf(InvalidAvailabilityWindowException.class);
+  }
+
+  @Test
+  void rejectsInactiveServiceForAvailabilityInsteadOfReturningAnEmptyOffer() {
+    var service =
+        createService
+            .execute(
+                actor,
+                "inactive-availability-" + UUID.randomUUID(),
+                "Inactive availability",
+                null,
+                30,
+                0,
+                ServiceStatus.ACTIVE)
+            .value();
+    migrationJdbc.update(
+        "UPDATE agendamento.service SET status = 'INACTIVE' WHERE tenant_id = ? AND service_id = ?",
+        tenantId,
+        service.serviceId());
+    var calculator =
+        new CalculateAvailabilityForDateRange(
+            availabilityReadTransaction,
+            scheduleRepository,
+            serviceAvailabilityQuery,
+            (requestedTenant, from, to) -> List.of(),
+            Clock.fixed(Instant.parse("2026-10-16T12:00:00Z"), ZoneId.of("UTC")));
+
+    assertThatThrownBy(
+            () ->
+                calculator.execute(
+                    tenantId,
+                    service.serviceId(),
+                    LocalDate.of(2026, 10, 16),
+                    LocalDate.of(2026, 10, 16)))
+        .isInstanceOf(AvailabilityServiceNotFoundException.class);
   }
 
   private static final class CountingClock extends Clock {
