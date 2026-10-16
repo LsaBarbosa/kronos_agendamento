@@ -36,7 +36,7 @@ public record AuditEvent(
                     || actorRef.equals("CONTROLLED_DEMO_PROVISIONER")))
         || !result.equals("COMMITTED")
         || !action.matches(
-            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)")) {
+            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)|PUBLICATION_(PUBLISHED|UNPUBLISHED)|PUBLIC_PROFILE_UPDATED")) {
       throw new IllegalArgumentException("Ator ou resultado de auditoria inválido");
     }
     if ((actorType.equals("ADMIN") && actorId == null)
@@ -83,6 +83,14 @@ public record AuditEvent(
               actorType.equals("ADMIN")
                   && detailsJson.matches(
                       "\\{\\\"changed_fields\\\":\\[\\\"blocked_period\\\"\\],\\\"version_before\\\":[0-9]+,\\\"version_after\\\":[0-9]+\\}");
+          case "PUBLICATION_PUBLISHED", "PUBLICATION_UNPUBLISHED" ->
+              actorType.equals("ADMIN")
+                  && detailsJson.matches(
+                      "\\{\\\"changed_fields\\\":\\[\\\"publication\\\"\\],\\\"version_before\\\":[0-9]+,\\\"version_after\\\":[0-9]+\\}");
+          case "PUBLIC_PROFILE_UPDATED" ->
+              actorType.equals("ADMIN")
+                  && detailsJson.matches(
+                      "\\{\\\"changed_fields\\\":\\[\\\"contact_phone\\\"\\],\\\"version_before\\\":[0-9]+,\\\"version_after\\\":[0-9]+\\}");
           default -> false;
         };
     if (!validDetails) {

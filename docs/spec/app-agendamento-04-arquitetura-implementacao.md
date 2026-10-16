@@ -65,6 +65,7 @@ O commit da reserva termina no PostgreSQL. WhatsApp, analytics e outros efeitos 
 |---|---|---|
 | `identity-access` | admin, sessão do cliente, papéis | tenant, audit |
 | `tenant` | empresa, slug, timezone, onboarding | subscription gate, audit |
+| `publicpage` | publicação explícita e leitura pública sanitizada | tenant, catalog, availability, subscription gate port |
 | `catalog` | serviços e snapshots | tenant, audit |
 | `availability` | grade, exceções, bloqueios e cálculo | tenant, catalog, leitura de appointments |
 | `appointments` | reserva, ocupação, história e comandos | tenant, catalog, clients, policy ports |

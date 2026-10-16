@@ -150,7 +150,7 @@ jobs:
       - name: Start PostgreSQL, Keycloak and backend
         run: |
           docker compose -p agendamento --env-file .env --env-file .env.keycloak \
-            -f compose.yaml -f compose.keycloak.yaml -f compose.identity.yaml \
+            -f compose.yaml -f compose.keycloak.yaml -f compose.identity.yaml -f compose.e2e.yaml \
             --profile app up --build --wait --wait-timeout 240 -d
       - name: Provision linked and unlinked OIDC users
         run: bash scripts/dev/provision-demo-admin.sh demo-clinica "Clínica Demonstração"

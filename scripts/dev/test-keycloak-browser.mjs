@@ -263,6 +263,56 @@ try {
         throw new Error('Grade/políticas não persistiram ou divergiram após recarregar.');
     }
     console.log('Browser: grade semanal e políticas salvas, recarregadas e confirmadas pela API.');
+    const publication = await evaluate(
+        "fetch('/api/v1/admin/publication', {credentials:'same-origin'}).then(response => response.json())",
+    );
+    if (publication.published) throw new Error('Tenant de demonstração iniciou publicado.');
+    await setFieldByLabel('Telefone de contato público', '+5511999990000', evaluate);
+    await clickButtonByText('Salvar telefone', evaluate);
+    await waitForText('Telefone de contato salvo.', evaluate);
+    await clickButtonByText('Publicar página', evaluate);
+    await waitForText('Estado: Publicado', evaluate);
+    const publicService = await evaluate(
+        `fetch('/api/v1/admin/services', {credentials:'same-origin'}).then(response => response.json()).then(rows => rows.find(service => service.name === ${JSON.stringify(catalogName + ' Editado')} && service.status === 'ACTIVE'))`,
+    );
+    if (!publicService?.serviceId) throw new Error('Serviço ativo de demonstração não encontrado para a página pública.');
+    await navigate(`http://localhost:5173/public/${encodeURIComponent(publication.slug)}`, command, evaluate);
+    await waitForText(catalogName + ' Editado', evaluate);
+    await setSelectById('public-service', publicService.serviceId, evaluate);
+    const publicDate = await evaluate(`(() => {
+      const timeZone = ${JSON.stringify(publication.timeZone)};
+      const fields = Object.fromEntries(new Intl.DateTimeFormat('en-US', {timeZone, year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(new Date()).map(part => [part.type, part.value]));
+      const today = new Date(Date.UTC(Number(fields.year), Number(fields.month)-1, Number(fields.day)));
+      const daysUntilMonday = (8 - today.getUTCDay()) % 7;
+      const daysAhead = daysUntilMonday < 4 ? daysUntilMonday + 7 : daysUntilMonday;
+      today.setUTCDate(today.getUTCDate() + daysAhead);
+      return today.toISOString().slice(0, 10);
+    })()`);
+    await setFieldById('public-date', publicDate, evaluate);
+    await waitUntil(() => evaluate("document.querySelectorAll('.public-page__slot').length > 0"));
+    const publicSlotsBeforeSelection = await evaluate("document.querySelectorAll('.public-page__slot').length");
+    await evaluate("document.querySelector('.public-page__slot').click()");
+    if (!(await evaluate("document.body.innerText.includes('Esta seleção não é uma reserva.')"))) {
+        throw new Error('A seleção pública não deixou claro que não confirma uma reserva.');
+    }
+    await command('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:true});
+    if (!(await evaluate('document.documentElement.scrollWidth <= window.innerWidth'))) {
+        throw new Error('A página pública excedeu a largura do viewport móvel.');
+    }
+    await command('Emulation.setDeviceMetricsOverride', {width:1280,height:900,deviceScaleFactor:1,mobile:false});
+    if (!(await evaluate('document.documentElement.scrollWidth <= window.innerWidth'))) {
+        throw new Error('A página pública excedeu a largura do viewport desktop.');
+    }
+    console.log(`Browser: visitante consultou ${publicDate}, selecionou um de ${publicSlotsBeforeSelection} horários sem criar reserva; layout móvel/desktop sem overflow.`);
+    await navigate('http://localhost:5173/admin', command, evaluate);
+    await waitForText('Estado: Publicado', evaluate);
+    await clickButtonByText('Despublicar página', evaluate);
+    await waitForText('Página pública despublicada.', evaluate);
+    const unpublishedRead = await evaluate(
+        `fetch('/api/v1/public/${encodeURIComponent(publication.slug)}').then(response => response.status)`,
+    );
+    if (unpublishedRead !== 404) throw new Error('Despublicar não bloqueou uma leitura pública direta.');
+    console.log('Browser: despublicação impediu leituras públicas diretas.');
     const exceptionDate = new Date(Date.now() + 45 * 86400_000)
         .toISOString()
         .slice(0, 10);
@@ -611,6 +661,28 @@ async function setSelectByLabel(label, value, evaluate) {
       descriptor.set.call(field, ${JSON.stringify(value)});
       field.dispatchEvent(new Event('input', { bubbles: true }));
       field.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+}
+
+async function setSelectById(id, value, evaluate) {
+    await evaluate(`(() => {
+      const field = document.getElementById(${JSON.stringify(id)});
+      if (!field) throw new Error('Select not found: ' + ${JSON.stringify(id)});
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+      descriptor.set.call(field, ${JSON.stringify(value)});
+      field.dispatchEvent(new Event('input', {bubbles:true}));
+      field.dispatchEvent(new Event('change', {bubbles:true}));
+    })()`);
+}
+
+async function setFieldById(id, value, evaluate) {
+    await evaluate(`(() => {
+      const field = document.getElementById(${JSON.stringify(id)});
+      if (!field) throw new Error('Input not found: ' + ${JSON.stringify(id)});
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+      descriptor.set.call(field, ${JSON.stringify(value)});
+      field.dispatchEvent(new Event('input', {bubbles:true}));
+      field.dispatchEvent(new Event('change', {bubbles:true}));
     })()`);
 }
 

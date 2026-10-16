@@ -43,7 +43,10 @@ public class SecurityConfiguration {
                             ? SessionCreationPolicy.IF_REQUIRED
                             : SessionCreationPolicy.STATELESS)
                     .sessionFixation(fixation -> fixation.changeSessionId()))
-        .csrf(csrf -> {})
+        .csrf(
+            csrf ->
+                csrf.ignoringRequestMatchers(
+                    SecurityConfiguration::isAnonymousPublicTelemetryRequest))
         .formLogin(AbstractHttpConfigurer::disable)
         .httpBasic(AbstractHttpConfigurer::disable)
         .requestCache(AbstractHttpConfigurer::disable)
@@ -57,6 +60,15 @@ public class SecurityConfiguration {
                         "/actuator/health/readiness")
                     .permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/v1/csrf")
+                    .permitAll()
+                    .requestMatchers(
+                        HttpMethod.GET,
+                        "/api/v1/public/*",
+                        "/api/v1/public/*/services",
+                        "/api/v1/public/*/services/*",
+                        "/api/v1/public/*/availability")
+                    .permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/v1/public/*/telemetry")
                     .permitAll()
                     .requestMatchers("/oauth2/**", "/login/**")
                     .permitAll()
@@ -115,6 +127,17 @@ public class SecurityConfiguration {
       http.logout(AbstractHttpConfigurer::disable);
     }
     return http.build();
+  }
+
+  private static boolean isAnonymousPublicTelemetryRequest(
+      jakarta.servlet.http.HttpServletRequest request) {
+    if (!"POST".equals(request.getMethod())) {
+      return false;
+    }
+    String servletPath = request.getServletPath();
+    String requestPath = request.getRequestURI().substring(request.getContextPath().length());
+    return servletPath.matches("/api/v1/public/[^/]+/telemetry")
+        || requestPath.matches("/api/v1/public/[^/]+/telemetry");
   }
 
   private static AuthenticationFailureHandler authenticationFailureHandler() {

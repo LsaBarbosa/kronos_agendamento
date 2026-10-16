@@ -150,10 +150,12 @@ Critérios de aceite:
 Critérios de aceite:
 
 - Link por slug mostra negócio e serviços ativos.
+- Estado inicial é despublicado; somente administrador autenticado pode solicitar publicação/despublicação, com prontidão revalidada em cada leitura. `Tenant.ACTIVE` isoladamente não libera acesso.
 - Cliente escolhe serviço, data e slot em celular e desktop.
 - Estados de vazio, tenant suspenso e erro são compreensíveis.
 - Página não expõe dados internos ou de clientes.
 - Telemetria mede visualização, seleção e abandono sem coletar PII desnecessária.
+- Se textos/versões legais, evidências de consentimento ou gate comercial requerido não estiverem aprovados e persistidos, a publicação real permanece bloqueada e o administrador recebe os bloqueios; fixtures de teste não representam prontidão real.
 
 ### AGD-015 — Commit de reserva sem sobreposição
 

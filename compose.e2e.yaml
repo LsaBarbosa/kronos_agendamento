@@ -1,0 +1,7 @@
+services:
+  backend:
+    build:
+      args:
+        INCLUDE_E2E_FIXTURES: "true"
+    environment:
+      SPRING_PROFILES_ACTIVE: keycloak,e2e

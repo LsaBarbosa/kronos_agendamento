@@ -2,9 +2,8 @@ package com.appagendamento.availability.infrastructure;
 
 import com.appagendamento.availability.application.AvailabilityReadTransaction;
 import java.util.function.Supplier;
-import javax.sql.DataSource;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -13,8 +12,8 @@ public class PostgresAvailabilityReadTransaction implements AvailabilityReadTran
 
   private final TransactionTemplate transaction;
 
-  public PostgresAvailabilityReadTransaction(DataSource dataSource) {
-    transaction = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+  public PostgresAvailabilityReadTransaction(PlatformTransactionManager transactionManager) {
+    transaction = new TransactionTemplate(transactionManager);
     transaction.setReadOnly(true);
     transaction.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
   }

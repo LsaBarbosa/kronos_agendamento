@@ -61,7 +61,8 @@ class ModularArchitectureTest {
             "subscriptions",
             "exports",
             "identityaccess",
-            "audit");
+            "audit",
+            "publicpage");
     for (String module : modules) {
       String scope = "com.appagendamento." + module + "..";
       noClasses()

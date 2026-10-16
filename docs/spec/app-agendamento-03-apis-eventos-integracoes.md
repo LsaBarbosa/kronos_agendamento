@@ -97,7 +97,7 @@ Quando o resultado de efeito externo for genuinamente ambíguo, a API não deve 
 | GET | `/api/v1/public/{slug}/services` | serviços ativos |
 | GET | `/api/v1/public/{slug}/services/{serviceId}` | detalhes de um serviço ativo |
 
-Resposta pública não inclui configuração interna, contagem de faltas, assinatura, IDs de provedor ou dados de outros clientes.
+Resposta pública só é permitida para slug explicitamente publicado e ainda elegível no gate de prontidão. A resolução de tenant é exclusivamente server-side; não publicado, suspenso, fora da prontidão e recurso alheio/inexistente seguem resposta não reveladora. Resposta não inclui configuração interna, contagem de faltas, assinatura, IDs de provedor ou dados de outros clientes.
 
 ### Disponibilidade
 
@@ -105,7 +105,7 @@ Resposta pública não inclui configuração interna, contagem de faltas, assina
 
 Regras:
 
-- Contrato futuro: a operação continua fechada no servidor até o gate de publicação aprovado e implementado por AGD-014; tenant ativo, serviço ativo e agenda configurada não bastam.
+- A operação só é liberada para slug explicitamente publicado após revalidar o gate de prontidão em cada leitura; tenant ativo, serviço ativo e agenda configurada não bastam. Falha da fonte obrigatória de ocupações não equivale a agenda vazia e deve ser respondida como indisponibilidade temporária.
 - `from` e `to` são datas locais inclusivas no timezone IANA confiável do tenant; `from <= to` e `DAYS.between(from,to) + 1 <= 31`. Janela inválida/excessiva retorna `400 INVALID_AVAILABILITY_WINDOW`.
 - A resposta contém `serviceId`, datas solicitadas ordenadas, `timeZone`, `generatedAt`, `configured` e slots ordenados por dia, com timestamps ISO 8601 contendo offset. Cada dia informa `explicitlyClosed`; datas fora do horizonte permanecem com lista de slots vazia.
 - Um `Clock` é capturado uma vez por consulta. Antecedência usa instante decorrido e permite início exatamente no limite. Horizonte `N` conta `N` datas locais incluindo hoje: última data = hoje local + `N - 1`, inclusiva; candidatos desde o início da data seguinte são excluídos. Não converter para `N * 24` horas.
