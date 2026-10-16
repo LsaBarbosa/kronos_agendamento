@@ -323,8 +323,18 @@ try {
     })()`);
     await clickButtonByText('Confirmar reserva', evaluate);
     await waitForText('Não foi possível confirmar o resultado do envio.', evaluate);
+    const unresolvedIntentLocked = await evaluate(`(() => {
+      const slotButtons = [...document.querySelectorAll('.public-page__slot')];
+      return document.getElementById('public-service').disabled
+        && document.getElementById('public-date').disabled
+        && document.getElementById('public-client-name').disabled
+        && document.getElementById('public-client-phone').disabled
+        && slotButtons.length > 0 && slotButtons.every(button => button.disabled)
+        && !document.querySelector('.public-page__booking-form button[type="submit"]').disabled;
+    })()`);
+    if (!unresolvedIntentLocked) throw new Error('A interface permitiu alterar uma intenção de reserva ainda não resolvida.');
     await clickButtonByText('Tentar novamente com segurança', evaluate);
-    await waitForText('Reserva confirmada.', evaluate);
+    await waitForText('Reserva confirmada', evaluate);
     if (!(await evaluate(`document.body.innerText.includes(${JSON.stringify(publicService.name)}) && document.body.innerText.includes(${JSON.stringify(publication.timeZone)})`))) {
         throw new Error('Confirmação não exibiu serviço e timezone esperados.');
     }

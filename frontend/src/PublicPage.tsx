@@ -562,6 +562,10 @@ function PublicPageContent({
             {errorMessage}
         </p>
     );
+    const bookingControlsLocked =
+        bookingState === 'submitting' ||
+        bookingState === 'confirmed' ||
+        bookingState === 'uncertain';
 
     return (
         <main className="public-page">
@@ -660,10 +664,7 @@ function PublicPageContent({
                             id="public-service"
                             value={serviceId}
                             onChange={selectService}
-                            disabled={
-                                bookingState === 'submitting' ||
-                                bookingState === 'confirmed'
-                            }
+                            disabled={bookingControlsLocked}
                         >
                             <option value="">Selecione um serviço</option>
                             {services.map((service) => (
@@ -702,10 +703,7 @@ function PublicPageContent({
                                     type="button"
                                     onClick={() => shiftDate(-1)}
                                     aria-label="Dia anterior"
-                                    disabled={
-                                        bookingState === 'submitting' ||
-                                        bookingState === 'confirmed'
-                                    }
+                                    disabled={bookingControlsLocked}
                                 >
                                     Anterior
                                 </button>
@@ -715,19 +713,13 @@ function PublicPageContent({
                                     type="date"
                                     value={date}
                                     onChange={selectDate}
-                                    disabled={
-                                        bookingState === 'submitting' ||
-                                        bookingState === 'confirmed'
-                                    }
+                                    disabled={bookingControlsLocked}
                                 />
                                 <button
                                     type="button"
                                     onClick={() => shiftDate(1)}
                                     aria-label="Próximo dia"
-                                    disabled={
-                                        bookingState === 'submitting' ||
-                                        bookingState === 'confirmed'
-                                    }
+                                    disabled={bookingControlsLocked}
                                 >
                                     Próximo
                                 </button>
@@ -796,10 +788,7 @@ function PublicPageContent({
                                                     }
                                                     aria-pressed={selected}
                                                     disabled={
-                                                        bookingState ===
-                                                            'submitting' ||
-                                                        bookingState ===
-                                                            'confirmed'
+                                                        bookingControlsLocked
                                                     }
                                                     onClick={() =>
                                                         chooseSlot(slot)
@@ -854,10 +843,7 @@ function PublicPageContent({
                                             );
                                             resetBookingFeedback();
                                         }}
-                                        disabled={
-                                            bookingState === 'submitting' ||
-                                            bookingState === 'confirmed'
-                                        }
+                                        disabled={bookingControlsLocked}
                                         aria-invalid={
                                             bookingState ===
                                                 'validation-error' &&
@@ -883,10 +869,7 @@ function PublicPageContent({
                                             );
                                             resetBookingFeedback();
                                         }}
-                                        disabled={
-                                            bookingState === 'submitting' ||
-                                            bookingState === 'confirmed'
-                                        }
+                                        disabled={bookingControlsLocked}
                                         aria-invalid={
                                             bookingState ===
                                                 'validation-error' &&

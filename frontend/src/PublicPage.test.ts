@@ -234,6 +234,29 @@ describe('public booking REST client', () => {
         expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
+    it('treats an operation already in progress as an unresolved booking intent', async () => {
+        const fetchMock = vi
+            .fn<FetchMock>()
+            .mockResolvedValueOnce(jsonResponse(csrf))
+            .mockResolvedValueOnce(
+                jsonResponse({ error: { code: 'OPERATION_IN_PROGRESS' } }, 409),
+            );
+        vi.stubGlobal('fetch', fetchMock);
+
+        await expect(
+            createPublicBooking(
+                'atelie-horizonte',
+                request,
+                'same-key',
+                '/api',
+            ),
+        ).rejects.toMatchObject<Partial<PublicBookingError>>({
+            status: 409,
+            code: 'OPERATION_IN_PROGRESS',
+            outcomeUnknown: true,
+        });
+    });
+
     it('fetches CSRF first and sends the returned header and idempotency key', async () => {
         const fetchMock = vi
             .fn<FetchMock>()

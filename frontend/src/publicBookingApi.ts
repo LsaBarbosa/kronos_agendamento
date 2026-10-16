@@ -95,7 +95,8 @@ async function readError(
         response.status,
         code,
         phase,
-        phase === 'booking' && response.status >= 500,
+        phase === 'booking' &&
+            (response.status >= 500 || code === 'OPERATION_IN_PROGRESS'),
     );
 }
 
