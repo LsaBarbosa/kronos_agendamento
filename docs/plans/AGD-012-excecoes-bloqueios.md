@@ -24,7 +24,6 @@
 - [x] Atualizações concorrentes usam CAS/versionamento; comando repetido é idempotente; autorização atual é revalidada antes de replay.
 - [x] Mutação, resultado idempotente, auditoria de sucesso e `ScheduleChanged` previsto compartilham transação. Falha em gravações obrigatórias reverte a alteração.
 - [ ] `ScheduleChanged` é persistido na transação; invalidação real aguarda cache/consumer de AGD-013. Não declarar invalidação com base apenas na outbox.
-- [x] `ScheduleChanged` é persistido na transação; invalidação real aguarda cache/consumer de AGD-013. Não declarar invalidação com base apenas na outbox.
 - [x] UI autenticada lista/edita exceções e bloqueios, apresenta motivo/conflito e confirma estado persistido após reload.
 - [x] V10 instala schema em banco vazio e atualiza V9; `validate`/rerun e privilégios runtime passam em PostgreSQL real.
 
