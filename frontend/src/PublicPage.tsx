@@ -498,6 +498,18 @@ function PublicPageContent({
                     setBookingMessage(
                         'Não foi possível iniciar a solicitação protegida. Tente novamente.',
                     );
+                } else if (
+                    error.status === 400 &&
+                    error.code === 'INVALID_APPOINTMENT_TIME'
+                ) {
+                    setSelectedSlot(null);
+                    setAvailability(null);
+                    setAvailabilityState('loading');
+                    setBookingState('slot-conflict');
+                    setBookingMessage(
+                        'Não foi possível validar esse horário. Atualizamos as opções; escolha outro horário. Seus dados foram mantidos.',
+                    );
+                    setAvailabilityRefresh((current) => current + 1);
                 } else if (error.status === 400) {
                     setBookingState('validation-error');
                     setBookingMessage(

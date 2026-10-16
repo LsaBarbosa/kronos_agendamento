@@ -34,9 +34,6 @@ spring:
       initialize-schema: never
       table-name: agendamento.spring_session
       cleanup-cron: "0 0 * * * *"
-  jackson:
-    time-zone: UTC
-
 server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful

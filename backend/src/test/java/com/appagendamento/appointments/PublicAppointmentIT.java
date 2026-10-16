@@ -167,6 +167,7 @@ class PublicAppointmentIT {
                 .content(body))
         .andExpect(status().isCreated())
         .andExpect(jsonPath("$.status").value("CONFIRMED"))
+        .andExpect(jsonPath("$.startsAt").value(org.hamcrest.Matchers.endsWith("-03:00")))
         .andExpect(jsonPath("$.serviceName").value("Consulta"))
         .andExpect(jsonPath("$.timeZone").value(ZONE.getId()))
         .andExpect(jsonPath("$.client").doesNotExist())

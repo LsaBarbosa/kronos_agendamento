@@ -226,7 +226,10 @@ class PublicPageIT {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.timeZone").value(TENANT_ZONE.getId()))
         .andExpect(jsonPath("$.days[0].date").value(nextMonday.toString()))
-        .andExpect(jsonPath("$.days[0].slots[0].startsAt").exists());
+        .andExpect(jsonPath("$.days[0].slots[0].startsAt").exists())
+        .andExpect(
+            jsonPath("$.days[0].slots[0].startsAt")
+                .value(org.hamcrest.Matchers.endsWith("-03:00")));
   }
 
   @Test
