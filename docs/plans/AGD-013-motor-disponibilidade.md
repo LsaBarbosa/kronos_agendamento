@@ -2,7 +2,7 @@
 
 ## Identificação e objetivo
 
-- História: AGD-013 (P0). Branch `agd-013-motor-disponibilidade`, baseada na `main` após merge do PR #7, merge commit `6818781cc7fa4c2e09c7e4de54c473c353ddf6d9`.
+- História: AGD-013 (P0). Branch `agd-013-motor-disponibilidade`, baseada na `main` após merge do PR #7, merge commit `6818781cc7fa4c2e09c7e4de54c473c353ddf6d9`. PR draft [#8](https://github.com/LsaBarbosa/kronos_agendamento/pull/8), commit funcional `e750e20`.
 - Objetivo: calcular disponibilidade indicativa por tenant, serviço e período sob demanda; não reservar, bloquear nem garantir confirmação.
 - Referências: `docs/spec/app-agendamento-01-especificacao-mvp.md` §5; `docs/spec/app-agendamento-02-modelo-dominio-estados.md` §§2, 12 e 13; `docs/spec/app-agendamento-03-apis-eventos-integracoes.md` seção “Disponibilidade”; `docs/spec/app-agendamento-04-arquitetura-implementacao.md` seção do módulo `availability`; `docs/spec/app-agendamento-06-backlog-criterios-aceite.md` AGD-013; ADR-0010 e ADR-0011.
 - Inclui cálculo de slots, leitura tenant-scoped da configuração, serviços, bloqueios e porta mínima para ocupações; testes temporais e de propriedade; contrato interno e documentação.
@@ -65,6 +65,7 @@
 - [x] 16/10/2026 — caso de uso interno por data combina PostgreSQL real de serviço, grade, política, exceção, bloqueios ativos e porta tenant-scoped de ocupação; `AvailabilityScheduleIT` passou (24 testes) com adapter de ocupação apenas para teste. A rota pública não foi criada.
 - [x] 16/10/2026 — `spotless:check verify` passou em JDK 21: 55 testes unitários/arquiteturais/web + 71 integrações com PostgreSQL 16/Testcontainers; Flyway validou e reaplicou sem mudanças; `BUILD SUCCESS`.
 - [x] 16/10/2026 — revisão sequencial do diff e invariantes: consultas de serviço tenant-scoped, cálculo read-only, ocupação inclui buffer, gate público permanece fechado, sem cache e sem migration. Revisores independentes não puderam ser iniciados pelo limite de threads do ambiente.
+- [x] 16/10/2026 — commit `e750e20` publicado na branch e PR draft #8 aberto; CI remoto em execução/aguardando consulta. `gh auth status` exibiu inicialmente token inválido, mas o push e a criação do PR foram concluídos via sessão autorizada; nenhuma credencial foi alterada.
 - [ ] concluir o contrato por janela e fixar escolhas temporais somente após resposta do usuário; não criar rota pública enquanto o gate de AGD-014 continuar fechado.
 - [ ] associar evidências ao SHA, publicar branch e abrir PR; não fazer merge/deploy.
 
@@ -77,7 +78,8 @@
 | Dados PostgreSQL | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp -Dtest=AvailabilityScheduleIT,ServiceCatalogIT test` (`backend/`) | leituras tenant-scoped, exceções/bloqueios persistidos, serviço real e nenhuma escrita pelo cálculo | Passou: 24 + 10 testes locais com PostgreSQL 16/Testcontainers |
 | Ocupações | adapter controlado em `AvailabilityScheduleIT` | intervalos removem slots corretos; sem alegar integração de reserva | Passou como prova de infraestrutura; integração real depende AGD-015 |
 | Segurança pública | `SecurityBoundaryTest` e `SecurityConfiguration` | nenhuma rota pública liberada antes de AGD-014 | Passou no gate completo: `SecurityBoundaryTest` incluiu 401 anônimo/403 autenticado para rota ainda não implementada; `denyAll` preservado |
-| Gate backend completo | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` (`backend/`) | formato, compile, testes e integração PostgreSQL | Passou em 16/10/2026: 55 testes + 71 integrações, V1–V11; `BUILD SUCCESS` em 54,8 s |
+| Gate backend completo | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` (`backend/`) | formato, compile, testes e integração PostgreSQL | Passou em 16/10/2026: 55 testes + 71 integrações, V1–V11; `BUILD SUCCESS` em 54,8 s. O código testado está no commit `e750e20`; a anotação documental feita em seguida não alterou o código. |
+| App CI / CodeQL | PR #8 draft | validação remota do head publicado | Aguardando consulta dos checks; não declarar aprovação antes do resultado remoto |
 | Homologação | staging/publicação autorizada | fluxo real disponível | Continua pendente, fora desta entrega local |
 
 ## Encerramento ou retomada
