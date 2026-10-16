@@ -31,6 +31,7 @@ import com.appagendamento.publicpage.domain.PublicPageUnavailableException;
 import com.appagendamento.tenant.application.GetTenant;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.UUID;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
@@ -95,6 +96,18 @@ class SecurityBoundaryTest {
     org.mockito.Mockito.when(auditCorrelationId.currentTraceId()).thenReturn(UUID.randomUUID());
     org.mockito.Mockito.when(getPublicBusiness.execute("example"))
         .thenThrow(new PublicPageUnavailableException());
+    org.mockito.Mockito.when(
+            calculateAvailability.executeForAuthorizedTenant(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()))
+        .thenAnswer(
+            invocation -> {
+              Supplier<UUID> tenantResolver = invocation.getArgument(0);
+              tenantResolver.get();
+              throw new AssertionError("Negócio indisponível deveria encerrar a consulta");
+            });
     mvc.perform(
             get("/api/v1/public/example/availability")
                 .param("serviceId", UUID.randomUUID().toString())
