@@ -47,4 +47,4 @@ PostgreSQL/Testcontainers para instalação, upgrade, Flyway, CAS/replay, isolam
 
 ## Estado
 
-Implementação local em validação/publicação. A prontidão de produção continua bloqueada por consentimentos/termos aprovados e integração do gate comercial; não afirmar publicação real nem homologação. Reservas/ocupações reais e exclusão concorrente dependem de AGD-015; scan completo, staging, preflight hospedado e retenção continuam pendentes nas respectivas histórias. Vincular os resultados locais e CI ao SHA final do PR antes de marcar critérios concluídos.
+Commit funcional local `89347a29a7afc4faf13d0787bfa3c62663c32e94`; gates locais passaram. A prontidão de produção continua bloqueada por consentimentos/termos aprovados e integração do gate comercial; não afirmar publicação real nem homologação. Reservas/ocupações reais e exclusão concorrente dependem de AGD-015; scan completo, staging, preflight hospedado e retenção continuam pendentes nas respectivas histórias. O CI remoto e browser E2E devem ser associados ao head final do PR antes de marcar critérios cobertos.
