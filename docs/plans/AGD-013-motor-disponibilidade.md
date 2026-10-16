@@ -65,7 +65,7 @@
 - [x] 16/10/2026 — caso de uso interno por data combina PostgreSQL real de serviço, grade, política, exceção, bloqueios ativos e porta tenant-scoped de ocupação; `AvailabilityScheduleIT` passou (24 testes) com adapter de ocupação apenas para teste. A rota pública não foi criada.
 - [x] 16/10/2026 — `spotless:check verify` passou em JDK 21: 55 testes unitários/arquiteturais/web + 71 integrações com PostgreSQL 16/Testcontainers; Flyway validou e reaplicou sem mudanças; `BUILD SUCCESS`.
 - [x] 16/10/2026 — revisão sequencial do diff e invariantes: consultas de serviço tenant-scoped, cálculo read-only, ocupação inclui buffer, gate público permanece fechado, sem cache e sem migration. Revisores independentes não puderam ser iniciados pelo limite de threads do ambiente.
-- [x] 16/10/2026 — commit `e750e20` publicado na branch e PR draft #8 aberto; CI remoto em execução/aguardando consulta. `gh auth status` exibiu inicialmente token inválido, mas o push e a criação do PR foram concluídos via sessão autorizada; nenhuma credencial foi alterada.
+- [x] 16/10/2026 — commit `e750e20` e atualização documental `e865d13` publicados na branch; PR draft #8 aberto. App CI push/PR e CodeQL push/PR passaram no head `e865d13` (runs `38915571851`, `38915580313`, `38915571739`, `38915580417`); browser E2E também passou. `gh auth status` exibiu inicialmente token inválido, mas push, PR e checks foram concluídos via sessão autorizada; nenhuma credencial foi alterada.
 - [ ] concluir o contrato por janela e fixar escolhas temporais somente após resposta do usuário; não criar rota pública enquanto o gate de AGD-014 continuar fechado.
 - [ ] associar evidências ao SHA, publicar branch e abrir PR; não fazer merge/deploy.
 
@@ -79,7 +79,7 @@
 | Ocupações | adapter controlado em `AvailabilityScheduleIT` | intervalos removem slots corretos; sem alegar integração de reserva | Passou como prova de infraestrutura; integração real depende AGD-015 |
 | Segurança pública | `SecurityBoundaryTest` e `SecurityConfiguration` | nenhuma rota pública liberada antes de AGD-014 | Passou no gate completo: `SecurityBoundaryTest` incluiu 401 anônimo/403 autenticado para rota ainda não implementada; `denyAll` preservado |
 | Gate backend completo | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` (`backend/`) | formato, compile, testes e integração PostgreSQL | Passou em 16/10/2026: 55 testes + 71 integrações, V1–V11; `BUILD SUCCESS` em 54,8 s. O código testado está no commit `e750e20`; a anotação documental feita em seguida não alterou o código. |
-| App CI / CodeQL | PR #8 draft | validação remota do head publicado | Aguardando consulta dos checks; não declarar aprovação antes do resultado remoto |
+| App CI / CodeQL | [App CI push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38915571851), [App CI PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38915580313), [CodeQL push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38915571739), [CodeQL PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38915580417) | validação remota do head publicado | Todos `success` no head `e865d13`; App CI inclui `verify`, `security`, segredos e `oidc-browser-e2e`. O PR permanece draft por decisões de produto e critérios parciais. |
 | Homologação | staging/publicação autorizada | fluxo real disponível | Continua pendente, fora desta entrega local |
 
 ## Encerramento ou retomada
