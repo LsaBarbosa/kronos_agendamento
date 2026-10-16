@@ -23,6 +23,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -53,6 +54,27 @@ public class CalculateAvailabilityForDateRange {
       UUID tenantId, UUID serviceId, LocalDate from, LocalDate to) {
     validate(tenantId, serviceId, from, to);
     return readTransaction.execute(() -> calculate(tenantId, serviceId, from, to));
+  }
+
+  public AvailabilityRangeResult executeForAuthorizedTenant(
+      Supplier<UUID> tenantResolver, UUID serviceId, LocalDate from, LocalDate to) {
+    if (tenantResolver == null
+        || serviceId == null
+        || from == null
+        || to == null
+        || from.isAfter(to)) {
+      throw new InvalidAvailabilityWindowException();
+    }
+    long dates = java.time.temporal.ChronoUnit.DAYS.between(from, to) + 1;
+    if (dates > MAX_QUERY_DATES) {
+      throw new InvalidAvailabilityWindowException();
+    }
+    return readTransaction.execute(
+        () -> {
+          UUID tenantId = tenantResolver.get();
+          validate(tenantId, serviceId, from, to);
+          return calculate(tenantId, serviceId, from, to);
+        });
   }
 
   private AvailabilityRangeResult calculate(

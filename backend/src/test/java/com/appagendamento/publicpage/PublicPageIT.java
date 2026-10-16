@@ -12,6 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.appagendamento.availability.application.AppointmentOccupancyQuery;
+import com.appagendamento.availability.application.CalculateAvailabilityForDateRange;
 import com.appagendamento.availability.application.ReplaceAvailabilityPolicy;
 import com.appagendamento.availability.application.ReplaceWeeklySchedule;
 import com.appagendamento.availability.domain.WeeklyPeriod;
@@ -20,6 +21,7 @@ import com.appagendamento.catalog.application.SetServiceStatus;
 import com.appagendamento.catalog.domain.ServiceStatus;
 import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import com.appagendamento.publicpage.application.ChangePublicationStatus;
+import com.appagendamento.publicpage.application.GetPublicBusiness;
 import com.appagendamento.publicpage.application.PublicationEvidence;
 import com.appagendamento.publicpage.application.UpdatePublicContact;
 import com.appagendamento.support.PostgresTestEnvironment;
@@ -30,11 +32,13 @@ import java.time.ZoneId;
 import java.time.temporal.TemporalAdjusters;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -74,6 +78,8 @@ class PublicPageIT {
   @Autowired private ReplaceAvailabilityPolicy replaceAvailabilityPolicy;
   @Autowired private UpdatePublicContact updatePublicContact;
   @Autowired private ChangePublicationStatus changePublicationStatus;
+  @Autowired private CalculateAvailabilityForDateRange calculateAvailability;
+  @Autowired private GetPublicBusiness getPublicBusiness;
   @Autowired private MockMvc mvc;
   @MockitoBean private PublicationEvidence publicationEvidence;
   @MockitoBean private AppointmentOccupancyQuery appointmentOccupancyQuery;
@@ -204,6 +210,67 @@ class PublicPageIT {
         .andExpect(jsonPath("$.timeZone").value(TENANT_ZONE.getId()))
         .andExpect(jsonPath("$.days[0].date").value(nextMonday.toString()))
         .andExpect(jsonPath("$.days[0].slots[0].startsAt").exists());
+  }
+
+  @Test
+  void publicAvailabilityKeepsPublicationAndCalculationInOneReadSnapshot() throws Exception {
+    publish();
+    LocalDate nextMonday =
+        LocalDate.now(TENANT_ZONE).with(TemporalAdjusters.next(DayOfWeek.MONDAY));
+    CountDownLatch gateChecked = new CountDownLatch(1);
+    CountDownLatch unpublishCommitted = new CountDownLatch(1);
+    AtomicBoolean publicationVisibleAtOccupancyRead = new AtomicBoolean();
+    when(appointmentOccupancyQuery.findOverlapping(any(), any(), any()))
+        .thenAnswer(
+            invocation -> {
+              publicationVisibleAtOccupancyRead.set(
+                  appJdbc.queryForObject(
+                      "SELECT published FROM agendamento.tenant_publication WHERE tenant_id = ?",
+                      Boolean.class,
+                      tenantId));
+              return List.of();
+            });
+
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<?> read =
+          executor.submit(
+              () ->
+                  calculateAvailability.executeForAuthorizedTenant(
+                      () -> {
+                        var business = getPublicBusiness.execute(slug);
+                        gateChecked.countDown();
+                        try {
+                          if (!unpublishCommitted.await(10, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("Despublicação não foi confirmada");
+                          }
+                        } catch (InterruptedException exception) {
+                          Thread.currentThread().interrupt();
+                          throw new IllegalStateException(exception);
+                        }
+                        return business.tenantId();
+                      },
+                      serviceId,
+                      nextMonday,
+                      nextMonday));
+
+      assertThat(gateChecked.await(10, TimeUnit.SECONDS)).isTrue();
+      changePublicationStatus.execute(
+          actor, "unpublish-during-read-" + UUID.randomUUID(), false, 2);
+      unpublishCommitted.countDown();
+      read.get(10, TimeUnit.SECONDS);
+    } finally {
+      unpublishCommitted.countDown();
+      executor.shutdownNow();
+    }
+
+    assertThat(publicationVisibleAtOccupancyRead).isTrue();
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT published FROM agendamento.tenant_publication WHERE tenant_id = ?",
+                Boolean.class,
+                tenantId))
+        .isFalse();
   }
 
   @Test

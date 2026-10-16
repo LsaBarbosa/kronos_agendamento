@@ -120,8 +120,9 @@ public class PublicPublicationController {
       @RequestParam UUID serviceId,
       @RequestParam LocalDate from,
       @RequestParam LocalDate to) {
-    PublicBusiness business = getBusiness.execute(slug);
-    return publicResponse(calculateAvailability.execute(business.tenantId(), serviceId, from, to));
+    return publicResponse(
+        calculateAvailability.executeForAuthorizedTenant(
+            () -> getBusiness.execute(slug).tenantId(), serviceId, from, to));
   }
 
   @PostMapping("/api/v1/public/{slug}/telemetry")
