@@ -2,7 +2,7 @@
 
 ## Identificação e objetivo
 
-- História: AGD-013 (P0). Branch `agd-013-motor-disponibilidade`, baseada na `main` após merge do PR #7, merge commit `6818781cc7fa4c2e09c7e4de54c473c353ddf6d9`. PR draft [#8](https://github.com/LsaBarbosa/kronos_agendamento/pull/8), commit funcional `e750e20`.
+- História: AGD-013 (P0). Branch `agd-013-motor-disponibilidade`, baseada na `main` após merge do PR #7, merge commit `6818781cc7fa4c2e09c7e4de54c473c353ddf6d9`. PR [#8](https://github.com/LsaBarbosa/kronos_agendamento/pull/8), incremento de contrato/caso de uso `005761b6dc45be663461bfa9d54022e925f85972`.
 - Objetivo: calcular disponibilidade indicativa por tenant, serviço e período sob demanda; não reservar, bloquear nem garantir confirmação.
 - Referências: `docs/spec/app-agendamento-01-especificacao-mvp.md` §5; `docs/spec/app-agendamento-02-modelo-dominio-estados.md` §§2, 12 e 13; `docs/spec/app-agendamento-03-apis-eventos-integracoes.md` seção “Disponibilidade”; `docs/spec/app-agendamento-04-arquitetura-implementacao.md` seção do módulo `availability`; `docs/spec/app-agendamento-06-backlog-criterios-aceite.md` AGD-013; ADR-0010 e ADR-0011.
 - Inclui cálculo por janela local inclusiva de no máximo 31 datas, leitura tenant-scoped da configuração/serviço/bloqueios, porta mínima para ocupações e resultado ordenado com `configured`, `explicitlyClosed`, `timeZone`, `generatedAt` e timestamps com offset.
@@ -64,12 +64,13 @@ Pendências não pertencentes a esse contrato: publicação/gate e experiência 
 - [x] 16/10/2026 — geração temporal usa âncora por início de cada período; período SPECIAL também ancora individualmente; bloqueios/ocupações/notice apenas filtram. Duração + buffer deve caber no mesmo período e DST não escolhe offsets implicitamente.
 - [x] 16/10/2026 — testes temporais/propriedade cobrem 09:15 com step 30, períodos independentes, remoção sem deslocar âncora, encaixe no limite, overlaps, DST, calendário e determinismo.
 - [x] 16/10/2026 — leitura de serviço exposta por porta de consulta do módulo catálogo; `ServiceCatalogIT` passou com PostgreSQL real (10 testes), incluindo status, duração/buffer e isolamento por tenant.
-- [x] 16/10/2026 — consulta por intervalo implementada com serviço, grade, política, exceções, bloqueios persistidos e porta tenant-scoped de ocupação; PostgreSQL real em `AvailabilityScheduleIT` (25 testes). Adapter de ocupação é teste de infraestrutura, não integração real de reservas.
+- [x] 16/10/2026 — consulta por intervalo implementada com serviço, grade, política, exceções, bloqueios persistidos e porta tenant-scoped de ocupação; PostgreSQL real em `AvailabilityScheduleIT` (26 testes). Adapter de ocupação é teste de infraestrutura, não integração real de reservas.
 - [x] 16/10/2026 — critérios temporais aprovados pelo usuário em 16/10/2026; requisitos 01 §5.6, 02 §12, contrato 03, OpenAPI futuro e ADR-0012 atualizados; as perguntas foram removidas de OPEN-QUESTIONS.
 - [x] 16/10/2026 — `spotless:check verify` passou em JDK 21: 58 testes unitários/arquiteturais/web + 73 integrações com PostgreSQL 16/Testcontainers; Flyway validou V1–V11, sem migration; `BUILD SUCCESS` em 50,4 s.
 - [x] 16/10/2026 — revisão sequencial confirmou leituras tenant-scoped/read-only, snapshot PostgreSQL `REPEATABLE READ`, consulta única por fonte, gate deny-all, ausência de cache/migration e dependências AGD-014/015; subagentes independentes indisponíveis por limite de threads.
-- [x] 16/10/2026 — commit `e750e20` e atualização documental `e865d13` publicados na branch; PR draft #8 aberto. App CI push/PR e CodeQL push/PR passaram no head `e865d13` (runs `38915571851`, `38915580313`, `38915571739`, `38915580417`); browser E2E também passou. `gh auth status` exibiu inicialmente token inválido, mas push, PR e checks foram concluídos via sessão autorizada; nenhuma credencial foi alterada.
-- [ ] registrar commits do contrato e da documentação; publicar no mesmo PR #8; acompanhar App CI/CodeQL em push e PR no head final. Retirar draft somente após ausência de bloqueadores; não fazer merge/deploy.
+- [x] 16/10/2026 — implementação anterior e documentação foram publicadas em `e865d13`; os quatro checks App CI/CodeQL e browser E2E passaram nesse head (runs `38915571851`, `38915580313`, `38915571739`, `38915580417`). Isso não valida o delta atual.
+- [x] 16/10/2026 — contrato temporal aprovado e consulta por janela validados localmente no SHA `005761b6dc45be663461bfa9d54022e925f85972`; V1–V11 preservadas. Publicação e novos checks push/PR desse head aguardam o push; sem merge/deploy.
+- [ ] publicar `005761b6dc45be663461bfa9d54022e925f85972` no mesmo PR #8; acompanhar App CI/CodeQL em push e PR no head final. Retirar draft somente após ausência de bloqueadores; não fazer merge/deploy.
 
 ## Validação
 
@@ -80,9 +81,9 @@ Pendências não pertencentes a esse contrato: publicação/gate e experiência 
 | Consulta por janela/PostgreSQL | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp -Dtest=AvailabilityScheduleIT test` (`backend/`) | inclusive endpoints, de 1 a 31 datas, 32/invertido inválidos, horizonte de calendário e fonte de ocupações | Passou: 26 testes com PostgreSQL 16/Testcontainers, inclusive `SHOW transaction_isolation = repeatable read`. Adapter de ocupação é prova da composição; não há reservas persistidas. |
 | Ocupações | adapter controlado em `AvailabilityScheduleIT` | intervalos removem slots corretos; sem alegar integração de reserva | Passou como prova de infraestrutura; integração real depende AGD-015 |
 | Segurança pública | `SecurityBoundaryTest` e `SecurityConfiguration` | nenhuma rota pública liberada antes de AGD-014 | Passou no gate completo: `SecurityBoundaryTest` incluiu 401 anônimo/403 autenticado para rota ainda não implementada; `denyAll` preservado |
-| Gate backend completo | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` (`backend/`) | formato, compile, testes e integração PostgreSQL | Passou em 16/10/2026, antes do commit funcional deste incremento: 58 testes + 73 integrações, PostgreSQL 16, migrations V1–V11; `BUILD SUCCESS` em 50,4 s. |
+| Gate backend completo | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` (`backend/`) | formato, compile, testes e integração PostgreSQL | Passou em 16/10/2026 no conteúdo commitado como `005761b6dc45be663461bfa9d54022e925f85972`: 58 testes + 73 integrações, PostgreSQL 16, migrations V1–V11; `BUILD SUCCESS` em 50,4 s. |
 | OpenAPI | `PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH ./node_modules/.bin/prettier --check ../docs/openapi/admin-availability.yaml` (`frontend/`) | YAML válido e formatado; contrato distingue futuro/bloqueado de rota implementada | Passou após correção de whitespace; nenhuma rota pública/controller foi habilitado. |
-| CI push/PR no incremento | App CI e CodeQL no novo SHA | jobs obrigatórios no head final | Pendente de publicação; resultados serão associados ao SHA final em STATUS/VALIDATION. |
+| CI push/PR no incremento | App CI e CodeQL no novo SHA | jobs obrigatórios no head final | Pendente após o push de `005761b6dc45be663461bfa9d54022e925f85972`; registrar resultados remotos em STATUS/VALIDATION. |
 | Homologação | staging/publicação autorizada | fluxo real disponível | Continua pendente, fora desta entrega local |
 
 ## Encerramento ou retomada
