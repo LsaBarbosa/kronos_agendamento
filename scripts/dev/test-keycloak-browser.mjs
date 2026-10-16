@@ -298,10 +298,22 @@ try {
     }
     await setFieldById('public-client-name', 'Visitante de demonstração', evaluate);
     await setFieldById('public-client-phone', '+5511999991234', evaluate);
+    const bookingInputState = await evaluate(`(() => {
+      const name = document.getElementById('public-client-name').value;
+      const phone = document.getElementById('public-client-phone').value;
+      return {nameLength: name.trim().length, phoneLength: phone.trim().length, phoneValid: /^\\+[1-9][0-9]{7,14}$/.test(phone.trim())};
+    })()`);
+    if (bookingInputState.nameLength === 0 || !bookingInputState.phoneValid) {
+        throw new Error(`Browser booking inputs invalid: ${JSON.stringify(bookingInputState)}`);
+    }
     await evaluate(`(() => {
       const originalFetch = window.fetch;
       window.fetch = async (...args) => {
         const response = await originalFetch(...args);
+        if (String(args[0]).endsWith('/appointments') && !response.ok) {
+          const payload = await response.clone().json().catch(() => ({}));
+          window.__bookingE2eError = {status: response.status, code: payload?.error?.code};
+        }
         if (String(args[0]).endsWith('/appointments') && args[1]?.method === 'POST' && response.ok) {
           window.fetch = originalFetch;
           throw new TypeError('Simulated lost appointment response after commit');
@@ -887,7 +899,7 @@ async function waitForText(text, evaluate, selector = false) {
         });
     } catch (error) {
         const diagnostic = await evaluate(
-            `JSON.stringify({page: location.origin + location.pathname, title: document.title, heading: document.querySelector("h1")?.innerText, output: document.querySelector("output")?.innerText, alerts: [...document.querySelectorAll('[role="alert"]')].map(item => item.innerText).filter(Boolean).slice(0, 5), recentHttpResponses: ${JSON.stringify(recentHttpResponses)}})`,
+            `JSON.stringify({page: location.origin + location.pathname, title: document.title, heading: document.querySelector("h1")?.innerText, output: document.querySelector("output")?.innerText, alerts: [...document.querySelectorAll('[role="alert"]')].map(item => item.innerText).filter(Boolean).slice(0, 5), bookingError: window.__bookingE2eError, recentHttpResponses: ${JSON.stringify(recentHttpResponses)}})`,
         );
         throw new Error(`Estado ${text} não alcançado: ${diagnostic}`, { cause: error });
     }
