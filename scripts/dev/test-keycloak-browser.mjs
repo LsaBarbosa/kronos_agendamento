@@ -98,7 +98,13 @@ try {
             returnByValue: true,
             awaitPromise: true,
         });
-        if (result.exceptionDetails) throw new Error('Execução do navegador falhou.');
+        if (result.exceptionDetails) {
+            const description = result.exceptionDetails.exception?.description
+                ?.split('\n', 1)[0];
+            throw new Error(
+                `Execução do navegador falhou: ${result.exceptionDetails.text}${description ? ` (${description})` : ''}`,
+            );
+        }
         return result.result.value;
     };
 
@@ -332,6 +338,11 @@ try {
     await setFieldByLabel('Início local', blockDay + 'T09:00', evaluate);
     await setFieldByLabel('Fim local', blockDay + 'T10:00', evaluate);
     await setFieldByLabel('Motivo obrigatório', 'Manutenção E2E', evaluate);
+    await waitUntil(() =>
+        evaluate(
+            `[...document.querySelectorAll('button')].some(button => button.innerText.trim() === 'Criar bloqueio' && !button.disabled)`,
+        ),
+    );
     await clickButtonByText('Criar bloqueio', evaluate);
     await waitForText('Bloqueio persistido.', evaluate);
     const createdBlocks = await evaluate(
