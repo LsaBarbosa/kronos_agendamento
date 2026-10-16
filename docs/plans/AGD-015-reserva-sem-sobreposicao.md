@@ -29,15 +29,15 @@
 
 | Critério de aceite | Procedimento/comando | Resultado esperado | Resultado observado |
 |---|---|---|---|
-| Nome, E.164 e slot validados | domínio e `PublicAppointmentIT` com PostgreSQL | normalização, equivalência de telefone, offset/zona e serviço elegível | `spotless:check verify` passou localmente; browser real aguarda CI final |
-| Cliente, reserva, história, audit, idempotência e outbox atômicos | `./mvnw spotless:check verify` | falhas de audit/outbox revertem o conjunto; retry recupera receipt sem PII | 63 testes unitários/arquiteturais + 92 integrações PostgreSQL 16.13/Testcontainers passam localmente no SHA `166ec0a7616405c820d79e5dd08a08340bc5ac94`; CI remoto ainda pendente |
+| Nome, E.164 e slot validados | domínio, `PublicAppointmentIT` e browser E2E | normalização, equivalência de telefone, offset/zona e serviço elegível | Backend local passou no SHA `166ec0a7616405c820d79e5dd08a08340bc5ac94`; browser Keycloak/PostgreSQL/Chrome passou no head `35c6ff8eb507e3fc2e214893f0058b7f19820552` |
+| Cliente, reserva, história, audit, idempotência e outbox atômicos | `./mvnw spotless:check verify` | falhas de audit/outbox revertem o conjunto; retry recupera receipt sem PII | 63 testes unitários/arquiteturais + 92 integrações PostgreSQL 16.13/Testcontainers passam localmente no SHA `166ec0a7616405c820d79e5dd08a08340bc5ac94`; App CI verify passou no head `35c6ff8` em push/PR |
 | Snapshot permanece inalterado após catálogo mudar | `PublicAppointmentIT` | nome/duração/buffer do serviço confirmados preservados; preço/moeda ausentes | Teste PostgreSQL passa; telefone permanece no cadastro Client, pois não é campo de snapshot documentado |
 | Restrição PostgreSQL e adjacência | V13 e `PublicAppointmentIT` | GiST rejeita overlap, permite adjacência; somente violação nomeada vira conflito de slot | Teste PostgreSQL passa |
 | Duas reservas no mesmo slot | `PublicAppointmentIT` com transações independentes | exatamente uma confirma; outra recebe `SLOT_NO_LONGER_AVAILABLE` | Teste PostgreSQL passa |
 | Reserva versus bloqueio, nos dois sentidos | `PublicAppointmentIT` com trigger/barreira PostgreSQL | reserva primeiro recusa bloqueio; bloqueio primeiro recusa reserva | Testes PostgreSQL passam sob lock comum e `READ COMMITTED` explícito |
-| Replay, digest conflitante, revogação e resposta perdida | `PublicAppointmentIT` e browser E2E | revalidação precede replay; mesmos IDs sem repetir efeitos; corpo/chave preservados em timeout | Replay, conflito e despublicação antes do replay passam localmente; resposta perdida via navegador aguarda CI |
+| Replay, digest conflitante, revogação e resposta perdida | `PublicAppointmentIT` e browser E2E | revalidação precede replay; mesmos IDs sem repetir efeitos; corpo/chave preservados em timeout | Replay, conflito e despublicação antes do replay passam localmente; browser simulou resposta perdida após commit, repetiu mesmo corpo/chave, recebeu confirmação e verificou uma única reserva persistida |
 | Disponibilidade usa ocupações reais | `AvailabilityScheduleIT` e `PublicAppointmentIT` | ocupação confirmada desaparece; fonte indisponível retorna erro temporário | Integrações PostgreSQL passam; sem reserva/ocupação artificial de produção |
-| Browser Keycloak + PostgreSQL + Chrome | job `oidc-browser-e2e` em App CI | admin usa fixture E2E restrita; visitante confirma reserva real; retry cria uma reserva; slot deixa oferta | Não executado localmente para não substituir os containers/volumes de desenvolvimento em uso; App CI final obrigatório antes de PR pronto |
+| Browser Keycloak + PostgreSQL + Chrome | job `oidc-browser-e2e` em App CI | admin usa fixture E2E restrita; visitante confirma reserva real; retry cria uma reserva; slot deixa oferta | Passou em push/PR no head `35c6ff8`; não executado localmente para preservar Compose/volumes compartilhados. Fixtures legais/comerciais do overlay E2E não comprovam prontidão real |
 | Migrations/grants | `TenantPersistenceIT` e Flyway | instalação limpa, upgrades V1/V2/V5/V6/V7/V8/V9/V10/V11/V12, validate/rerun, FKs, GiST e grants runtime mínimos | Passa com PostgreSQL 16.13/Testcontainers: fresh V1–V13, upgrades e rerun; V1–V12 imutáveis |
 
 ## Estratégia e progresso
@@ -49,7 +49,7 @@
 5. [x] Implementar caso de uso/API com chave idempotente e revalidação antes do replay e sob lock.
 6. [x] Conectar formulário/retry com CSRF e estado de resultado desconhecido.
 7. [x] Adicionar testes PostgreSQL de constraints, rollback, replay e corridas; browser E2E criado para App CI.
-8. [x] Revisões independentes somente leitura concluídas; primeira suíte completa encontrou incompatibilidade do `@MockitoBean` multimódulo em `PublicPageIT`, corrigida com bean de teste `@Primary` isolado. Revalidação completa passou (63 unitários/arquiteturais + 92 integrações); App CI/CodeQL e browser E2E remotos ainda pendentes.
+8. [x] Revisões independentes somente leitura concluídas; incompatibilidade do `@MockitoBean` multimódulo corrigida por bean `@Primary` isolado. Após primeiro CI, corrigido import faltante na fixture E2E e, depois, serialização HTTP que removia o offset tenant; teste PostgreSQL passou com `-03:00`. Revisão final identificou risco de alterar uma intenção incerta: controles de serviço/data/slot/dados ficam bloqueados e `OPERATION_IN_PROGRESS` mantém o estado incerto, deixando ativo somente o retry com mesma chave/corpo. App CI/CodeQL passaram no head `35c6ff8`; a falha anterior foi uma expectativa E2E desatualizada sobre o texto final, corrigida sem reduzir assertions.
 
 ## Riscos e limites
 
@@ -62,5 +62,5 @@
 
 ## Encerramento ou retomada
 
-- AGD-015 permanece parcial até todos os critérios obrigatórios terem evidência local e CI. AGD-016 recebe evidência do fluxo de retry, mas não é concluída integralmente por isso.
+- AGD-015 permanece parcial: fluxo funcional, concorrência, atomicidade, PostgreSQL e CI têm evidência neste incremento; readiness legal/comercial real, homologação HTTPS/staging, preflight hospedado, scan completo, retenção e WhatsApp real continuam pendentes. A intenção incerta fica em memória enquanto a página está montada; reload/fechamento perde o estado local, sem persistir PII no browser. Recuperação após reload permanece evolução de AGD-016.
 - O próximo incremento recomendado é AGD-016 para endurecer retry consultável/recuperável; futuras histórias continuam responsáveis por acesso de cliente, notificações e comandos de agenda.
