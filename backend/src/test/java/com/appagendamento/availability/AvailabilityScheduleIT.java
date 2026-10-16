@@ -14,16 +14,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.appagendamento.availability.application.AppointmentOccupancyQuery;
-import com.appagendamento.availability.application.CalculateAvailabilityForDate;
+import com.appagendamento.availability.application.AvailabilityReadTransaction;
+import com.appagendamento.availability.application.CalculateAvailabilityForDateRange;
+import com.appagendamento.availability.application.InvalidAvailabilityWindowException;
 import com.appagendamento.availability.application.ManageBlockedPeriods;
 import com.appagendamento.availability.application.ManageScheduleExceptions;
 import com.appagendamento.availability.application.ReplaceAvailabilityPolicy;
 import com.appagendamento.availability.application.ReplaceWeeklySchedule;
 import com.appagendamento.availability.application.ScheduleRepository;
-import com.appagendamento.availability.domain.BoundaryInclusion;
 import com.appagendamento.availability.domain.ScheduleExceptionKind;
 import com.appagendamento.availability.domain.ScheduleVersionConflictException;
-import com.appagendamento.availability.domain.SlotGridAnchor;
 import com.appagendamento.availability.domain.SpecialPeriod;
 import com.appagendamento.availability.domain.WeeklyPeriod;
 import com.appagendamento.catalog.api.ServiceAvailabilityQuery;
@@ -37,12 +37,14 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -83,6 +85,7 @@ class AvailabilityScheduleIT {
   @Autowired private CreateService createService;
   @Autowired private ServiceAvailabilityQuery serviceAvailabilityQuery;
   @Autowired private ScheduleRepository scheduleRepository;
+  @Autowired private AvailabilityReadTransaction availabilityReadTransaction;
   @Autowired private ManageBlockedPeriods manageBlockedPeriods;
   @Autowired private ManageScheduleExceptions manageScheduleExceptions;
   @Autowired private MockMvc mvc;
@@ -145,6 +148,15 @@ class AvailabilityScheduleIT {
   }
 
   @Test
+  void availabilityReadsRunInPostgresRepeatableReadTransaction() {
+    String isolation =
+        availabilityReadTransaction.execute(
+            () -> appJdbc.queryForObject("SHOW transaction_isolation", String.class));
+
+    assertThat(isolation).isEqualTo("repeatable read");
+  }
+
+  @Test
   void calculatesFromPostgresSourcesWithClockAndTestOccupancyWithoutWriting() {
     LocalDate date = LocalDate.of(2026, 10, 19);
     replaceWeeklySchedule.execute(
@@ -185,8 +197,9 @@ class AvailabilityScheduleIT {
               new com.appagendamento.availability.domain.OccupiedInterval(
                   occupiedStart, occupiedStart.plusSeconds(15 * 60L)));
         };
-    CalculateAvailabilityForDate calculation =
-        new CalculateAvailabilityForDate(
+    CalculateAvailabilityForDateRange calculation =
+        new CalculateAvailabilityForDateRange(
+            availabilityReadTransaction,
             scheduleRepository,
             serviceAvailabilityQuery,
             testOccupancies,
@@ -194,21 +207,14 @@ class AvailabilityScheduleIT {
     int auditBefore = countForTenant("audit_event");
     int outboxBefore = countForTenant("outbox_event");
 
-    var result =
-        calculation.execute(
-            tenantId,
-            service.serviceId(),
-            date,
-            SlotGridAnchor.PERIOD_START,
-            BoundaryInclusion.INCLUSIVE,
-            BoundaryInclusion.INCLUSIVE);
+    var result = calculation.execute(tenantId, service.serviceId(), date, date);
 
-    assertThat(result.configured()).isTrue();
+    assertThat(result.days()).hasSize(1);
+    assertThat(result.days().getFirst().date()).isEqualTo(date);
     assertThat(result.timeZone()).isEqualTo("America/Sao_Paulo");
-    assertThat(result.slots())
-        .extracting(slot -> slot.startsAt(ZoneId.of(result.timeZone())).toLocalTime().toString())
+    assertThat(localStarts(result.days().getFirst().slots()))
         .containsExactly("09:00", "10:30", "11:00");
-    assertThat(result.offsetAwareSlots().getFirst().startsAt().getOffset().getId())
+    assertThat(result.days().getFirst().slots().getFirst().startsAt().getOffset().getId())
         .isEqualTo("-03:00");
     assertThat(countForTenant("audit_event")).isEqualTo(auditBefore);
     assertThat(countForTenant("outbox_event")).isEqualTo(outboxBefore);
@@ -220,14 +226,8 @@ class AvailabilityScheduleIT {
         block.version(),
         "block ended");
     var restoredByBlockCancellation =
-        calculation.execute(
-            tenantId,
-            service.serviceId(),
-            date,
-            SlotGridAnchor.PERIOD_START,
-            BoundaryInclusion.INCLUSIVE,
-            BoundaryInclusion.INCLUSIVE);
-    assertThat(localStarts(restoredByBlockCancellation))
+        calculation.execute(tenantId, service.serviceId(), date, date);
+    assertThat(localStarts(restoredByBlockCancellation.days().getFirst().slots()))
         .containsExactly("09:00", "09:30", "10:30", "11:00");
 
     var special =
@@ -240,37 +240,101 @@ class AvailabilityScheduleIT {
                 List.of(new SpecialPeriod(LocalTime.of(13, 0), LocalTime.of(14, 0))),
                 null)
             .value();
-    var specialResult =
-        calculation.execute(
-            tenantId,
-            service.serviceId(),
-            date,
-            SlotGridAnchor.PERIOD_START,
-            BoundaryInclusion.INCLUSIVE,
-            BoundaryInclusion.INCLUSIVE);
-    assertThat(localStarts(specialResult)).containsExactly("13:00");
+    var specialResult = calculation.execute(tenantId, service.serviceId(), date, date);
+    assertThat(localStarts(specialResult.days().getFirst().slots())).containsExactly("13:00");
     manageScheduleExceptions.remove(
         actor,
         "availability-calc-remove-special-" + UUID.randomUUID(),
         special.exceptionId(),
         special.version());
-    var restoredByExceptionRemoval =
-        calculation.execute(
-            tenantId,
-            service.serviceId(),
-            date,
-            SlotGridAnchor.PERIOD_START,
-            BoundaryInclusion.INCLUSIVE,
-            BoundaryInclusion.INCLUSIVE);
-    assertThat(localStarts(restoredByExceptionRemoval))
+    var restoredByExceptionRemoval = calculation.execute(tenantId, service.serviceId(), date, date);
+    assertThat(localStarts(restoredByExceptionRemoval.days().getFirst().slots()))
         .containsExactly("09:00", "09:30", "10:30", "11:00");
   }
 
   private static List<String> localStarts(
-      com.appagendamento.availability.application.AvailabilityDayResult result) {
-    return result.slots().stream()
-        .map(slot -> slot.startsAt(ZoneId.of(result.timeZone())).toLocalTime().toString())
-        .toList();
+      List<com.appagendamento.availability.application.AvailabilityDateResult.AvailabilitySlotView>
+          slots) {
+    return slots.stream().map(slot -> slot.startsAt().toLocalTime().toString()).toList();
+  }
+
+  @Test
+  void dateRangeIsInclusiveLimitedTo31DatesAndOutOfHorizonDatesRemainEmpty() {
+    LocalDate first = LocalDate.of(2026, 10, 16);
+    replaceWeeklySchedule.execute(
+        actor,
+        "range-week-" + UUID.randomUUID(),
+        0,
+        Arrays.stream(DayOfWeek.values())
+            .map(day -> new WeeklyPeriod(day, LocalTime.of(9, 0), LocalTime.NOON))
+            .toList());
+    replaceAvailabilityPolicy.execute(
+        actor, "range-policy-" + UUID.randomUUID(), 0, 30, 1, 7, 2, 2);
+    CountingClock countingClock = new CountingClock(Instant.parse("2026-10-16T12:00:00Z"));
+    var calculator =
+        new CalculateAvailabilityForDateRange(
+            availabilityReadTransaction,
+            scheduleRepository,
+            serviceAvailabilityQuery,
+            (requestedTenant, from, to) -> List.of(),
+            countingClock);
+    UUID serviceId =
+        createService
+            .execute(
+                actor,
+                "range-service-" + UUID.randomUUID(),
+                "Range service",
+                null,
+                30,
+                0,
+                ServiceStatus.ACTIVE)
+            .value()
+            .serviceId();
+
+    var oneDate = calculator.execute(tenantId, serviceId, first, first);
+    assertThat(oneDate.days()).hasSize(1).extracting(day -> day.date()).containsExactly(first);
+    var thirtyOneDates = calculator.execute(tenantId, serviceId, first, first.plusDays(30));
+    assertThat(thirtyOneDates.days()).hasSize(31);
+    assertThat(thirtyOneDates.configured()).isTrue();
+    assertThat(thirtyOneDates.days().get(6).date()).isEqualTo(LocalDate.of(2026, 10, 22));
+    assertThat(thirtyOneDates.days().get(6).slots()).isNotEmpty();
+    assertThat(thirtyOneDates.days().get(7).date()).isEqualTo(LocalDate.of(2026, 10, 23));
+    assertThat(thirtyOneDates.days().get(7).slots()).isEmpty();
+    assertThat(thirtyOneDates.days().get(3).slots()).isNotEmpty();
+    assertThat(countingClock.calls()).isEqualTo(2);
+    assertThatThrownBy(() -> calculator.execute(tenantId, serviceId, first, first.plusDays(31)))
+        .isInstanceOf(InvalidAvailabilityWindowException.class);
+    assertThatThrownBy(() -> calculator.execute(tenantId, serviceId, first.plusDays(1), first))
+        .isInstanceOf(InvalidAvailabilityWindowException.class);
+  }
+
+  private static final class CountingClock extends Clock {
+    private final Instant instant;
+    private final AtomicInteger calls = new AtomicInteger();
+
+    private CountingClock(Instant instant) {
+      this.instant = instant;
+    }
+
+    @Override
+    public ZoneId getZone() {
+      return ZoneId.of("UTC");
+    }
+
+    @Override
+    public Clock withZone(ZoneId zone) {
+      return this;
+    }
+
+    @Override
+    public Instant instant() {
+      calls.incrementAndGet();
+      return instant;
+    }
+
+    private int calls() {
+      return calls.get();
+    }
   }
 
   @Test

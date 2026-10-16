@@ -1,49 +1,34 @@
 package com.appagendamento.availability.domain;
 
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.Objects;
 
 public record AvailabilityTemporalWindow(
-    Instant earliestStart,
-    BoundaryInclusion earliestInclusion,
-    Instant latestStart,
-    BoundaryInclusion latestInclusion) {
+    Instant earliestStart, LocalDate lastEligibleDate, ZoneId timeZone) {
 
   public AvailabilityTemporalWindow {
     Objects.requireNonNull(earliestStart);
-    Objects.requireNonNull(earliestInclusion);
-    Objects.requireNonNull(latestStart);
-    Objects.requireNonNull(latestInclusion);
+    Objects.requireNonNull(lastEligibleDate);
+    Objects.requireNonNull(timeZone);
   }
 
   public static AvailabilityTemporalWindow from(
-      Clock clock,
-      ZoneId zone,
-      AvailabilityPolicy policy,
-      BoundaryInclusion earliestInclusion,
-      BoundaryInclusion latestInclusion) {
-    Objects.requireNonNull(clock);
+      Instant capturedNow, ZoneId zone, AvailabilityPolicy policy) {
+    Objects.requireNonNull(capturedNow);
     Objects.requireNonNull(zone);
     Objects.requireNonNull(policy);
-    Instant now = clock.instant();
-    Instant earliest = now.plus(Duration.ofHours(policy.minimumNoticeHours()));
-    Instant latest = now.atZone(zone).plusDays(policy.bookingHorizonDays()).toInstant();
-    return new AvailabilityTemporalWindow(earliest, earliestInclusion, latest, latestInclusion);
+    Instant earliest = capturedNow.plus(Duration.ofHours(policy.minimumNoticeHours()));
+    LocalDate today = capturedNow.atZone(zone).toLocalDate();
+    LocalDate lastEligible = today.plusDays(policy.bookingHorizonDays() - 1L);
+    return new AvailabilityTemporalWindow(earliest, lastEligible, zone);
   }
 
   public boolean includes(Instant candidateStart) {
     Objects.requireNonNull(candidateStart);
-    boolean afterEarliest =
-        earliestInclusion == BoundaryInclusion.INCLUSIVE
-            ? !candidateStart.isBefore(earliestStart)
-            : candidateStart.isAfter(earliestStart);
-    boolean beforeLatest =
-        latestInclusion == BoundaryInclusion.INCLUSIVE
-            ? !candidateStart.isAfter(latestStart)
-            : candidateStart.isBefore(latestStart);
-    return afterEarliest && beforeLatest;
+    return !candidateStart.isBefore(earliestStart)
+        && !candidateStart.atZone(timeZone).toLocalDate().isAfter(lastEligibleDate);
   }
 }

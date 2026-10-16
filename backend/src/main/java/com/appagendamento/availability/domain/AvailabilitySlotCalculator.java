@@ -16,11 +16,9 @@ public final class AvailabilitySlotCalculator {
       AvailabilityService service,
       ZoneId zone,
       List<OccupiedInterval> blockedAndReserved,
-      SlotGridAnchor anchor,
       AvailabilityTemporalWindow temporalWindow) {
     Objects.requireNonNull(temporalWindow);
-    AvailabilityCalculation result =
-        calculate(day, policy, service, zone, blockedAndReserved, anchor);
+    AvailabilityCalculation result = calculate(day, policy, service, zone, blockedAndReserved);
     if (!result.ready() || result.slots().isEmpty()) {
       return result;
     }
@@ -40,14 +38,12 @@ public final class AvailabilitySlotCalculator {
       Optional<AvailabilityPolicy> policy,
       AvailabilityService service,
       ZoneId zone,
-      List<OccupiedInterval> blockedAndReserved,
-      SlotGridAnchor anchor) {
+      List<OccupiedInterval> blockedAndReserved) {
     Objects.requireNonNull(day);
     Objects.requireNonNull(policy);
     Objects.requireNonNull(service);
     Objects.requireNonNull(zone);
     Objects.requireNonNull(blockedAndReserved);
-    Objects.requireNonNull(anchor);
     if (!ZoneId.getAvailableZoneIds().contains(zone.getId())
         || !day.timeZone().equals(zone.getId())) {
       throw new ScheduleValidationException(
@@ -78,8 +74,7 @@ public final class AvailabilitySlotCalculator {
               zone,
               configuredPolicy.slotStepMinutes(),
               service.durationMinutes(),
-              service.bufferAfterMinutes(),
-              anchor));
+              service.bufferAfterMinutes()));
     }
     List<AvailabilitySlot> available =
         AvailabilitySlotGenerator.excludeOverlaps(candidates, blockedAndReserved).stream()

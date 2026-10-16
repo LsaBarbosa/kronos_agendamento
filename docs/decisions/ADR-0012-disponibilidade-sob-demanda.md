@@ -10,6 +10,10 @@ AGD-012 persiste grade, políticas, exceções e bloqueios e emite `ScheduleChan
 ## Decisão
 
 - Calcular slots sob demanda a partir das leituras PostgreSQL, com `Clock` injetado, timezone IANA confiável e ocupações fornecidas por porta tenant-scoped.
+- Executar as leituras da configuração, serviço e bloqueios na mesma transação PostgreSQL `REPEATABLE READ`, com captura única de `Clock` por consulta. Isso oferece um snapshot coerente das tabelas lidas pela aplicação; a porta externa de ocupações deve consultar dentro do mesmo contexto quando tiver adapter de produção. Não promete consistência com sistemas externos nem impede mutações posteriores ao snapshot.
+- Consultar por janela local inclusiva de no máximo 31 datas (`DAYS.between + 1`); janela invertida/excessiva resulta em `400 INVALID_AVAILABILITY_WINDOW`. Datas pedidas além do horizonte são retornadas vazias.
+- Ancorar inícios no início de cada período e avançar por `slotStepMinutes`; bloqueios, ocupações e antecedência somente filtram. Períodos `SPECIAL` possuem âncoras próprias. A ocupação completa deve caber em um único período.
+- Usar antecedência inclusiva no instante exato (`capturedNow + noticeHours`). Horizonte `N` inclui hoje e mais `N - 1` datas locais; a data final inteira é elegível, a partir do início da data local seguinte não há candidatos. Não interpretar como `N * 24h`.
 - Não adicionar cache, Redis, broker ou publisher de invalidação nesta história. Não interpretar `ScheduleChanged` como invalidação efetiva.
 - Manter o contrato público e a rota deny-all até o gate explícito de publicação ser definido e implementado em AGD-014. A existência de tenant ativo, serviço ativo ou grade configurada não publica o negócio.
 - Manter cálculo indicativo: não cria hold/reserva e não garante que o slot ainda esteja livre no commit futuro.
@@ -22,6 +26,8 @@ AGD-012 persiste grade, políticas, exceções e bloqueios e emite `ScheduleChan
 - O custo de leitura/cálculo será medido quando houver tráfego real; sem benchmark de staging não há afirmação de capacidade/SLO.
 - `ScheduleChanged` continua útil para consumidores futuros, mas não comprova cache atualizado.
 - Não desbloqueia rotas públicas, publicação, confirmação ou proteção contra corrida com reserva.
+
+As regras temporais acima foram aprovadas pelo usuário em 16/10/2026 e também estão registradas nos documentos de requisitos 01 e contrato 03. Antes de publicação, AGD-014 ainda precisa aprovar/implementar o gate público; AGD-015 precisa integrar ocupações persistidas e impedir corrida com confirmação.
 
 ## Referências
 

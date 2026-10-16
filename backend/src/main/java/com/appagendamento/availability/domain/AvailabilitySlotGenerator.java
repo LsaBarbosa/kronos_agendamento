@@ -23,13 +23,11 @@ public final class AvailabilitySlotGenerator {
       ZoneId zone,
       int slotStepMinutes,
       int serviceDurationMinutes,
-      int bufferAfterMinutes,
-      SlotGridAnchor anchor) {
+      int bufferAfterMinutes) {
     Objects.requireNonNull(date);
     Objects.requireNonNull(localStart);
     Objects.requireNonNull(localEnd);
     Objects.requireNonNull(zone);
-    Objects.requireNonNull(anchor);
     if (!ZoneId.getAvailableZoneIds().contains(zone.getId())) {
       throw new ScheduleValidationException("O fuso deve ser uma zona IANA");
     }
@@ -65,11 +63,8 @@ public final class AvailabilitySlotGenerator {
       return List.of();
     }
 
-    int step = slotStepMinutes;
     int firstMinute = localStart.getHour() * 60 + localStart.getMinute();
-    if (anchor == SlotGridAnchor.WALL_CLOCK) {
-      firstMinute = ((firstMinute + step - 1) / step) * step;
-    }
+    int step = slotStepMinutes;
     Duration serviceDuration = Duration.ofMinutes(serviceDurationMinutes);
     Duration buffer = Duration.ofMinutes(bufferAfterMinutes);
     List<AvailabilitySlot> result = new ArrayList<>();
