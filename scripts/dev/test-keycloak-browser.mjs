@@ -305,7 +305,7 @@ try {
     }
     console.log(`Browser: visitante consultou ${publicDate}, selecionou um de ${publicSlotsBeforeSelection} horários sem criar reserva; layout móvel/desktop sem overflow.`);
     await navigate('http://localhost:5173/admin', command, evaluate);
-    await waitForText('Página pública publicada.', evaluate);
+    await waitForText('Estado: Publicado', evaluate);
     await clickButtonByText('Despublicar página', evaluate);
     await waitForText('Página pública despublicada.', evaluate);
     const unpublishedRead = await evaluate(
