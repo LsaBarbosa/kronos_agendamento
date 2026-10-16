@@ -75,7 +75,7 @@
 
 - [x] 16/10/2026 — main atualizada em `4ce3cb5871ae89d026ebf61eb77534ff89742cad`, branch própria criada e V10 confirmada.
 - [x] 16/10/2026 — decisões temporais registradas em requisitos, contrato, ADR-0011 e `OPEN-QUESTIONS.md`.
-- [x] 16/10/2026 — implementação backend/API/UI e V10; gates locais `spotless:check verify` passaram (36 unitários/arquiteturais + 64 integrações PostgreSQL), frontend (4 testes), OpenAPI, e browser E2E OIDC real passou; resultados detalhados em `docs/development/VALIDATION.md`.
+- [x] 16/10/2026 — commit funcional `5dbd1a30b7c35efe9b2928a9e7ab7e647f890b23`: implementação backend/API/UI e V10; gates locais `spotless:check verify` passaram (36 unitários/arquiteturais + 64 integrações PostgreSQL), frontend (4 testes), OpenAPI e browser E2E OIDC real; resultados em `docs/development/VALIDATION.md`.
 - [ ] Publicação da branch/PR e App CI/CodeQL aguardam execução no head final.
 - [x] Revisões independentes em leitura concluídas; ajustes de OpenAPI/DTO, edição de data fora do intervalo, visualização local com zona e assertion de rollback idempotente foram aplicados. Pareceres não equivalem a aprovação humana.
 - [ ] Prova de bloqueio concorrente com reservas e invalidação real de cache continuam indisponíveis por dependência de AGD-015/013; retenção de resultados idempotentes ainda depende de decisão.
