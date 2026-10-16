@@ -124,6 +124,11 @@ Critérios de aceite:
 - Bloqueio sobre reserva existente é recusado ou exige fluxo explícito de resolução; não oculta o conflito.
 - Mudanças invalidam cache de disponibilidade.
 - Histórico/auditoria preserva quem alterou.
+- Horário especial substitui a grade semanal com uma lista final de períodos; ausência de exceção preserva a grade e exceção fechada fecha a data. Remover exceção restaura a grade semanal.
+- Horários especiais seguem limites locais de 15 minutos, `[início,fim)`, adjacência permitida, overlap rejeitado e sem cruzar meia-noite.
+- Bloqueios são semiabertos, podem cruzar datas e mudanças de offset; limites locais inexistentes/ambíguos sem offset são rejeitados, offsets explícitos são validados contra o timezone IANA do tenant, e UTC + zona são persistidos.
+- Criar/cancelar bloqueio exige motivo; cancelamento é lógico e preserva identidade, versão e histórico. Não cancelar nem mover reserva automaticamente.
+- A integração/concorrência com reservas e invalidação de cache só é concluída quando houver as respectivas infraestruturas; testes com adapters de teste não substituem a evidência integrada.
 
 ### AGD-013 — Motor de disponibilidade
 

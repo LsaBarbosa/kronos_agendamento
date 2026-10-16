@@ -2,56 +2,59 @@
 
 ## Identificação e objetivo
 
-- Próxima história P0, tamanho M, backlog do documento 06; preparação documental apenas, sem implementar nem publicar comportamento AGD-012 nesta rodada.
+- História P0, tamanho M, backlog do documento 06; incremento autorizado na branch `agd-012-excecoes-bloqueios`, base `4ce3cb5871ae89d026ebf61eb77534ff89742cad`.
 - Objetivo: permitir administrar exceções por data e períodos de bloqueio sem ocultar conflitos com reservas confirmadas, invalidando a disponibilidade derivada e preservando auditoria.
 - Fontes: `docs/spec/app-agendamento-01-especificacao-mvp.md` §5.3; `docs/spec/app-agendamento-02-modelo-dominio-estados.md` entidades `ScheduleException`/`BlockedPeriod` e §12; `docs/spec/app-agendamento-03-apis-eventos-integracoes.md` seção “Grade, exceções e bloqueios” e evento `ScheduleChanged`; `docs/spec/app-agendamento-04-arquitetura-implementacao.md` §§4, 8–10; critérios AGD-012 em `docs/spec/app-agendamento-06-backlog-criterios-aceite.md`.
-- Escopo: exceção de data fechada ou com horário especial; criar, consultar e remover bloqueios com motivo; detectar/resolver conflito com reserva confirmada segundo fluxo aprovado; invalidação pós-commit da disponibilidade em cache; histórico/auditoria do ator.
+- Escopo: CRUD tenant-scoped de exceções; criação/consulta/cancelamento lógico de bloqueios com motivo; OIDC/CSRF, CAS, replay idempotente, auditoria e `ScheduleChanged`; UI administrativa e testes PostgreSQL/HTTP/browser.
 - Exclusões: motor/consulta de disponibilidade AGD-013, reservas/remarcação/cancelamento, publicação pública, notificações, calendário externo, bloqueio de cliente e qualquer alteração da grade semanal AGD-011.
 
 ## Estado e dependências
 
-- AGD-011 fornece grade semanal, timezone IANA do tenant, OIDC, autorização tenant-scoped, CSRF, CAS, idempotência, auditoria transacional e outbox; V9 valida alinhamento temporal da grade. PR #6 foi integrado em `main` pelo merge commit `035c0bf4ccf191b6bc33a0512a7c2867eb06fa95`; App CI/CodeQL pós-merge passaram. AGD-012 ainda não foi implementada; iniciar em branch própria baseada na `main` atualizada.
-- A especificação propõe `ScheduleException(tenant, local_date, kind, periods, reason, version)` e `BlockedPeriod(block_id, tenant, starts_at, ends_at, reason, status, version)`; contrato REST administrativo existe em forma proposta no documento 03.
-- Confirme a última migration integrada antes de reservar número. Esperado após integração de AGD-011: V10; nunca alterar V1–V9 nem assumir o estado apenas pelo plano.
+- AGD-011 fornece grade semanal, timezone IANA do tenant, OIDC, autorização tenant-scoped, CSRF, CAS, idempotência, auditoria transacional e outbox; PR #6 foi integrado e CI passou. AGD-012 está sendo implementada nesta branch.
+- `origin/main` foi buscada e confirmou `4ce3cb5871ae89d026ebf61eb77534ff89742cad`; branch criada sobre esse SHA. V10 confirmada como próxima migration; preservar V1–V9.
+- A inspeção confirmou que appointments/reservas persistidas, cache de disponibilidade e consumer de invalidação não existem. O módulo appointments contém somente `TimeInterval`; `ScheduleChanged` já é persistido na outbox.
 - Autorização deve reutilizar a associação ativa e o papel já existente `TENANT_ADMIN`; ator, tenant e timezone vêm do contexto autenticado/servidor, não do payload.
 
 ## Critérios de aceite verificáveis
 
-- [ ] Para uma data, administrador pode definir fechado ou substituir grade por horários especiais; leitura diferencia ausência de exceção da exceção explicitamente fechada.
-- [ ] Administrador pode criar e remover/cancelar bloqueios, sempre exigindo e preservando motivo conforme contrato aprovado.
-- [ ] Bloqueio que intersecta reserva confirmada é recusado com conflito identificável sem ocultar a reserva; somente adicionar fluxo de resolução se houver decisão e caso de uso aprovado.
-- [ ] Leitura e mutação respeitam tenant, associação atual, OIDC, CSRF e política não reveladora para objetos alheios/inexistentes.
-- [ ] Atualizações concorrentes usam CAS/versionamento; comando repetido é idempotente; autorização atual é revalidada antes de replay.
-- [ ] Mutação, resultado idempotente, auditoria de sucesso e `ScheduleChanged` previsto compartilham transação. Falha em qualquer gravação obrigatória reverte a alteração.
-- [ ] Cache de disponibilidade é invalidado somente após commit; não é autoridade para aceitar reserva e nenhuma rota pública é habilitada por AGD-012.
-- [ ] UI autenticada lista/edita exceções e bloqueios, apresenta motivo/conflito e confirma estado persistido após reload.
-- [ ] Migração instala schema em banco vazio e atualiza versão anterior sem modificar dados silenciosamente; `validate`/rerun e privilégios runtime passam em PostgreSQL real.
+- [x] Para uma data, administrador pode definir fechado ou substituir grade por horários especiais; leitura diferencia ausência de exceção da exceção explicitamente fechada.
+- [x] Administrador pode criar e cancelar logicamente bloqueios, sempre exigindo e preservando motivo conforme contrato aprovado.
+- [ ] Bloqueio que intersecta reserva confirmada é recusado por uma fonte integrada; prova real e concorrente aguarda AGD-015. Sem resolução automática.
+- [x] Leitura e mutação respeitam tenant, associação atual, OIDC, CSRF e política não reveladora para objetos alheios/inexistentes.
+- [x] Atualizações concorrentes usam CAS/versionamento; comando repetido é idempotente; autorização atual é revalidada antes de replay.
+- [x] Mutação, resultado idempotente, auditoria de sucesso e `ScheduleChanged` previsto compartilham transação. Falha em gravações obrigatórias reverte a alteração.
+- [ ] `ScheduleChanged` é persistido na transação; invalidação real aguarda cache/consumer de AGD-013. Não declarar invalidação com base apenas na outbox.
+- [x] UI autenticada lista/edita exceções e bloqueios, apresenta motivo/conflito e confirma estado persistido após reload.
+- [x] V10 instala schema em banco vazio e atualiza V9; `validate`/rerun e privilégios runtime passam em PostgreSQL real.
 
-## Decisões pendentes
+## Decisões de produto e contrato
 
-- Produto: confirmar se períodos especiais herdam integralmente a semântica temporal de AGD-011 (múltiplos de 15, `[início,fim)`, mesmo dia) ou se têm regras distintas. Não assumir equivalência silenciosamente.
-- Produto/arquitetura: definir como a UI informa horários de bloqueio (`Instant`/offset explícito ou horário local do tenant), sobretudo em transições DST com hora inexistente ou ambígua. Rejeitar entradas sem interpretação inequívoca; não usar offsets UTC fixos para recorrência.
-- Produto: confirmar edição de exceção existente, limites de intervalo de consulta e semântica de remoção de bloqueio. API documenta PATCH/DELETE por CAS e recomenda remoção lógica após efeito auditável; manter isso alinhado com a necessidade de história, sem apagar auditoria.
-- Produto/arquitetura: o MVP pode escolher recusar bloqueio conflitante (opção já permitida pelo requisito). Qualquer resolução/cancelamento em cascata de reserva exige comando separado, autorização, confirmação explícita e critérios próprios; não inferir de criar bloqueio.
-- Operação: o cache concreto ainda pode não existir. Confirmar adapter de invalidação; se não houver cache ativo, manter uma porta/no-op justificável ou limitar-se ao mecanismo realmente existente, sem criar cache/publisher artificial.
-- Não inventar retenção ou expurgo. Manter trilha, idempotência e outbox segundo decisão vigente até aprovação de política.
+- Decisão explícita do usuário em 16/10/2026 registrada em ADR-0011 e nos documentos 01, 02, 03, 06 e `OPEN-QUESTIONS.md`: ausência mantém grade semanal; `CLOSED` fecha; `SPECIAL` substitui pela lista final que pode conter períodos mantidos e adicionais; remoção restaura a grade.
+- Horários especiais: limites locais múltiplos de 15 independentes do slot, `[início,fim)`, adjacência permitida, overlap rejeitado, início<fim e sem meia-noite. `CLOSED` exige lista vazia e `SPECIAL` não vazia.
+- Limite local inexistente ou ambíguo sem offset é rejeitado. Offset explícito pode selecionar ocorrência somente se válido na zona IANA do tenant. UI usa horário local e não escolhe offset.
+- Bloqueios podem cruzar datas e transições de offset, persistem instantes UTC + zona, e exigem motivo na criação e cancelamento. Cancelamento lógico preserva ID, motivos, timestamp e versão incrementada. Não há restrição genérica entre bloqueios.
+- Exceção única por tenant/data; PATCH pode alterar a data sujeita à unicidade. Listagens exigem intervalo local inclusivo máximo de 366 datas. Motivo da exceção é opcional; nenhum motivo livre entra em auditoria/outbox.
+- Porta de conflito consulta reservas confirmadas. Sem appointments persistidos, adapter temporário documenta que não há fonte ainda; testes com adapter controlado são prova da infraestrutura, não da integração nem da corrida. AGD-015 precisa de proteção compartilhada no PostgreSQL/transação.
+- `ScheduleChanged` usa payload allowlisted `{tenantId,version}`. Cache/consumer não existem: AGD-012 grava o evento atomicamente, mas invalidação real fica para AGD-013.
+- O resultado idempotente conserva os campos necessários para reproduzir a resposta original, incluindo motivo de bloqueio/cancelamento; motivos não são copiados para auditoria/outbox. Retenção desses registros permanece sem política aprovada e não há expurgo automático.
+- Retenção continua pendente; nenhum expurgo automático.
 
 ## Estratégia
 
-1. Partir da `main` que contém o merge `035c0bf4ccf191b6bc33a0512a7c2867eb06fa95`, confirmar estado remoto/migrations e abrir branch AGD-012; reler `AGENTS.md`, requisitos, ADRs e estado dos contratos.
-2. Fechar as decisões de tempo local/DST e semântica de exceção; atualizar OpenAPI antes da implementação. Reutilizar validadores temporais apenas depois de confirmar compatibilidade de requisito.
-3. Implementar agregados/casos de uso no módulo `availability`, adapters PostgreSQL e API protegida, mantendo tenant isolation e consultas não reveladoras.
-4. Escolher bloqueio lógico (status ativo/cancelado) como padrão inicial coerente com auditoria e API proposta; efetivar em ADR apenas se houver consequência arquitetural relevante.
-5. Definir constraints para período válido e unicidade/concorrência de exceção por tenant/data. Bloqueios devem impedir cruzamento de meia-noite local ambíguo; conflitos com reservas confirmadas precisam de prova transacional, não apenas precheck fora da transação.
-6. Gravar outbox `ScheduleChanged` dentro da mesma transação e invalidar cache depois do commit/consumo; preservar claim fencing e entrega ao menos uma vez, sem alegar exactly-once externo.
-7. Entregar UI com estados de carregamento, vazio, validação, conflito, erro, sessão expirada/revogação e sucesso. Não adicionar rotas públicas nem motor de disponibilidade.
-8. Validar PostgreSQL/Testcontainers em instalação limpa/upgrade, isolamento HTTP, concorrência/CAS, rollback, replay, auditoria/outbox, DST e browser E2E OIDC; rodar gates CI e revisão independente.
+1. Registrar decisões aprovadas em especificação, ADR-0011 e OpenAPI; obter timezone e associação autenticada do servidor.
+2. Implementar domínio temporal de exceções e bloqueios com resolução `ZoneRules`; local inexistente/ambíguo sem offset inválido.
+3. Criar V10 com integridade tenant/date, períodos especiais, instantes UTC, índices e grants mínimos; estender auditoria allowlist sem alterar V1–V9.
+4. Implementar adapters JDBC, CAS, idempotência canônica, códigos de erro, auditoria e `ScheduleChanged` transacionais.
+5. Preparar somente a porta de conflito de reserva; não criar tabelas/endpoints ou cache artificiais.
+6. Entregar API/OpenAPI e UI para consultas, edição/restauração da exceção e criação/cancelamento de bloqueio com mensagens DST e recuperação CAS.
+7. Provar migrations, grants, PostgreSQL concorrente, isolamento HTTP, replay/rollback e browser real com Keycloak/Postgres/Chrome.
+8. Revisar com até dois agentes em leitura, corrigir achados, rodar gates e publicar branch/PR. Não fazer merge/deploy.
 
 ## Estratégia de migration e compatibilidade
 
-- Próxima migration estimada V10; confirmar no início do incremento contra a `main` integrada. Preservar V1–V9 e checksums.
-- Separar tabelas para exceção, períodos especiais e bloqueios se isso refletir o modelo sem comprometer atomicidade; FK tenant com isolamento e índices por tenant/data/instante.
-- Constraints PostgreSQL para `start < end`, intervalo semiaberto e integridade estrutural; exclusão/concorrência de bloqueios deve respeitar cancelamento lógico e reservas confirmadas. Justificar constraint por invariantes em vez de replicar somente validação Java.
+- V10 criou exceções/bloqueios preservando V1–V9. V11 adiciona offsets opcionais aos limites de períodos especiais, sem backfill ou alteração dos valores locais anteriores. O trigger resolve a zona do tenant, rejeita limites inexistentes ou ambíguos sem offset, valida ida/volta do offset explícito e impede sobreposição por instantes sob escritas concorrentes. A proteção de banco identifica offsets válidos por amostragem de instantes UTC em passos de um minuto no entorno do limite; a validação Java/ZoneRules permanece a autoridade exata do fluxo da aplicação.
+- FK tenant/data e unique `(tenant_id, local_date)`; FK composta tenant/exception dos períodos; exclusion GiST por exceção para impedir overlap; CHECK de quarter-hour e start<end.
+- Bloqueios guardam UTC em `timestamptz`, `time_zone`, status/version, motivo original e cancelamento; índices de busca por tenant/instantes. Sem exclusion constraint entre bloqueios.
 - Sem backfill presumido: não há evidência de dados antigos dessas entidades. Migração deve criar schema funcional, grants mínimos runtime e manter auditoria append-only.
 
 ## Validação e evidências esperadas
@@ -60,19 +63,24 @@
 |---|---|---|
 | Regras temporais e estado | testes unitários de domínio | fechado vs especial vs ausente; limites; DST conforme decisão |
 | Persistência/concorrência | PostgreSQL real/Testcontainers com conexões independentes | migration fresh/upgrade, CAS, unicidade e integridade concorrente |
-| Conflito com reserva | caso de uso e endpoint administrativo | bloqueio recusado, reserva preservada/visível e nenhuma trilha de sucesso |
+| Conflito com reserva | porta + adapter de teste; futura AGD-015 | teste do ramo de rejeição/rollback apenas; integração e concorrência reais pendentes |
 | Segurança/isolation | testes HTTP autenticados com duas associações/tenants | permitido no próprio tenant, rejeição não reveladora para tenant alheio, CSRF e associação revogada |
 | Atomicidade | falhar auditoria/outbox deliberadamente | rollback de alteração, resultado idempotente e evento |
-| Cache/evento | consumer/adapter real do projeto, se existente | invalidação pós-commit; falha/retry não declara publicação não ocorrida |
+| Cache/evento | outbox existente | `ScheduleChanged` transacional; invalidação de cache pendente, pois não há cache/consumer atual |
 | Interface | browser E2E com Keycloak real e PostgreSQL | criar/editar/fechar data, criar/cancelar bloqueio, reload e conflito visível |
 | Gates | Maven, frontend, scanners, App CI e CodeQL | resultados ligados ao SHA publicado; homologação separada |
 
 ## Progresso e retomada
 
-- [x] 15/10/2026 — preparação documental iniciada a partir das referências existentes; nenhum código, migration, endpoint ou regra AGD-012 implementados nesta etapa.
-- [ ] Após decisão temporal de exceções/DST, confirmar migration real e revisar contratos antes de iniciar implementação na branch própria.
-- [ ] Homologação, operação de cache e políticas de retenção permanecem evidências/decisões próprias; não inferir aprovação por CI.
+- [x] 16/10/2026 — main atualizada em `4ce3cb5871ae89d026ebf61eb77534ff89742cad`, branch própria criada e V10 confirmada.
+- [x] 16/10/2026 — decisões temporais registradas em requisitos, contrato, ADR-0011 e `OPEN-QUESTIONS.md`; offsets explícitos para ocorrências ambíguas são persistidos em V11.
+- [x] 16/10/2026 — implementação inicial backend/API/UI e V10 em `5dbd1a30b7c35efe9b2928a9e7ab7e647f890b23`; browser E2E OIDC real executado nesse delta original.
+- [x] PR [#7](https://github.com/LsaBarbosa/kronos_agendamento/pull/7), head atual `a2ef5434bd22650d0c850a04f55017a970a44dfd`; V11/DST validado localmente no commit `1664be2402bfd3322c5b41ca5547a2702c3bcc45` (69 testes de `spotless:check verify`, 7 Vitest). App CI push/PR (`38909492860`, `38909500156`) e CodeQL push/PR (`38909492570`, `38909499974`) passaram, incluindo browser E2E OIDC no head `a2ef543`.
+- [x] Revisões independentes em leitura encontraram e ajudaram a corrigir rejeição SQL de limite ambíguo sem offset, cobertura concorrente do trigger e documentação do erro `INVALID_LOCAL_TIME`. Os pareceres são de agentes e não equivalem a aprovação humana.
+- [x] Falha de browser E2E no head `72490bd` investigada: após remoção, o teste clicava antes de terminar `saving` e o botão ainda trocava de texto. O roteiro agora espera o botão habilitado; nova execução de browser E2E passou no head `a2ef543`. A tentativa local de reprodução não alcançou o endpoint CDP do Chrome, então o resultado navegador desta correção é evidência de CI.
+- [ ] Prova integrada/concorrente de conflito com reservas e invalidação real de cache seguem indisponíveis por dependência de AGD-015/decisão arquitetural; retenção de resultados idempotentes ainda depende de decisão.
+- [ ] Integração concorrente com reservas, invalidação real, homologação, scan completo, retenção e integrações reais permanecem pendentes.
 
 ## Encerramento ou retomada
 
-AGD-012 está preparada para planejamento técnico, não iniciada funcionalmente. Antes de codificar, obter as decisões materiais de tempo das exceções e entrada de bloqueios em DST; em seguida implementar o caminho conservador que recusa bloqueio sobre reserva confirmada. Confirmar estado de `main`, migration e cache real no início do próximo incremento.
+AGD-012 permanece parcial até comprovar os critérios aplicáveis. A porta de reserva não comprova conflito real nem concorrência, que dependem de AGD-015; `ScheduleChanged` não comprova invalidação de cache, que depende de AGD-013. Não habilitar rotas públicas nem implementar motor de disponibilidade nesta história.

@@ -65,6 +65,11 @@ class DatabaseBootstrapIT {
                 Integer.class))
         .isEqualTo(4);
     assertThat(
+            migrationJdbc.queryForObject(
+                "select count(*) from agendamento.flyway_schema_history where version in ('9', '10', '11') and success",
+                Integer.class))
+        .isEqualTo(3);
+    assertThat(
             jdbc.queryForObject("select to_regclass('agendamento.spring_session')", String.class))
         .isEqualTo("agendamento.spring_session");
     assertThat(jdbc.queryForObject("select to_regclass('agendamento.tenant')", String.class))
@@ -74,6 +79,11 @@ class DatabaseBootstrapIT {
     assertThat(
             jdbc.queryForObject("select to_regclass('agendamento.weekly_schedule')", String.class))
         .isEqualTo("agendamento.weekly_schedule");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from information_schema.columns where table_schema = 'agendamento' and table_name = 'schedule_exception_period' and column_name in ('local_start_offset_seconds', 'local_end_offset_seconds')",
+                Integer.class))
+        .isEqualTo(2);
   }
 
   @Test

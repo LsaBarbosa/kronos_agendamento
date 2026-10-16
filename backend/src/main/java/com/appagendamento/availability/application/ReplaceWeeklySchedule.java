@@ -97,18 +97,19 @@ public class ReplaceWeeklySchedule {
             current.version(),
             updated.version(),
             traceId));
+    long scheduleRevision = schedules.nextScheduleRevision(actor.tenantId());
     outbox.record(
         new OutboxEvent(
             UUID.randomUUID(),
             actor.tenantId(),
             "SCHEDULE",
             actor.tenantId(),
-            updated.version(),
+            scheduleRevision,
             "ScheduleChanged",
             1,
             operationId,
             traceId,
-            "{\"tenantId\":\"" + actor.tenantId() + "\",\"version\":" + updated.version() + "}"));
+            "{\"tenantId\":\"" + actor.tenantId() + "\",\"version\":" + scheduleRevision + "}"));
     return updated;
   }
 

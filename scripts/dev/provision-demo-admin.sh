@@ -3,15 +3,20 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-if [[ $# -ne 2 ]]; then
-  echo "Uso: $0 <slug-tenant> <nome-tenant>" >&2
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+	echo "Uso: $0 <slug-tenant> <nome-tenant> [usuario-admin]" >&2
   exit 2
 fi
 slug=$1
 tenant_name=$2
+username=${3:-demo-admin}
 if [[ ! "$slug" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
   echo "Slug deve ser minúsculo e kebab-case." >&2
   exit 2
+fi
+if [[ ! "$username" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+	echo "Usuário deve conter somente letras, números, ponto, hífen ou sublinhado." >&2
+	exit 2
 fi
 if [[ ! -f .env || ! -f .env.keycloak ]]; then
   echo "Prepare .env da aplicação e execute scripts/dev/prepare-keycloak.sh primeiro." >&2
@@ -36,7 +41,6 @@ kc=("${compose[@]}" exec -T keycloak /opt/keycloak/bin/kcadm.sh)
   --user "$KEYCLOAK_ADMIN_USERNAME" \
   --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null
 
-username=demo-admin
 temporary_password=$(openssl rand -base64 24)
 unlinked_password=$(openssl rand -base64 24)
 users=$("${kc[@]}" get users -r agendamento -q username="$username")
@@ -75,7 +79,7 @@ if [[ "$existing_identity" == "t" ]]; then
   exit 1
 fi
 "${kc[@]}" update "users/$subject" -r agendamento \
-  -s enabled=true -s email=demo-admin@local.invalid -s emailVerified=true \
+	-s enabled=true -s "email=$username@local.invalid" -s emailVerified=true \
   -s firstName=Demo -s lastName=Admin -s 'requiredActions=[]' >/dev/null
 "${kc[@]}" set-password -r agendamento --username "$username" \
   --new-password "$temporary_password" >/dev/null
