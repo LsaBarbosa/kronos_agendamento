@@ -8,6 +8,50 @@ info:
 servers:
   - url: /api/v1
 paths:
+  /public/{slug}/availability:
+    x-implementation-status: contract-only-blocked-until-AGD-014
+    x-public-access-enabled: false
+    get:
+      operationId: getPublicAvailability
+      summary: Consultar ofertas indicativas por serviço e janela local
+      description: >-
+        Contrato futuro, ainda não exposto pelo servidor. AGD-014 precisa aprovar e implementar
+        explicitamente o gate de publicação; tenant ACTIVE, serviço ativo e agenda configurada não
+        bastam. A consulta não cria hold nem garante confirmação. Datas fora do horizonte solicitado
+        permanecem na resposta com slots vazios.
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+        - name: serviceId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          required: true
+          description: Data local inclusiva no timezone IANA confiável do tenant.
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: true
+          description: Data local inclusiva; from deve ser <= to e a janela contém no máximo 31 datas.
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: Resultado indicativo ordenado; ausência de configuração não aplica defaults.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AvailabilityRange" }
+        "400":
+          description: Janela invertida ou com mais de 31 datas; erro INVALID_AVAILABILITY_WINDOW.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: Serviço inexistente, inativo, alheio ou não publicável, sem revelar tenant.
+
   /admin/schedule/weekly-periods:
     get:
       operationId: getAdminWeeklySchedule
@@ -360,6 +404,49 @@ components:
         minLength: 1
         maxLength: 255
   schemas:
+    AvailabilitySlot:
+      type: object
+      additionalProperties: false
+      required: [startsAt, serviceEndsAt]
+      properties:
+        startsAt:
+          type: string
+          format: date-time
+          description: Instante com offset válido na zona IANA do tenant.
+        serviceEndsAt:
+          type: string
+          format: date-time
+          description: Fim do serviço; o buffer posterior já foi considerado na elegibilidade.
+    AvailabilityDate:
+      type: object
+      additionalProperties: false
+      required: [date, explicitlyClosed, slots]
+      properties:
+        date: { type: string, format: date }
+        explicitlyClosed:
+          type: boolean
+          description: Diferencia fechamento explícito de configuração ausente ou fora do horizonte.
+        slots:
+          type: array
+          items: { $ref: "#/components/schemas/AvailabilitySlot" }
+    AvailabilityRange:
+      type: object
+      additionalProperties: false
+      required: [serviceId, from, to, timeZone, generatedAt, configured, days]
+      properties:
+        serviceId: { type: string, format: uuid }
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        timeZone:
+          type: string
+          description: Zona IANA confiável do tenant; timestamps dos slots incluem offset.
+        generatedAt: { type: string, format: date-time }
+        configured:
+          type: boolean
+          description: false quando grade semanal ou política não foi configurada; nenhum default é inferido.
+        days:
+          type: array
+          items: { $ref: "#/components/schemas/AvailabilityDate" }
     WeeklyPeriod:
       type: object
       additionalProperties: false

@@ -304,6 +304,8 @@ Slots pré-gerados ficam obsoletos quando grade, exceção, serviço, bloqueio, 
 
 Cache pode acelerar a consulta, mas deve ser invalidável e nunca substituir a constraint de banco.
 
+Na consulta AGD-013, capturar o instante do servidor uma vez. Inícios avançam a partir do começo de cada período aplicável, inclusive períodos `SPECIAL`, e filtros de bloqueio/ocupação/antecedência não movem a âncora. `from` e `to` são datas locais inclusivas, com janela máxima de 31 datas (`DAYS.between + 1`). O horizonte de N dias inclui a data local de hoje e a última data hoje + N - 1, inclusive; não equivale a N vezes 24 horas. A consulta pode retornar datas fora do horizonte, sempre sem slots. Ver contrato detalhado no documento 01 §5.6 e documento 03.
+
 ## 13. Concorrência por operação
 
 ### Criar reserva

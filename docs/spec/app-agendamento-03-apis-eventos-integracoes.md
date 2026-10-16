@@ -105,10 +105,16 @@ Resposta pública não inclui configuração interna, contagem de faltas, assina
 
 Regras:
 
-- Datas são locais ao tenant; resposta inclui `timeZone`.
-- Intervalo solicitado é limitado ao horizonte e a um tamanho máximo, por exemplo 31 dias.
+- Contrato futuro: a operação continua fechada no servidor até o gate de publicação aprovado e implementado por AGD-014; tenant ativo, serviço ativo e agenda configurada não bastam.
+- `from` e `to` são datas locais inclusivas no timezone IANA confiável do tenant; `from <= to` e `DAYS.between(from,to) + 1 <= 31`. Janela inválida/excessiva retorna `400 INVALID_AVAILABILITY_WINDOW`.
+- A resposta contém `serviceId`, datas solicitadas ordenadas, `timeZone`, `generatedAt`, `configured` e slots ordenados por dia, com timestamps ISO 8601 contendo offset. Cada dia informa `explicitlyClosed`; datas fora do horizonte permanecem com lista de slots vazia.
+- Um `Clock` é capturado uma vez por consulta. Antecedência usa instante decorrido e permite início exatamente no limite. Horizonte `N` conta `N` datas locais incluindo hoje: última data = hoje local + `N - 1`, inclusiva; candidatos desde o início da data seguinte são excluídos. Não converter para `N * 24` horas.
+- Inícios são ancorados ao começo de cada período aplicável e avançam por `slotStepMinutes`. Filtros não alteram a âncora; períodos de `SPECIAL` têm âncoras próprias. Duração mais buffer deve caber em um só período.
+- Ausência de configuração não aplica defaults e é distinguida de fechamento explícito.
 - Cache pode ser usado com TTL curto e invalidação por mudança relevante.
-- Resultado é indicativo até o commit.
+- Resultado é indicativo até o commit; não cria hold nem garante confirmação. Ocupações reais e proteção contra corrida pertencem a AGD-015.
+
+Exemplo de fronteira: hoje local 16/10 e horizonte 7 permitem datas 16/10 a 22/10; antecedência continua filtrando candidatos nesses dias. Uma consulta que peça até 25/10 retorna 25/10, mas sem slots após o horizonte.
 
 Exemplo:
 

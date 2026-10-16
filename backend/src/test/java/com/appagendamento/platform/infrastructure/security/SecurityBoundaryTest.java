@@ -74,6 +74,24 @@ class SecurityBoundaryTest {
   }
 
   @Test
+  void publicAvailabilityIsNotExposedBeforePublicationGateExists() throws Exception {
+    mvc.perform(
+            get("/api/v1/public/example/availability")
+                .param("serviceId", UUID.randomUUID().toString())
+                .param("from", "2026-10-19")
+                .param("to", "2026-10-19"))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(
+            get("/api/v1/public/example/availability")
+                .param("serviceId", UUID.randomUUID().toString())
+                .param("from", "2026-10-19")
+                .param("to", "2026-10-19")
+                .with(user("test-user")))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.error.code").value("ACTION_NOT_ALLOWED"));
+  }
+
+  @Test
   void privateActuatorEndpointIsNotExposed() throws Exception {
     mvc.perform(get("/actuator/env")).andExpect(status().isUnauthorized());
   }

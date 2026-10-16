@@ -142,6 +142,17 @@ A disponibilidade de um serviço é a interseção de:
 - A API devolve timestamps ISO 8601 com offset e o `timeZone` do tenant.
 - Para exceções e bloqueios administrativos, horários locais inexistentes ou ambíguos sem offset não são ajustados nem desambiguados automaticamente; entradas com offset precisam corresponder a uma ocorrência válida na zona IANA do tenant. Para bloqueios, os instantes UTC e a zona usada são persistidos.
 
+### 5.6 Consulta e geração de disponibilidade (AGD-013)
+
+- A grade dos inícios é ancorada no início de cada período aplicável. Os candidatos avançam pelo `slotStepMinutes`; bloqueios, ocupações e antecedência removem candidatos, mas não reiniciam nem deslocam a grade. Cada período de uma exceção `SPECIAL` tem sua própria âncora.
+- A ocupação completa do serviço e buffer deve caber em um único período. Períodos adjacentes não são unidos para formar um intervalo maior.
+- `from` e `to` são datas locais inclusivas no timezone IANA do tenant; `from <= to` e `DAYS.between(from, to) + 1 <= 31`. Janela invertida ou com mais de 31 datas retorna `400 INVALID_AVAILABILITY_WINDOW`.
+- O instante atual é capturado uma única vez por consulta. O limite mínimo é esse instante mais `minimumNoticeHours`; início exatamente nesse limite é permitido.
+- O horizonte `N` inclui `N` datas locais contando hoje. A última data permitida é hoje no timezone do tenant mais `N - 1` dias, inclusiva até seu último instante local. Candidatos a partir do início da data seguinte são excluídos; essa regra não é `N * 24` horas e respeita mudanças de DST sem escolher offset implicitamente.
+- Exemplo: em 16/10, horizonte 7 inclui as datas locais 16/10 a 22/10, também respeitada a antecedência. A consulta pode incluir datas além do horizonte; elas permanecem na resposta ordenada, com slots vazios.
+- `configured=false` identifica ausência de grade ou política; `explicitlyClosed=true` identifica fechamento explícito. Ausência de oferta nunca autoriza defaults.
+- O cálculo é somente leitura e indicativo. Não cria hold/reserva nem garante confirmação. A rota pública permanece bloqueada até o gate aprovado e implementado por AGD-014; ocupações reais e exclusão concorrente dependem de AGD-015.
+
 ## 6. Fluxo público de reserva
 
 ### 6.1 Passos
