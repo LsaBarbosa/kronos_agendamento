@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent } from 'react';
+import type { ChangeEvent, FormEvent } from 'react';
 import { apiBaseUrl as defaultApiBaseUrl } from './config';
+import {
+    createPublicBooking,
+    newPublicBookingKey,
+    PublicBookingError,
+} from './publicBookingApi';
+import type {
+    PublicBookingConfirmation,
+    PublicBookingRequest,
+} from './publicBookingApi';
 import './PublicPage.css';
 
 export type PublicBusiness = {
@@ -198,6 +207,19 @@ function formatDate(date: string, timeZone: string): string {
     );
 }
 
+function localDate(instant: string, timeZone: string): string {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).formatToParts(new Date(instant));
+    const values = Object.fromEntries(
+        parts.map((part) => [part.type, part.value]),
+    );
+    return `${values.year}-${values.month}-${values.day}`;
+}
+
 function formatDuration(minutes: number): string {
     const hours = Math.floor(minutes / 60);
     const remainingMinutes = minutes % 60;
@@ -226,11 +248,33 @@ function PublicPageContent({
     const [availabilityState, setAvailabilityState] =
         useState<PublicPageState>('loading');
     const [selectedSlot, setSelectedSlot] = useState<PublicSlot | null>(null);
+    const [clientName, setClientName] = useState('');
+    const [clientPhone, setClientPhone] = useState('');
+    const [bookingState, setBookingState] = useState<
+        | 'idle'
+        | 'submitting'
+        | 'uncertain'
+        | 'validation-error'
+        | 'slot-conflict'
+        | 'unavailable'
+        | 'error'
+        | 'confirmed'
+    >('idle');
+    const [bookingMessage, setBookingMessage] = useState('');
+    const [confirmation, setConfirmation] =
+        useState<PublicBookingConfirmation | null>(null);
+    const [availabilityRefresh, setAvailabilityRefresh] = useState(0);
     const [announcement, setAnnouncement] = useState('');
     const [errorMessage, setErrorMessage] = useState('');
     const availabilityRequests = useRef(new LatestRequest());
     const businessRequests = useRef(new LatestRequest());
     const selectionMade = useRef(false);
+    const bookingInFlight = useRef(false);
+    const bookingIntent = useRef<{
+        fingerprint: string;
+        key: string;
+        body: PublicBookingRequest;
+    } | null>(null);
 
     useEffect(() => {
         const requests = businessRequests.current;
@@ -321,7 +365,7 @@ function PublicPageContent({
                 }
             });
         return () => requests.cancel();
-    }, [apiBaseUrl, business, date, serviceId, slug]);
+    }, [apiBaseUrl, availabilityRefresh, business, date, serviceId, slug]);
 
     useEffect(() => {
         const onPageHide = () => {
@@ -349,6 +393,7 @@ function PublicPageContent({
         setAvailability(null);
         setAvailabilityState('loading');
         setErrorMessage('');
+        resetBookingFeedback();
         selectionMade.current = selectionMade.current || Boolean(nextServiceId);
         if (nextServiceId) {
             void publishTelemetry(slug, 'SERVICE_SELECTED', apiBaseUrl);
@@ -362,10 +407,12 @@ function PublicPageContent({
         setAvailability(null);
         setAvailabilityState('loading');
         setErrorMessage('');
+        resetBookingFeedback();
     }
 
     function chooseSlot(slot: PublicSlot) {
         setSelectedSlot(slot);
+        resetBookingFeedback();
         selectionMade.current = true;
         setAnnouncement(
             'Horário selecionado: ' +
@@ -383,6 +430,119 @@ function PublicPageContent({
         setAvailability(null);
         setAvailabilityState('loading');
         setErrorMessage('');
+        resetBookingFeedback();
+    }
+
+    function resetBookingFeedback() {
+        if (bookingInFlight.current || confirmation) return;
+        setBookingState('idle');
+        setBookingMessage('');
+    }
+
+    async function submitBooking(event: FormEvent<HTMLFormElement>) {
+        event.preventDefault();
+        if (
+            bookingInFlight.current ||
+            !business ||
+            !serviceId ||
+            !selectedSlot
+        ) {
+            return;
+        }
+        const name = clientName.trim();
+        const phone = clientPhone.trim();
+        if (!name || !/^\+[1-9]\d{7,14}$/.test(phone)) {
+            setBookingState('validation-error');
+            setBookingMessage(
+                !name
+                    ? 'Informe seu nome.'
+                    : 'Informe um telefone no formato internacional, por exemplo +5511999999999.',
+            );
+            return;
+        }
+
+        const body: PublicBookingRequest = {
+            serviceId,
+            startsAt: selectedSlot.startsAt,
+            client: { name, phone },
+        };
+        const fingerprint = JSON.stringify([slug, body]);
+        if (bookingIntent.current?.fingerprint !== fingerprint) {
+            bookingIntent.current = {
+                fingerprint,
+                key: newPublicBookingKey(),
+                body,
+            };
+        }
+        const intent = bookingIntent.current;
+        bookingInFlight.current = true;
+        setBookingState('submitting');
+        setBookingMessage('Enviando sua solicitação…');
+        try {
+            const result = await createPublicBooking(
+                slug,
+                intent.body,
+                intent.key,
+                apiBaseUrl,
+            );
+            setConfirmation(result);
+            setBookingState('confirmed');
+            setBookingMessage('Reserva confirmada.');
+            setAnnouncement(
+                'Reserva confirmada para ' + result.serviceName + '.',
+            );
+        } catch (error: unknown) {
+            if (error instanceof PublicBookingError) {
+                if (error.phase === 'csrf') {
+                    setBookingState('error');
+                    setBookingMessage(
+                        'Não foi possível iniciar a solicitação protegida. Tente novamente.',
+                    );
+                } else if (error.status === 400) {
+                    setBookingState('validation-error');
+                    setBookingMessage(
+                        'Confira o nome e o telefone e tente novamente.',
+                    );
+                } else if (
+                    error.status === 409 &&
+                    error.code === 'SLOT_NO_LONGER_AVAILABLE'
+                ) {
+                    setSelectedSlot(null);
+                    setAvailability(null);
+                    setAvailabilityState('loading');
+                    setBookingState('slot-conflict');
+                    setBookingMessage(
+                        'Esse horário acabou de ficar indisponível. Atualizamos as opções; escolha outro horário. Seus dados foram mantidos.',
+                    );
+                    setAvailabilityRefresh((current) => current + 1);
+                } else if (error.status === 404) {
+                    setBookingState('unavailable');
+                    setBookingMessage(
+                        'Esta página pública não está mais disponível.',
+                    );
+                } else if (error.status === 503) {
+                    setBookingState('unavailable');
+                    setBookingMessage(
+                        'A fonte de horários está temporariamente indisponível. Tente novamente mais tarde.',
+                    );
+                } else if (error.outcomeUnknown) {
+                    setBookingState('uncertain');
+                    setBookingMessage(
+                        'Não foi possível confirmar o resultado do envio. Seus dados e a chave da operação foram preservados. Tente novamente para consultar a mesma operação.',
+                    );
+                } else {
+                    setBookingState('error');
+                    setBookingMessage(error.message);
+                }
+            } else {
+                setBookingState('uncertain');
+                setBookingMessage(
+                    'Não foi possível confirmar o resultado do envio. Seus dados e a chave da operação foram preservados. Tente novamente para consultar a mesma operação.',
+                );
+            }
+        } finally {
+            bookingInFlight.current = false;
+        }
     }
 
     const displayedError = errorMessage && (
@@ -488,6 +648,10 @@ function PublicPageContent({
                             id="public-service"
                             value={serviceId}
                             onChange={selectService}
+                            disabled={
+                                bookingState === 'submitting' ||
+                                bookingState === 'confirmed'
+                            }
                         >
                             <option value="">Selecione um serviço</option>
                             {services.map((service) => (
@@ -526,6 +690,10 @@ function PublicPageContent({
                                     type="button"
                                     onClick={() => shiftDate(-1)}
                                     aria-label="Dia anterior"
+                                    disabled={
+                                        bookingState === 'submitting' ||
+                                        bookingState === 'confirmed'
+                                    }
                                 >
                                     Anterior
                                 </button>
@@ -535,11 +703,19 @@ function PublicPageContent({
                                     type="date"
                                     value={date}
                                     onChange={selectDate}
+                                    disabled={
+                                        bookingState === 'submitting' ||
+                                        bookingState === 'confirmed'
+                                    }
                                 />
                                 <button
                                     type="button"
                                     onClick={() => shiftDate(1)}
                                     aria-label="Próximo dia"
+                                    disabled={
+                                        bookingState === 'submitting' ||
+                                        bookingState === 'confirmed'
+                                    }
                                 >
                                     Próximo
                                 </button>
@@ -607,6 +783,12 @@ function PublicPageContent({
                                                             : 'public-page__slot'
                                                     }
                                                     aria-pressed={selected}
+                                                    disabled={
+                                                        bookingState ===
+                                                            'submitting' ||
+                                                        bookingState ===
+                                                            'confirmed'
+                                                    }
                                                     onClick={() =>
                                                         chooseSlot(slot)
                                                     }
@@ -636,13 +818,154 @@ function PublicPageContent({
                                     <br />A seleção não confirma uma reserva.
                                 </output>
                             )}
+                            {(selectedSlot ||
+                                bookingState === 'slot-conflict') && (
+                                <form
+                                    className="public-page__booking-form"
+                                    onSubmit={submitBooking}
+                                    aria-labelledby="booking-heading"
+                                >
+                                    <h3 id="booking-heading">3. Seus dados</h3>
+                                    <label htmlFor="public-client-name">
+                                        Nome
+                                    </label>
+                                    <input
+                                        id="public-client-name"
+                                        name="name"
+                                        autoComplete="name"
+                                        required
+                                        maxLength={120}
+                                        value={clientName}
+                                        onChange={(event) => {
+                                            setClientName(
+                                                event.currentTarget.value,
+                                            );
+                                            resetBookingFeedback();
+                                        }}
+                                        disabled={
+                                            bookingState === 'submitting' ||
+                                            bookingState === 'confirmed'
+                                        }
+                                        aria-invalid={
+                                            bookingState ===
+                                                'validation-error' &&
+                                            !clientName.trim()
+                                        }
+                                    />
+                                    <label htmlFor="public-client-phone">
+                                        Telefone com código do país
+                                    </label>
+                                    <input
+                                        id="public-client-phone"
+                                        name="phone"
+                                        type="tel"
+                                        autoComplete="tel"
+                                        inputMode="tel"
+                                        placeholder="+5511999999999"
+                                        pattern="\+[1-9][0-9]{7,14}"
+                                        required
+                                        value={clientPhone}
+                                        onChange={(event) => {
+                                            setClientPhone(
+                                                event.currentTarget.value,
+                                            );
+                                            resetBookingFeedback();
+                                        }}
+                                        disabled={
+                                            bookingState === 'submitting' ||
+                                            bookingState === 'confirmed'
+                                        }
+                                        aria-invalid={
+                                            bookingState ===
+                                                'validation-error' &&
+                                            !/^\+[1-9]\d{7,14}$/.test(
+                                                clientPhone.trim(),
+                                            )
+                                        }
+                                    />
+                                    <p className="public-page__privacy-note">
+                                        Usaremos esses dados para registrar e
+                                        administrar este agendamento. Informar o
+                                        telefone não verifica sua identidade.
+                                    </p>
+                                    {bookingMessage &&
+                                        bookingState !== 'confirmed' && (
+                                            <p
+                                                className="public-page__booking-message"
+                                                role={
+                                                    bookingState ===
+                                                    'submitting'
+                                                        ? 'status'
+                                                        : 'alert'
+                                                }
+                                                aria-live={
+                                                    bookingState ===
+                                                    'submitting'
+                                                        ? 'polite'
+                                                        : 'assertive'
+                                                }
+                                            >
+                                                {bookingMessage}
+                                            </p>
+                                        )}
+                                    <button
+                                        type="submit"
+                                        disabled={
+                                            bookingState === 'submitting' ||
+                                            bookingState === 'confirmed'
+                                        }
+                                    >
+                                        {bookingState === 'submitting'
+                                            ? 'Enviando…'
+                                            : bookingState === 'uncertain'
+                                              ? 'Tentar novamente com segurança'
+                                              : 'Confirmar reserva'}
+                                    </button>
+                                </form>
+                            )}
+                            {bookingState === 'confirmed' && confirmation && (
+                                <section
+                                    className="public-page__confirmation"
+                                    aria-labelledby="booking-confirmed-heading"
+                                    aria-live="polite"
+                                >
+                                    <h3 id="booking-confirmed-heading">
+                                        Reserva confirmada
+                                    </h3>
+                                    <p>
+                                        {confirmation.serviceName} em{' '}
+                                        {formatDate(
+                                            localDate(
+                                                confirmation.startsAt,
+                                                confirmation.timeZone,
+                                            ),
+                                            confirmation.timeZone,
+                                        )}{' '}
+                                        às{' '}
+                                        {formatTime(
+                                            confirmation.startsAt,
+                                            confirmation.timeZone,
+                                        )}
+                                        .
+                                    </p>
+                                    <p>
+                                        Código da reserva:{' '}
+                                        <strong>
+                                            {confirmation.appointmentId}
+                                        </strong>
+                                    </p>
+                                </section>
+                            )}
                         </section>
                     )}
                 </div>
             )}
 
             <footer className="public-page__footer">
-                <p>Escolher um horário não cria nem confirma uma reserva.</p>
+                <p>
+                    Somente uma resposta válida do servidor confirma uma
+                    reserva.
+                </p>
             </footer>
         </main>
     );

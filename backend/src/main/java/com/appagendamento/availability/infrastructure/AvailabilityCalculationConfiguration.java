@@ -1,6 +1,6 @@
 package com.appagendamento.availability.infrastructure;
 
-import com.appagendamento.availability.application.AppointmentOccupancyQuery;
+import com.appagendamento.appointments.api.AppointmentOccupancyQuery;
 import com.appagendamento.availability.application.AvailabilityReadTransaction;
 import com.appagendamento.availability.application.CalculateAvailabilityForDateRange;
 import com.appagendamento.availability.application.ScheduleRepository;

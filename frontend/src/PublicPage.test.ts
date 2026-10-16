@@ -7,6 +7,7 @@ import {
     loadPublicServices,
     publishTelemetry,
 } from './PublicPage';
+import { createPublicBooking, PublicBookingError } from './publicBookingApi';
 
 const business = {
     name: 'Ateliê Horizonte',
@@ -198,4 +199,163 @@ describe('PublicPage REST client', () => {
         );
         expect(fetchMock.mock.calls[0][1]).not.toHaveProperty('credentials');
     });
+});
+
+describe('public booking REST client', () => {
+    const request = {
+        serviceId: 'service-1',
+        startsAt: '2026-10-16T13:00:00-03:00',
+        client: { name: 'Ana Silva', phone: '+5511999999999' },
+    };
+    const confirmation = {
+        appointmentId: 'appointment-1',
+        operationId: 'operation-1',
+        status: 'CONFIRMED',
+        serviceName: 'Corte',
+        startsAt: '2026-10-16T13:00:00-03:00',
+        serviceEndsAt: '2026-10-16T13:45:00-03:00',
+        timeZone: 'America/Sao_Paulo',
+    };
+    const csrf = { headerName: 'X-CSRF-TOKEN', token: 'csrf-token' };
+
+    it('does not report an uncertain booking when CSRF setup fails before POST', async () => {
+        const fetchMock = vi
+            .fn<FetchMock>()
+            .mockRejectedValueOnce(new TypeError('connection unavailable'));
+        vi.stubGlobal('fetch', fetchMock);
+
+        await expect(
+            createPublicBooking('atelie-horizonte', request, 'key', '/api'),
+        ).rejects.toMatchObject<Partial<PublicBookingError>>({
+            kind: 'network',
+            phase: 'csrf',
+            outcomeUnknown: false,
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('fetches CSRF first and sends the returned header and idempotency key', async () => {
+        const fetchMock = vi
+            .fn<FetchMock>()
+            .mockResolvedValueOnce(jsonResponse(csrf))
+            .mockResolvedValueOnce(jsonResponse(confirmation, 201));
+        vi.stubGlobal('fetch', fetchMock);
+
+        await expect(
+            createPublicBooking(
+                'atelie horizonte',
+                request,
+                'intent-key',
+                '/api',
+            ),
+        ).resolves.toEqual(confirmation);
+
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/csrf');
+        expect(fetchMock.mock.calls[1][0]).toBe(
+            '/api/v1/public/atelie%20horizonte/appointments',
+        );
+        expect(fetchMock.mock.calls[1][1]).toMatchObject({
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Idempotency-Key': 'intent-key',
+                'X-CSRF-TOKEN': 'csrf-token',
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(request),
+        });
+    });
+
+    it('preserves the caller intent key and body for an explicit retry after network uncertainty', async () => {
+        const fetchMock = vi
+            .fn<FetchMock>()
+            .mockResolvedValueOnce(jsonResponse(csrf))
+            .mockRejectedValueOnce(new TypeError('connection lost'))
+            .mockResolvedValueOnce(jsonResponse(csrf))
+            .mockResolvedValueOnce(jsonResponse(confirmation));
+        vi.stubGlobal('fetch', fetchMock);
+
+        await expect(
+            createPublicBooking(
+                'atelie-horizonte',
+                request,
+                'same-key',
+                '/api',
+            ),
+        ).rejects.toMatchObject<Partial<PublicBookingError>>({
+            kind: 'network',
+        });
+        await expect(
+            createPublicBooking(
+                'atelie-horizonte',
+                request,
+                'same-key',
+                '/api',
+            ),
+        ).resolves.toEqual(confirmation);
+
+        expect(fetchMock.mock.calls[1][1]).toMatchObject({
+            headers: expect.objectContaining({ 'Idempotency-Key': 'same-key' }),
+            body: JSON.stringify(request),
+        });
+        expect(fetchMock.mock.calls[3][1]).toMatchObject({
+            headers: expect.objectContaining({ 'Idempotency-Key': 'same-key' }),
+            body: JSON.stringify(request),
+        });
+    });
+
+    it('rejects a successful HTTP response that is not a valid confirmation', async () => {
+        const fetchMock = vi
+            .fn<FetchMock>()
+            .mockResolvedValueOnce(jsonResponse(csrf))
+            .mockResolvedValueOnce(
+                jsonResponse({ ...confirmation, status: 'PENDING' }),
+            );
+        vi.stubGlobal('fetch', fetchMock);
+
+        await expect(
+            createPublicBooking('atelie-horizonte', request, 'key', '/api'),
+        ).rejects.toMatchObject<Partial<PublicBookingError>>({
+            kind: 'invalid-response',
+            status: 200,
+        });
+    });
+
+    it('exposes validation and lost-slot responses without treating them as confirmation', async () => {
+        const fetchMock = vi
+            .fn<FetchMock>()
+            .mockResolvedValueOnce(jsonResponse(csrf))
+            .mockResolvedValueOnce(
+                jsonResponse(
+                    { error: { code: 'SLOT_NO_LONGER_AVAILABLE' } },
+                    409,
+                ),
+            );
+        vi.stubGlobal('fetch', fetchMock);
+
+        await expect(
+            createPublicBooking('atelie-horizonte', request, 'key', '/api'),
+        ).rejects.toMatchObject<Partial<PublicBookingError>>({
+            kind: 'http',
+            status: 409,
+            code: 'SLOT_NO_LONGER_AVAILABLE',
+        });
+    });
+
+    it.each([400, 404, 503])(
+        'preserves HTTP status %s for the booking form to explain',
+        async (status) => {
+            const fetchMock = vi
+                .fn<FetchMock>()
+                .mockResolvedValueOnce(jsonResponse(csrf))
+                .mockResolvedValueOnce(
+                    jsonResponse({ error: { code: 'REQUEST_FAILED' } }, status),
+                );
+            vi.stubGlobal('fetch', fetchMock);
+
+            await expect(
+                createPublicBooking('atelie-horizonte', request, 'key', '/api'),
+            ).rejects.toMatchObject<Partial<PublicBookingError>>({ status });
+        },
+    );
 });

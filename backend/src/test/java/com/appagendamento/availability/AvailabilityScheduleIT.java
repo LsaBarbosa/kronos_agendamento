@@ -13,7 +13,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.appagendamento.availability.application.AppointmentOccupancyQuery;
+import com.appagendamento.appointments.api.AppointmentOccupancy;
+import com.appagendamento.appointments.api.AppointmentOccupancyQuery;
 import com.appagendamento.availability.application.AvailabilityReadTransaction;
 import com.appagendamento.availability.application.AvailabilityServiceNotFoundException;
 import com.appagendamento.availability.application.CalculateAvailabilityForDateRange;
@@ -195,8 +196,7 @@ class AvailabilityScheduleIT {
           assertThat(to)
               .isEqualTo(date.plusDays(1).atStartOfDay(ZoneId.of("America/Sao_Paulo")).toInstant());
           return List.of(
-              new com.appagendamento.availability.domain.OccupiedInterval(
-                  occupiedStart, occupiedStart.plusSeconds(15 * 60L)));
+              new AppointmentOccupancy(occupiedStart, occupiedStart.plusSeconds(15 * 60L)));
         };
     CalculateAvailabilityForDateRange calculation =
         new CalculateAvailabilityForDateRange(

@@ -11,6 +11,7 @@ import java.util.UUID;
 import java.util.function.Function;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Repository
@@ -23,7 +24,7 @@ public class PostgresIdempotencyCoordinator implements IdempotencyCoordinator {
   }
 
   @Override
-  @Transactional
+  @Transactional(isolation = Isolation.READ_COMMITTED)
   public <T> IdempotentCommandResult<T> execute(
       UUID tenantId,
       String commandScope,

@@ -1,5 +1,6 @@
 package com.appagendamento.availability.application;
 
+import com.appagendamento.appointments.api.AppointmentOccupancyQuery;
 import com.appagendamento.availability.domain.AvailabilityCalculation;
 import com.appagendamento.availability.domain.AvailabilityDaySchedule;
 import com.appagendamento.availability.domain.AvailabilityPolicy;
@@ -128,7 +129,9 @@ public class CalculateAvailabilityForDateRange {
               .map(value -> new OccupiedInterval(value.startsAt(), value.endsAt()))
               .toList();
       List<OccupiedInterval> occupied =
-          appointments.findOverlapping(tenantId, rangeStart, rangeEnd);
+          appointments.findOverlapping(tenantId, rangeStart, rangeEnd).stream()
+              .map(value -> new OccupiedInterval(value.startsAt(), value.occupiedUntil()))
+              .toList();
       allOccupied = Stream.concat(blocked.stream(), occupied.stream()).toList();
     }
     Map<LocalDate, ScheduleException> exceptionsByDate =

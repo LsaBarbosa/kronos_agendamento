@@ -291,10 +291,41 @@ try {
     await setFieldById('public-date', publicDate, evaluate);
     await waitUntil(() => evaluate("document.querySelectorAll('.public-page__slot').length > 0"));
     const publicSlotsBeforeSelection = await evaluate("document.querySelectorAll('.public-page__slot').length");
+    const selectedStart = await evaluate(`fetch('/api/v1/public/${encodeURIComponent(publication.slug)}/availability?serviceId=${encodeURIComponent(publicService.serviceId)}&from=${publicDate}&to=${publicDate}').then(response => response.json()).then(result => result.days[0].slots[0].startsAt)`);
     await evaluate("document.querySelector('.public-page__slot').click()");
-    if (!(await evaluate("document.body.innerText.includes('Esta seleção não é uma reserva.')"))) {
+    if (!(await evaluate("document.body.innerText.includes('A seleção não confirma uma reserva.')"))) {
         throw new Error('A seleção pública não deixou claro que não confirma uma reserva.');
     }
+    await setFieldById('public-client-name', 'Visitante de demonstração', evaluate);
+    await setFieldById('public-client-phone', '+5511999991234', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        if (String(args[0]).endsWith('/appointments') && args[1]?.method === 'POST' && response.ok) {
+          window.fetch = originalFetch;
+          throw new TypeError('Simulated lost appointment response after commit');
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Confirmar reserva', evaluate);
+    await waitForText('Não foi possível confirmar o resultado do envio.', evaluate);
+    await clickButtonByText('Tentar novamente com segurança', evaluate);
+    await waitForText('Reserva confirmada.', evaluate);
+    if (!(await evaluate(`document.body.innerText.includes(${JSON.stringify(publicService.name)}) && document.body.innerText.includes(${JSON.stringify(publication.timeZone)})`))) {
+        throw new Error('Confirmação não exibiu serviço e timezone esperados.');
+    }
+    const persistedBookingCount = Number(queryPostgres(
+        `SELECT count(*) FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.status = 'CONFIRMED'`,
+        appEnvironment,
+    ));
+    if (persistedBookingCount !== 1) throw new Error('Retry após resposta perdida não manteve uma única reserva persistida.');
+    const slotsAfterConfirmation = await evaluate(`fetch('/api/v1/public/${encodeURIComponent(publication.slug)}/availability?serviceId=${encodeURIComponent(publicService.serviceId)}&from=${publicDate}&to=${publicDate}').then(response => response.json()).then(result => result.days[0].slots)`);
+    if (slotsAfterConfirmation.some(slot => slot.startsAt === selectedStart)) {
+        throw new Error('Disponibilidade continuou oferecendo o horário já confirmado.');
+    }
+    console.log('Browser: visitante confirmou reserva persistida; retry da resposta perdida preservou uma reserva e retirou o horário da oferta.');
     await command('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:true});
     if (!(await evaluate('document.documentElement.scrollWidth <= window.innerWidth'))) {
         throw new Error('A página pública excedeu a largura do viewport móvel.');
@@ -303,7 +334,7 @@ try {
     if (!(await evaluate('document.documentElement.scrollWidth <= window.innerWidth'))) {
         throw new Error('A página pública excedeu a largura do viewport desktop.');
     }
-    console.log(`Browser: visitante consultou ${publicDate}, selecionou um de ${publicSlotsBeforeSelection} horários sem criar reserva; layout móvel/desktop sem overflow.`);
+    console.log(`Browser: visitante consultou ${publicDate}, confirmou um de ${publicSlotsBeforeSelection} horários; layout móvel/desktop sem overflow.`);
     await navigate('http://localhost:5173/admin', command, evaluate);
     await waitForText('Estado: Publicado', evaluate);
     await clickButtonByText('Despublicar página', evaluate);

@@ -1,5 +1,7 @@
 package com.appagendamento.availability.application;
 
+import com.appagendamento.appointments.api.ConfirmedAppointmentConflictProbe;
+import com.appagendamento.appointments.api.TenantAgendaLock;
 import com.appagendamento.availability.domain.BlockedPeriod;
 import com.appagendamento.availability.domain.BlockedPeriodStateConflictException;
 import com.appagendamento.availability.domain.BlockedPeriodStatus;
@@ -23,6 +25,7 @@ public class ManageBlockedPeriods {
   private final ScheduleMutationSupport support;
   private final AdminAccessPolicy accessPolicy;
   private final ConfirmedAppointmentConflictProbe conflicts;
+  private final TenantAgendaLock agendaLock;
   private final IdempotencyCoordinator idempotency;
   private final CommandResultCodec<BlockedPeriod> codec;
 
@@ -31,12 +34,14 @@ public class ManageBlockedPeriods {
       ScheduleMutationSupport support,
       AdminAccessPolicy accessPolicy,
       ConfirmedAppointmentConflictProbe conflicts,
+      TenantAgendaLock agendaLock,
       IdempotencyCoordinator idempotency,
       CommandResultCodec<BlockedPeriod> codec) {
     this.schedules = schedules;
     this.support = support;
     this.accessPolicy = accessPolicy;
     this.conflicts = conflicts;
+    this.agendaLock = agendaLock;
     this.idempotency = idempotency;
     this.codec = codec;
   }
@@ -72,6 +77,8 @@ public class ManageBlockedPeriods {
         digest,
         () -> support.requireCurrent(actor),
         operationId -> {
+          agendaLock.acquire(actor.tenantId());
+          support.requireCurrent(actor);
           if (conflicts.overlapsConfirmed(actor.tenantId(), start.instant(), end.instant()))
             throw new ConfirmedAppointmentConflictException();
           BlockedPeriod stored =

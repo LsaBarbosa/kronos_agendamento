@@ -1,4 +1,4 @@
-package com.appagendamento.availability.application;
+package com.appagendamento.appointments.api;
 
 import java.time.Instant;
 import java.util.UUID;

@@ -116,6 +116,16 @@ Regras:
 
 Exemplo de fronteira: hoje local 16/10 e horizonte 7 permitem datas 16/10 a 22/10; antecedência continua filtrando candidatos nesses dias. Uma consulta que peça até 25/10 retorna 25/10, mas sem slots após o horizonte.
 
+### Criação pública de reserva — AGD-015
+
+`POST /api/v1/public/{slug}/appointments`
+
+- Exige `Idempotency-Key` e CSRF. O corpo é `{serviceId, startsAt, client:{name,phone}}`; `startsAt` é ISO 8601 com offset. Campos derivados (tenant, timezone, duração, fim, buffer, preço e disponibilidade) não são aceitos do cliente.
+- O servidor resolve slug/publicação e readiness atuais, serviço ativo do tenant, telefone E.164 e um candidato de AGD-013 para a data local e offset informados. Revalida dentro da transação de confirmação; disponibilidade previamente exibida não é hold.
+- Sucesso `201` retorna `{appointmentId,operationId,status,serviceName,startsAt,serviceEndsAt,timeZone}`. Não devolve nome/telefone, nem oferece consulta futura por esse telefone. `SLOT_NO_LONGER_AVAILABLE` retorna `409` com orientação para atualizar os horários.
+- Mesma chave/conteúdo devolve as mesmas referências sem criar cliente, reserva, história, auditoria ou evento novamente. Digest divergente retorna `409 IDEMPOTENCY_KEY_REUSED`. Replay revalida publicação/readiness/serviço e não compara a reserva original contra a ocupação que ela própria criou.
+- `AppointmentConfirmed` é gravado no outbox no commit com payload mínimo `{appointmentId,version}`; não contém PII nem afirma que WhatsApp foi enviado.
+
 Exemplo:
 
 ```json
@@ -424,6 +434,8 @@ Eventos são fatos no passado, imutáveis e versionados.
 ```
 
 Não incluir PII desnecessária. Consumidores que precisam de dados atuais consultam fonte autorizada ou recebem referência protegida.
+
+Para `AppointmentConfirmed` v1, o payload publicado limita-se a `appointmentId` e `version`; tenant, aggregate, operação e correlação ficam no envelope persistido. Consumidores não inferem envio de mensagem a partir do commit.
 
 ## 8. Consumo idempotente de eventos
 

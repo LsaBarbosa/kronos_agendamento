@@ -33,10 +33,11 @@ public record AuditEvent(
     if (!(actorType.equals("ADMIN") && actorRef.equals("TENANT_ADMIN")
             || actorType.equals("SYSTEM")
                 && (actorRef.equals("CONTROLLED_TENANT_PROVISIONER")
-                    || actorRef.equals("CONTROLLED_DEMO_PROVISIONER")))
+                    || actorRef.equals("CONTROLLED_DEMO_PROVISIONER")
+                    || actorRef.equals("PUBLIC_BOOKING")))
         || !result.equals("COMMITTED")
         || !action.matches(
-            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)|PUBLICATION_(PUBLISHED|UNPUBLISHED)|PUBLIC_PROFILE_UPDATED")) {
+            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)|PUBLICATION_(PUBLISHED|UNPUBLISHED)|PUBLIC_PROFILE_UPDATED|APPOINTMENT_CONFIRMED")) {
       throw new IllegalArgumentException("Ator ou resultado de auditoria inválido");
     }
     if ((actorType.equals("ADMIN") && actorId == null)
@@ -91,6 +92,11 @@ public record AuditEvent(
               actorType.equals("ADMIN")
                   && detailsJson.matches(
                       "\\{\\\"changed_fields\\\":\\[\\\"contact_phone\\\"\\],\\\"version_before\\\":[0-9]+,\\\"version_after\\\":[0-9]+\\}");
+          case "APPOINTMENT_CONFIRMED" ->
+              actorType.equals("SYSTEM")
+                  && actorRef.equals("PUBLIC_BOOKING")
+                  && detailsJson.equals(
+                      "{\"changed_fields\":[\"appointment\"],\"version_before\":0,\"version_after\":1}");
           default -> false;
         };
     if (!validDetails) {

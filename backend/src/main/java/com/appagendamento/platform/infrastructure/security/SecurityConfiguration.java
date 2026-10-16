@@ -70,6 +70,8 @@ public class SecurityConfiguration {
                     .permitAll()
                     .requestMatchers(HttpMethod.POST, "/api/v1/public/*/telemetry")
                     .permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/v1/public/*/appointments")
+                    .permitAll()
                     .requestMatchers("/oauth2/**", "/login/**")
                     .permitAll()
                     .requestMatchers(ADMIN_API)
