@@ -1,0 +1,244 @@
+openapi: 3.1.0
+info:
+  title: App Agendamento — configuração administrativa de agenda
+  version: 1.0.0
+  description: >-
+    Contrato administrativo protegido pela sessão OIDC do backend. Tenant e ator são derivados
+    do vínculo autenticado no servidor; não há parâmetro tenantId nestas operações.
+servers:
+  - url: /api/v1
+paths:
+  /admin/schedule/weekly-periods:
+    get:
+      operationId: getAdminWeeklySchedule
+      summary: Consultar a grade semanal do tenant autenticado
+      security:
+        - backendSession: []
+      responses:
+        '200':
+          description: Grade semanal; configuração ausente é diferente de semana fechada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WeeklySchedule'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '403':
+          $ref: '#/components/responses/ActionNotAllowed'
+    put:
+      operationId: replaceAdminWeeklySchedule
+      summary: Substituir atomicamente todos os períodos semanais
+      security:
+        - backendSession: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplaceWeeklySchedule'
+      responses:
+        '200':
+          description: Configuração persistida ou replay do resultado original.
+          headers:
+            Idempotency-Replayed:
+              schema: { type: boolean }
+            X-Operation-Id:
+              schema: { type: string, format: uuid }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WeeklySchedule'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '403':
+          $ref: '#/components/responses/ActionNotAllowed'
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+  /admin/availability-policy:
+    get:
+      operationId: getAdminAvailabilityPolicy
+      summary: Consultar as políticas do tenant autenticado
+      security:
+        - backendSession: []
+      responses:
+        '200':
+          description: Política; valores null indicam que ainda não foi configurada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AvailabilityPolicy'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '403':
+          $ref: '#/components/responses/ActionNotAllowed'
+    put:
+      operationId: replaceAdminAvailabilityPolicy
+      summary: Substituir atomicamente todas as políticas de disponibilidade
+      security:
+        - backendSession: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplaceAvailabilityPolicy'
+      responses:
+        '200':
+          description: Política persistida ou replay do resultado original.
+          headers:
+            Idempotency-Replayed:
+              schema: { type: boolean }
+            X-Operation-Id:
+              schema: { type: string, format: uuid }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AvailabilityPolicy'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '403':
+          $ref: '#/components/responses/ActionNotAllowed'
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+components:
+  securitySchemes:
+    backendSession:
+      type: apiKey
+      in: cookie
+      name: AGDSESSION
+    csrfToken:
+      type: apiKey
+      in: header
+      name: X-CSRF-TOKEN
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+  schemas:
+    WeeklyPeriod:
+      type: object
+      additionalProperties: false
+      required: [weekday, localStart, localEnd]
+      properties:
+        weekday:
+          type: string
+          enum: [MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY, SATURDAY, SUNDAY]
+        localStart:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):(?:00|15|30|45)$'
+          description: Hora local do tenant em HH:mm, com minuto múltiplo de 15.
+        localEnd:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):(?:00|15|30|45)$'
+          description: Limite exclusivo no mesmo dia; deve ser posterior a localStart e alinhado a 15 minutos.
+    WeeklySchedule:
+      type: object
+      additionalProperties: false
+      required: [configured, timeZone, version, periods]
+      properties:
+        configured: { type: boolean }
+        timeZone:
+          type: string
+          description: Zona IANA persistida do tenant.
+        version:
+          type: integer
+          minimum: 0
+        periods:
+          type: array
+          items: { $ref: '#/components/schemas/WeeklyPeriod' }
+    ReplaceWeeklySchedule:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, periods]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 0
+        periods:
+          type: array
+          items: { $ref: '#/components/schemas/WeeklyPeriod' }
+          description: Array vazio configura explicitamente todos os dias como fechados. Intervalos são [início,fim), adjacentes são permitidos, sobreposição e cruzamento de meia-noite são rejeitados.
+    AvailabilityPolicy:
+      type: object
+      additionalProperties: false
+      required:
+        - configured
+        - version
+        - slotStepMinutes
+        - minimumNoticeHours
+        - bookingHorizonDays
+        - cancellationCutoffHours
+        - reminderOffsetHours
+      properties:
+        configured: { type: boolean }
+        version: { type: integer, minimum: 0 }
+        slotStepMinutes: { type: [integer, 'null'], enum: [15, 30, 60, null] }
+        minimumNoticeHours: { type: [integer, 'null'], minimum: 1, maximum: 24 }
+        bookingHorizonDays: { type: [integer, 'null'], enum: [7, 30, 60, 90, null] }
+        cancellationCutoffHours: { type: [integer, 'null'], minimum: 2, maximum: 24 }
+        reminderOffsetHours: { type: [integer, 'null'], enum: [2, 6, 12, 24, null] }
+    ReplaceAvailabilityPolicy:
+      type: object
+      additionalProperties: false
+      required:
+        - expectedVersion
+        - slotStepMinutes
+        - minimumNoticeHours
+        - bookingHorizonDays
+        - cancellationCutoffHours
+        - reminderOffsetHours
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        slotStepMinutes: { type: integer, enum: [15, 30, 60] }
+        minimumNoticeHours: { type: integer, minimum: 1, maximum: 24 }
+        bookingHorizonDays: { type: integer, enum: [7, 30, 60, 90] }
+        cancellationCutoffHours: { type: integer, minimum: 2, maximum: 24 }
+        reminderOffsetHours: { type: integer, enum: [2, 6, 12, 24] }
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message, traceId, retryable, details]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            traceId: { type: string }
+            retryable: { type: boolean }
+            details: { type: object }
+  responses:
+    AuthenticationRequired:
+      description: Sessão local ausente ou expirada.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    ActionNotAllowed:
+      description: Vínculo administrativo não ativo ou CSRF inválido.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    ValidationError:
+      description: Período ou política fora das regras do contrato.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    CommandConflict:
+      description: Versão concorrente, chave idempotente reutilizada ou operação em andamento.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }

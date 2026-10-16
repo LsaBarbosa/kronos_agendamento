@@ -7,6 +7,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.appagendamento.audit.api.AuditCorrelationId;
+import com.appagendamento.availability.application.GetScheduleConfiguration;
+import com.appagendamento.availability.application.ReplaceAvailabilityPolicy;
+import com.appagendamento.availability.application.ReplaceWeeklySchedule;
 import com.appagendamento.catalog.application.CreateService;
 import com.appagendamento.catalog.application.GetService;
 import com.appagendamento.catalog.application.ListServices;
@@ -40,6 +43,9 @@ class SecurityBoundaryTest {
   @MockitoBean private SetServiceStatus setServiceStatus;
   @MockitoBean private GetService getService;
   @MockitoBean private ListServices listServices;
+  @MockitoBean private GetScheduleConfiguration getScheduleConfiguration;
+  @MockitoBean private ReplaceWeeklySchedule replaceWeeklySchedule;
+  @MockitoBean private ReplaceAvailabilityPolicy replaceAvailabilityPolicy;
   @MockitoBean private AuditCorrelationId auditCorrelationId;
 
   @Test

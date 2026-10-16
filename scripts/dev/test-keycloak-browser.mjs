@@ -147,6 +147,8 @@ try {
     if (!tenantDisplayed) throw new Error('Tenant autorizado não apareceu na UI.');
     await waitForText('Catálogo de serviços', evaluate);
     await waitForText('Nenhum serviço cadastrado.', evaluate);
+    await waitForText('Grade semanal e políticas', evaluate);
+    await waitForText('A grade ainda não foi configurada.', evaluate);
     const catalogName = `Catálogo E2E ${Date.now()}`;
     await setAdminField('input', 0, catalogName, evaluate);
     await setAdminField('textarea', 0, 'Atendimento de demonstração', evaluate);
@@ -194,6 +196,84 @@ try {
     })()`);
     await waitForText('Serviço ativado.', evaluate);
     console.log('Browser: catálogo autenticado criou, editou, inativou e ativou serviço.');
+    await evaluate(`(() => {
+      const day = [...document.querySelectorAll('fieldset')].find(fieldset => fieldset.querySelector('legend')?.innerText === 'Segunda-feira');
+      const add = [...day.querySelectorAll('button')].find(button => button.innerText === 'Adicionar período');
+      add.click(); add.click();
+      return true;
+    })()`);
+    await setFieldByAriaLabel('Segunda-feira início 1', '09:00', evaluate);
+    await setFieldByAriaLabel('Segunda-feira fim 1', '12:00', evaluate);
+    await setFieldByAriaLabel('Segunda-feira início 2', '13:00', evaluate);
+    await setFieldByAriaLabel('Segunda-feira fim 2', '17:00', evaluate);
+    await setFieldByAriaLabel('Segunda-feira início 1', '09:10', evaluate);
+    await clickButtonByText('Salvar grade semanal', evaluate);
+    await waitForText('início e fim devem estar alinhados a cada 15 minutos.', evaluate);
+    const unchangedSchedule = await evaluate(
+        "fetch('/api/v1/admin/schedule/weekly-periods', {credentials:'same-origin'}).then(response => response.json())",
+    );
+    if (unchangedSchedule.configured || unchangedSchedule.version !== 0) {
+        throw new Error('Rejected unaligned period changed the persisted schedule.');
+    }
+    await setFieldByAriaLabel('Segunda-feira início 1', '09:00', evaluate);
+    await clickButtonByText('Salvar grade semanal', evaluate);
+    await waitForText('Grade semanal salva.', evaluate);
+    await setSelectByLabel('Intervalo inicial dos horários (minutos)', '30', evaluate);
+    await setFieldByLabel('Antecedência mínima (horas)', '12', evaluate);
+    await setSelectByLabel('Horizonte máximo para agendamento (dias)', '30', evaluate);
+    await setFieldByLabel('Limite de cancelamento pelo cliente (horas antes)', '4', evaluate);
+    await setSelectByLabel('Lembrete único antes do atendimento (horas)', '6', evaluate);
+    await clickButtonByText('Salvar políticas', evaluate);
+    await waitForText('Políticas salvas.', evaluate);
+    await clickButtonByText('Recarregar configuração persistida', evaluate);
+    await waitForText('Configuração recarregada.', evaluate);
+    const persistedSchedule = await evaluate(
+        "fetch('/api/v1/admin/schedule/weekly-periods', {credentials:'same-origin'}).then(response => response.json())",
+    );
+    const persistedPolicy = await evaluate(
+        "fetch('/api/v1/admin/availability-policy', {credentials:'same-origin'}).then(response => response.json())",
+    );
+    if (
+        persistedSchedule.periods.length !== 2 ||
+        persistedSchedule.periods[0].weekday !== 'MONDAY' ||
+        persistedSchedule.periods[0].localStart !== '09:00' ||
+        persistedSchedule.periods[1].localStart !== '13:00' ||
+        persistedPolicy.slotStepMinutes !== 30 ||
+        persistedPolicy.minimumNoticeHours !== 12 ||
+        persistedPolicy.bookingHorizonDays !== 30 ||
+        persistedPolicy.cancellationCutoffHours !== 4 ||
+        persistedPolicy.reminderOffsetHours !== 6
+    ) {
+        throw new Error('Grade/políticas não persistiram ou divergiram após recarregar.');
+    }
+    console.log('Browser: grade semanal e políticas salvas, recarregadas e confirmadas pela API.');
+    await setFieldByAriaLabel('Segunda-feira início 1', '08:00', evaluate);
+    const concurrentUpdateStatus = await evaluate(`(async () => {
+      const [currentResponse, csrfResponse] = await Promise.all([
+        fetch('/api/v1/admin/schedule/weekly-periods', {credentials:'same-origin'}),
+        fetch('/api/v1/csrf', {credentials:'same-origin'})
+      ]);
+      const current = await currentResponse.json();
+      const csrf = await csrfResponse.json();
+      return fetch('/api/v1/admin/schedule/weekly-periods', {
+        method:'PUT', credentials:'same-origin',
+        headers:{'Content-Type':'application/json', [csrf.headerName]:csrf.token, 'Idempotency-Key':crypto.randomUUID()},
+        body:JSON.stringify({expectedVersion:current.version, periods:[{weekday:'MONDAY',localStart:'10:00',localEnd:'11:00'}]})
+      }).then(response => response.status);
+    })()`);
+    if (concurrentUpdateStatus !== 200) throw new Error('Comando concorrente não atualizou a grade para o teste de CAS.');
+    await clickButtonByText('Salvar grade semanal', evaluate);
+    await waitForText('Outra sessão salvou esta grade.', evaluate);
+    if (await evaluate("document.querySelector('[aria-label=\"Segunda-feira início 1\"]').value") !== '08:00') {
+        throw new Error('Conflito de versão descartou o rascunho local.');
+    }
+    await evaluate('window.confirm = () => true');
+    await clickButtonByText('Recarregar versão atual (substitui campos locais)', evaluate);
+    await waitForText('Configuração recarregada.', evaluate);
+    if (await evaluate("document.querySelector('[aria-label=\"Segunda-feira início 1\"]').value") !== '10:00') {
+        throw new Error('Recuperação explícita do conflito não carregou a versão atual.');
+    }
+    console.log('Browser: conflito CAS preservou rascunho e recuperação explícita carregou a versão vigente.');
     const foreignTenantQuery = await evaluate(
         `fetch('/api/v1/admin/tenant?tenantId=00000000-0000-0000-0000-000000000001', {credentials:'same-origin'}).then(response => response.json())`,
     );
@@ -386,6 +466,49 @@ async function setAdminField(elementType, index, value, evaluate) {
       descriptor.set.call(field, ${JSON.stringify(value)});
       field.dispatchEvent(new Event('input', { bubbles: true }));
       field.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+}
+
+async function setFieldByAriaLabel(label, value, evaluate) {
+    await evaluate(`(() => {
+      const field = [...document.querySelectorAll('[aria-label]')].find(item => item.getAttribute('aria-label') === ${JSON.stringify(label)});
+      if (!field) throw new Error('Schedule field not found: ' + ${JSON.stringify(label)});
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+      descriptor.set.call(field, ${JSON.stringify(value)});
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      field.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+}
+
+async function setFieldByLabel(label, value, evaluate) {
+    await evaluate(`(() => {
+      const wrapper = [...document.querySelectorAll('label')].find(item => item.childNodes[0]?.textContent?.trim() === ${JSON.stringify(label)});
+      const field = wrapper?.querySelector('input');
+      if (!field) throw new Error('Policy field not found: ' + ${JSON.stringify(label)});
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+      descriptor.set.call(field, ${JSON.stringify(value)});
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      field.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+}
+
+async function setSelectByLabel(label, value, evaluate) {
+    await evaluate(`(() => {
+      const wrapper = [...document.querySelectorAll('label')].find(item => item.childNodes[0]?.textContent?.trim() === ${JSON.stringify(label)});
+      const field = wrapper?.querySelector('select');
+      if (!field) throw new Error('Policy select not found: ' + ${JSON.stringify(label)});
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+      descriptor.set.call(field, ${JSON.stringify(value)});
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      field.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+}
+
+async function clickButtonByText(text, evaluate) {
+    await evaluate(`(() => {
+      const button = [...document.querySelectorAll('button')].find(item => item.innerText.trim() === ${JSON.stringify(text)});
+      if (!button) throw new Error('Button not found: ' + ${JSON.stringify(text)});
+      button.click();
     })()`);
 }
 

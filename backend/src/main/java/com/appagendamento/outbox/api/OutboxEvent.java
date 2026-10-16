@@ -29,13 +29,20 @@ public record OutboxEvent(
     }
     boolean tenantRename = aggregateType.equals("TENANT") && eventType.equals("TENANT_RENAMED");
     boolean serviceCreated = aggregateType.equals("SERVICE") && eventType.equals("ServiceCreated");
-    if (!tenantRename && !serviceCreated) {
+    boolean scheduleChanged =
+        aggregateType.equals("SCHEDULE") && eventType.equals("ScheduleChanged");
+    boolean policyChanged =
+        aggregateType.equals("AVAILABILITY_POLICY")
+            && eventType.equals("AvailabilityPolicyChanged");
+    if (!tenantRename && !serviceCreated && !scheduleChanged && !policyChanged) {
       throw new IllegalArgumentException("Evento fora da allowlist desta integração");
     }
     boolean validPayload =
         tenantRename
             ? payloadJson.matches("\\{\"tenantId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}")
-            : payloadJson.matches("\\{\"serviceId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}");
+            : serviceCreated
+                ? payloadJson.matches("\\{\"serviceId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}")
+                : payloadJson.matches("\\{\"tenantId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}");
     if (!validPayload) {
       throw new IllegalArgumentException("Payload fora da allowlist do evento");
     }
