@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.appagendamento.availability.domain.BlockedPeriod;
 import com.appagendamento.availability.domain.BlockedPeriodStatus;
+import com.appagendamento.availability.domain.InvalidLocalTimeException;
 import com.appagendamento.availability.domain.LocalTimeResolution;
 import com.appagendamento.availability.domain.ScheduleDateRange;
 import com.appagendamento.availability.domain.ScheduleException;
@@ -14,6 +15,7 @@ import com.appagendamento.availability.domain.SpecialPeriod;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -66,6 +68,90 @@ class ScheduleExceptionsDomainTest {
         .isEqualTo(Instant.parse("2026-11-01T05:15:00Z"));
     assertThatThrownBy(() -> LocalTimeResolution.resolve("2026-11-01T01:15-03:00", zone))
         .isInstanceOf(ScheduleValidationException.class);
+  }
+
+  @Test
+  void specialPeriodsRequireAndPersistAValidOffsetForAmbiguousBounds() {
+    LocalDate fallBackDate = LocalDate.parse("2026-11-01");
+    ZoneId zone = ZoneId.of("America/New_York");
+    SpecialPeriod selectedOccurrence =
+        new SpecialPeriod(
+            java.time.LocalTime.parse("01:15"),
+            java.time.LocalTime.parse("02:15"),
+            ZoneOffset.of("-04:00"),
+            null);
+    var exception =
+        new ScheduleException(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            fallBackDate,
+            ScheduleExceptionKind.SPECIAL,
+            List.of(selectedOccurrence),
+            null,
+            1,
+            zone.getId());
+    assertThat(exception.periods().getFirst().localStartOffset())
+        .isEqualTo(ZoneOffset.of("-04:00"));
+    assertThat(
+            fallBackDate.atTime(selectedOccurrence.localStart()).toInstant(ZoneOffset.of("-04:00")))
+        .isEqualTo(Instant.parse("2026-11-01T05:15:00Z"));
+    assertThatThrownBy(
+            () ->
+                new ScheduleException(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    fallBackDate,
+                    ScheduleExceptionKind.SPECIAL,
+                    List.of(
+                        new SpecialPeriod(
+                            java.time.LocalTime.parse("01:15"),
+                            java.time.LocalTime.parse("02:15"))),
+                    null,
+                    1,
+                    zone.getId()))
+        .isInstanceOf(InvalidLocalTimeException.class)
+        .hasMessageContaining("ocorre duas vezes");
+    assertThatThrownBy(
+            () ->
+                new ScheduleException(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    fallBackDate,
+                    ScheduleExceptionKind.SPECIAL,
+                    List.of(
+                        new SpecialPeriod(
+                            java.time.LocalTime.parse("01:15"),
+                            java.time.LocalTime.parse("02:15"),
+                            ZoneOffset.of("-03:00"),
+                            null)),
+                    null,
+                    1,
+                    zone.getId()))
+        .isInstanceOf(InvalidLocalTimeException.class)
+        .hasMessageContaining("offset não é válido");
+    assertThatThrownBy(
+            () ->
+                new ScheduleException(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    fallBackDate,
+                    ScheduleExceptionKind.SPECIAL,
+                    List.of(
+                        new SpecialPeriod(
+                            java.time.LocalTime.parse("01:00"),
+                            java.time.LocalTime.parse("01:30"),
+                            ZoneOffset.of("-04:00"),
+                            ZoneOffset.of("-05:00")),
+                        new SpecialPeriod(
+                            java.time.LocalTime.parse("01:30"),
+                            java.time.LocalTime.parse("02:00"),
+                            ZoneOffset.of("-04:00"),
+                            null)),
+                    null,
+                    1,
+                    zone.getId()))
+        .isInstanceOf(ScheduleValidationException.class)
+        .hasMessageContaining("tempo real");
   }
 
   @Test

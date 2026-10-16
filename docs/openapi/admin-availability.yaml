@@ -455,6 +455,18 @@ components:
             pattern: "^(?:[01][0-9]|2[0-3]):(?:00|15|30|45)$",
             description: Limite exclusivo no mesmo dia.,
           }
+        localStartOffset:
+          {
+            type: [string, "null"],
+            pattern: "^[+-](?:(?:0[0-9]|1[0-7]):[0-5][0-9]|18:00)$",
+            description: Offset opcional para selecionar uma ocorrência ambígua válida na zona do tenant.,
+          }
+        localEndOffset:
+          {
+            type: [string, "null"],
+            pattern: "^[+-](?:(?:0[0-9]|1[0-7]):[0-5][0-9]|18:00)$",
+            description: Offset opcional para selecionar uma ocorrência ambígua válida na zona do tenant.,
+          }
     ScheduleException:
       type: object
       required: [exceptionId, localDate, kind, periods, version, timeZone]
@@ -574,7 +586,7 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/ApiError" }
     ValidationError:
-      description: Período ou política fora das regras do contrato.
+      description: Entrada inválida; inclui INVALID_LOCAL_TIME para horário DST ou offset incompatível com a zona IANA do tenant.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ApiError" }

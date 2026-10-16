@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiBaseUrl } from './config';
 import { commandKey } from './commandKey';
+import { validLocalTimeOffsets } from './localTimeOffsets';
 
 type Csrf = { headerName: string; token: string };
-type Period = { localStart: string; localEnd: string };
+type Period = {
+    localStart: string;
+    localEnd: string;
+    localStartOffset?: string | null;
+    localEndOffset?: string | null;
+};
 type Exception = {
     exceptionId: string;
     localDate: string;
@@ -229,7 +235,21 @@ export function ScheduleExceptionsPanel({
     function updatePeriod(index: number, field: keyof Period, value: string) {
         setPeriods((items) =>
             items.map((item, itemIndex) =>
-                itemIndex === index ? { ...item, [field]: value } : item,
+                itemIndex === index
+                    ? field === 'localStart'
+                        ? {
+                              ...item,
+                              localStart: value,
+                              localStartOffset: null,
+                          }
+                        : field === 'localEnd'
+                          ? {
+                                ...item,
+                                localEnd: value,
+                                localEndOffset: null,
+                            }
+                          : { ...item, [field]: value || null }
+                    : item,
             ),
         );
     }
@@ -530,6 +550,51 @@ export function ScheduleExceptionsPanel({
                                     }
                                 />
                             </label>
+                            {validLocalTimeOffsets(
+                                date,
+                                period.localStart,
+                                zone,
+                            ).length > 1 && (
+                                <label>
+                                    Ocorrência do início{' '}
+                                    <select
+                                        required
+                                        value={period.localStartOffset ?? ''}
+                                        onChange={(event) =>
+                                            updatePeriod(
+                                                index,
+                                                'localStartOffset',
+                                                event.target.value,
+                                            )
+                                        }
+                                    >
+                                        <option value="">
+                                            Selecione o offset
+                                        </option>
+                                        {validLocalTimeOffsets(
+                                            date,
+                                            period.localStart,
+                                            zone,
+                                        ).map((offset) => (
+                                            <option key={offset} value={offset}>
+                                                {offset}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+                            )}
+                            {period.localStart &&
+                                validLocalTimeOffsets(
+                                    date,
+                                    period.localStart,
+                                    zone,
+                                ).length === 0 && (
+                                    <p role="alert">
+                                        Esse horário de início não existe nessa
+                                        data e zona por causa da mudança de
+                                        horário.
+                                    </p>
+                                )}
                             <label>
                                 Fim local{' '}
                                 <input
@@ -545,6 +610,48 @@ export function ScheduleExceptionsPanel({
                                     }
                                 />
                             </label>
+                            {validLocalTimeOffsets(date, period.localEnd, zone)
+                                .length > 1 && (
+                                <label>
+                                    Ocorrência do fim{' '}
+                                    <select
+                                        required
+                                        value={period.localEndOffset ?? ''}
+                                        onChange={(event) =>
+                                            updatePeriod(
+                                                index,
+                                                'localEndOffset',
+                                                event.target.value,
+                                            )
+                                        }
+                                    >
+                                        <option value="">
+                                            Selecione o offset
+                                        </option>
+                                        {validLocalTimeOffsets(
+                                            date,
+                                            period.localEnd,
+                                            zone,
+                                        ).map((offset) => (
+                                            <option key={offset} value={offset}>
+                                                {offset}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+                            )}
+                            {period.localEnd &&
+                                validLocalTimeOffsets(
+                                    date,
+                                    period.localEnd,
+                                    zone,
+                                ).length === 0 && (
+                                    <p role="alert">
+                                        Esse horário de fim não existe nessa
+                                        data e zona por causa da mudança de
+                                        horário.
+                                    </p>
+                                )}
                             <button
                                 type="button"
                                 onClick={() =>

@@ -37,11 +37,13 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @SpringBootTest(
     properties = {
@@ -413,6 +415,176 @@ class AvailabilityScheduleIT {
     assertThat(count("audit_event", "SCHEDULE_EXCEPTION_UPDATED")).isEqualTo(1);
     assertThat(count("audit_event", "SCHEDULE_EXCEPTION_REMOVED")).isEqualTo(1);
     assertThat(count("outbox_event", "ScheduleChanged")).isEqualTo(3);
+  }
+
+  @Test
+  void specialExceptionPersistsExplicitDstOccurrenceAndReturnsActionableValidation()
+      throws Exception {
+    LocalDate fallBackDate = LocalDate.parse("2026-11-01");
+    migrationJdbc.update(
+        "UPDATE agendamento.tenant SET timezone = 'America/New_York' WHERE tenant_id = ?",
+        tenantId);
+    String missingOffset =
+        """
+        {"localDate":"2026-11-01","kind":"SPECIAL","periods":[{"localStart":"01:15","localEnd":"02:15"}]}
+        """;
+    mvc.perform(
+            post("/api/v1/admin/schedule/exceptions")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "ambiguous-special-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(missingOffset))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.error.code").value("INVALID_LOCAL_TIME"))
+        .andExpect(
+            jsonPath("$.error.message")
+                .value(org.hamcrest.Matchers.containsString("offset válido")));
+    String selectedOccurrenceKey = "selected-special-" + UUID.randomUUID();
+    String selectedOccurrenceBody =
+        """
+        {"localDate":"2026-11-01","kind":"SPECIAL","periods":[{"localStart":"01:15","localEnd":"02:15","localStartOffset":"-04:00"}]}
+        """;
+    mvc.perform(
+            post("/api/v1/admin/schedule/exceptions")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", selectedOccurrenceKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(selectedOccurrenceBody))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.periods[0].localStart").value("01:15"))
+        .andExpect(jsonPath("$.periods[0].localStartOffset").value("-04:00"))
+        .andExpect(
+            jsonPath("$.periods[0].localEndOffset").value(org.hamcrest.Matchers.nullValue()));
+    mvc.perform(
+            post("/api/v1/admin/schedule/exceptions")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", selectedOccurrenceKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(selectedOccurrenceBody))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"));
+    mvc.perform(
+            post("/api/v1/admin/schedule/exceptions")
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", selectedOccurrenceKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(selectedOccurrenceBody.replace("-04:00", "-05:00")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_KEY_REUSED"));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT local_start_offset_seconds FROM agendamento.schedule_exception_period WHERE tenant_id = ? AND exception_id = (SELECT exception_id FROM agendamento.schedule_exception WHERE tenant_id = ? AND local_date = ?)",
+                Integer.class,
+                tenantId,
+                tenantId,
+                fallBackDate))
+        .isEqualTo(-14_400);
+  }
+
+  @Test
+  void postgresRejectsInstantOverlapAcrossAnAmbiguousLocalBoundary() {
+    migrationJdbc.update(
+        "UPDATE agendamento.tenant SET timezone = 'America/New_York' WHERE tenant_id = ?",
+        tenantId);
+    TransactionTemplate transaction =
+        new TransactionTemplate(new DataSourceTransactionManager(appJdbc.getDataSource()));
+    assertThatThrownBy(
+            () ->
+                transaction.executeWithoutResult(
+                    status -> {
+                      UUID exceptionId = UUID.randomUUID();
+                      appJdbc.update(
+                          "INSERT INTO agendamento.schedule_exception(exception_id, tenant_id, local_date, kind) VALUES (?, ?, '2026-11-01', 'SPECIAL')",
+                          exceptionId,
+                          tenantId);
+                      appJdbc.update(
+                          "INSERT INTO agendamento.schedule_exception_period(tenant_id, exception_id, local_start, local_end, local_start_offset_seconds, local_end_offset_seconds) VALUES (?, ?, '01:00', '01:30', -14400, -18000)",
+                          tenantId,
+                          exceptionId);
+                      appJdbc.update(
+                          "INSERT INTO agendamento.schedule_exception_period(tenant_id, exception_id, local_start, local_end, local_start_offset_seconds) VALUES (?, ?, '01:30', '02:00', -14400)",
+                          tenantId,
+                          exceptionId);
+                    }))
+        .isInstanceOf(DataAccessException.class);
+  }
+
+  @Test
+  void postgresRejectsAmbiguousBoundaryWithoutExplicitOffset() {
+    migrationJdbc.update(
+        "UPDATE agendamento.tenant SET timezone = 'America/New_York' WHERE tenant_id = ?",
+        tenantId);
+    UUID exceptionId = UUID.randomUUID();
+    TransactionTemplate transaction =
+        new TransactionTemplate(new DataSourceTransactionManager(appJdbc.getDataSource()));
+    transaction.executeWithoutResult(
+        status -> {
+          appJdbc.update(
+              "INSERT INTO agendamento.schedule_exception(exception_id, tenant_id, local_date, kind) VALUES (?, ?, '2026-11-01', 'SPECIAL')",
+              exceptionId,
+              tenantId);
+          appJdbc.update(
+              "INSERT INTO agendamento.schedule_exception_period(tenant_id, exception_id, local_start, local_end) VALUES (?, ?, '09:00', '10:00')",
+              tenantId,
+              exceptionId);
+        });
+
+    assertThatThrownBy(
+            () ->
+                appJdbc.update(
+                    "INSERT INTO agendamento.schedule_exception_period(tenant_id, exception_id, local_start, local_end) VALUES (?, ?, '01:15', '02:00')",
+                    tenantId,
+                    exceptionId))
+        .isInstanceOf(DataAccessException.class);
+  }
+
+  @Test
+  void concurrentInstantOverlappingPeriodsHaveOnePostgresWinner() throws Exception {
+    migrationJdbc.update(
+        "UPDATE agendamento.tenant SET timezone = 'America/New_York' WHERE tenant_id = ?",
+        tenantId);
+    UUID exceptionId = UUID.randomUUID();
+    TransactionTemplate setup =
+        new TransactionTemplate(new DataSourceTransactionManager(appJdbc.getDataSource()));
+    setup.executeWithoutResult(
+        status -> {
+          appJdbc.update(
+              "INSERT INTO agendamento.schedule_exception(exception_id, tenant_id, local_date, kind) VALUES (?, ?, '2026-11-01', 'SPECIAL')",
+              exceptionId,
+              tenantId);
+          appJdbc.update(
+              "INSERT INTO agendamento.schedule_exception_period(tenant_id, exception_id, local_start, local_end) VALUES (?, ?, '08:00', '08:15')",
+              tenantId,
+              exceptionId);
+        });
+
+    CountDownLatch ready = new CountDownLatch(2);
+    CountDownLatch start = new CountDownLatch(1);
+    try (ExecutorService writers = Executors.newFixedThreadPool(2)) {
+      Future<Boolean> first =
+          writers.submit(
+              () ->
+                  insertAmbiguousPeriodAfterBarrier(
+                      ready, start, exceptionId, "01:00", "01:30", -14_400, -18_000));
+      Future<Boolean> second =
+          writers.submit(
+              () ->
+                  insertAmbiguousPeriodAfterBarrier(
+                      ready, start, exceptionId, "01:30", "02:00", -14_400, null));
+      ready.await();
+      start.countDown();
+      assertThat(List.of(first.get(), second.get())).containsExactlyInAnyOrder(true, false);
+    }
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.schedule_exception_period WHERE exception_id = ?",
+                Integer.class,
+                exceptionId))
+        .isEqualTo(2);
   }
 
   @Test
@@ -1065,6 +1237,36 @@ class AvailabilityScheduleIT {
         .andReturn()
         .getResponse()
         .getStatus();
+  }
+
+  private boolean insertAmbiguousPeriodAfterBarrier(
+      CountDownLatch ready,
+      CountDownLatch start,
+      UUID exceptionId,
+      String localStart,
+      String localEnd,
+      Integer startOffset,
+      Integer endOffset)
+      throws Exception {
+    ready.countDown();
+    start.await();
+    TransactionTemplate transaction =
+        new TransactionTemplate(new DataSourceTransactionManager(appJdbc.getDataSource()));
+    try {
+      transaction.executeWithoutResult(
+          status ->
+              appJdbc.update(
+                  "INSERT INTO agendamento.schedule_exception_period(tenant_id, exception_id, local_start, local_end, local_start_offset_seconds, local_end_offset_seconds) VALUES (?, ?, ?, ?, ?, ?)",
+                  tenantId,
+                  exceptionId,
+                  LocalTime.parse(localStart),
+                  LocalTime.parse(localEnd),
+                  startOffset,
+                  endOffset));
+      return true;
+    } catch (DataAccessException exception) {
+      return false;
+    }
   }
 
   private WeeklyPeriod period(String start, String end) {

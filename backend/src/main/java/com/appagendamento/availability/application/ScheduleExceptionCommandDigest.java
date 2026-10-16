@@ -24,18 +24,26 @@ final class ScheduleExceptionCommandDigest {
     try {
       ByteArrayOutputStream bytes = new ByteArrayOutputStream();
       DataOutputStream command = new DataOutputStream(bytes);
-      write(command, scope + ".canonical.v1");
+      List<SpecialPeriod> periods = ScheduleException.canonicalPeriods(scheduleException.periods());
+      boolean hasExplicitOffset =
+          periods.stream()
+              .anyMatch(p -> p.localStartOffset() != null || p.localEndOffset() != null);
+      write(command, scope + (hasExplicitOffset ? ".canonical.v2" : ".canonical.v1"));
       write(command, tenantId.toString());
       write(command, targetId == null ? "" : targetId.toString());
       write(command, timeZone);
       command.writeLong(expectedVersion);
       write(command, scheduleException.localDate().toString());
       write(command, scheduleException.kind().name());
-      List<SpecialPeriod> periods = ScheduleException.canonicalPeriods(scheduleException.periods());
       command.writeInt(periods.size());
       for (SpecialPeriod period : periods) {
         write(command, period.localStart().toString());
         write(command, period.localEnd().toString());
+        if (hasExplicitOffset) {
+          write(
+              command, period.localStartOffset() == null ? "" : period.localStartOffset().getId());
+          write(command, period.localEndOffset() == null ? "" : period.localEndOffset().getId());
+        }
       }
       write(command, scheduleException.reason() == null ? "" : scheduleException.reason());
       command.flush();

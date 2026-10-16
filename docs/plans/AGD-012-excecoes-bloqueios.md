@@ -52,7 +52,7 @@
 
 ## Estratégia de migration e compatibilidade
 
-- Migration V10 confirmada como próxima. Criar `schedule_exception`, `schedule_exception_period` e `blocked_period`; preservar V1–V9/checksums.
+- V10 criou exceções/bloqueios preservando V1–V9. V11 adiciona offsets opcionais aos limites de períodos especiais, sem backfill ou alteração dos valores locais anteriores. O trigger resolve a zona do tenant, rejeita limites inexistentes ou ambíguos sem offset, valida ida/volta do offset explícito e impede sobreposição por instantes sob escritas concorrentes. A proteção de banco identifica offsets válidos por amostragem de instantes UTC em passos de um minuto no entorno do limite; a validação Java/ZoneRules permanece a autoridade exata do fluxo da aplicação.
 - FK tenant/data e unique `(tenant_id, local_date)`; FK composta tenant/exception dos períodos; exclusion GiST por exceção para impedir overlap; CHECK de quarter-hour e start<end.
 - Bloqueios guardam UTC em `timestamptz`, `time_zone`, status/version, motivo original e cancelamento; índices de busca por tenant/instantes. Sem exclusion constraint entre bloqueios.
 - Sem backfill presumido: não há evidência de dados antigos dessas entidades. Migração deve criar schema funcional, grants mínimos runtime e manter auditoria append-only.
@@ -73,10 +73,10 @@
 ## Progresso e retomada
 
 - [x] 16/10/2026 — main atualizada em `4ce3cb5871ae89d026ebf61eb77534ff89742cad`, branch própria criada e V10 confirmada.
-- [x] 16/10/2026 — decisões temporais registradas em requisitos, contrato, ADR-0011 e `OPEN-QUESTIONS.md`.
-- [x] 16/10/2026 — commit funcional `5dbd1a30b7c35efe9b2928a9e7ab7e647f890b23`: implementação backend/API/UI e V10; gates locais `spotless:check verify` passaram (36 unitários/arquiteturais + 64 integrações PostgreSQL), frontend (4 testes), OpenAPI e browser E2E OIDC real; resultados em `docs/development/VALIDATION.md`.
-- [x] Publicado no PR [#7](https://github.com/LsaBarbosa/kronos_agendamento/pull/7); App CI e CodeQL push/PR passaram no head `969729b9ac4f455d0dd7c9a4ec7090590bb4a055` (links em `docs/development/VALIDATION.md`).
-- [x] Revisões independentes em leitura concluídas; ajustes de OpenAPI/DTO, edição de data fora do intervalo, visualização local com zona e assertion de rollback idempotente foram aplicados. Pareceres não equivalem a aprovação humana.
+- [x] 16/10/2026 — decisões temporais registradas em requisitos, contrato, ADR-0011 e `OPEN-QUESTIONS.md`; offsets explícitos para ocorrências ambíguas são persistidos em V11.
+- [x] 16/10/2026 — implementação inicial backend/API/UI e V10 em `5dbd1a30b7c35efe9b2928a9e7ab7e647f890b23`; browser E2E OIDC real executado nesse delta original.
+- [x] Publicado no PR [#7](https://github.com/LsaBarbosa/kronos_agendamento/pull/7); App CI/CodeQL push/PR passaram no head anterior `0e50d0324a2aa1ff3217e5da458f39167058c715`. Correções adicionais de DST/V11 estão em validação local; checks do head final ainda pendentes.
+- [x] Revisões independentes em leitura encontraram e ajudaram a corrigir rejeição SQL de limite ambíguo sem offset, cobertura concorrente do trigger e documentação do erro `INVALID_LOCAL_TIME`. Os pareceres são de agentes e não equivalem a aprovação humana.
 - [ ] Prova de bloqueio concorrente com reservas e invalidação real de cache continuam indisponíveis por dependência de AGD-015/013; retenção de resultados idempotentes ainda depende de decisão.
 - [ ] Integração concorrente com reservas, invalidação real, homologação, scan completo, retenção e integrações reais permanecem pendentes.
 

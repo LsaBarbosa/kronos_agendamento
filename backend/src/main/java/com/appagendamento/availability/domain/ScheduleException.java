@@ -1,5 +1,6 @@
 package com.appagendamento.availability.domain;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -40,12 +41,26 @@ public record ScheduleException(
       throw new ScheduleValidationException("Horário especial exige ao menos um período");
     }
     SpecialPeriod previous = null;
+    Instant previousEndInstant = null;
     for (SpecialPeriod period : periods) {
       if (previous != null && period.localStart().isBefore(previous.localEnd())) {
         throw new ScheduleValidationException("Períodos especiais não podem se sobrepor");
       }
-      resolveUnique(localDate.atTime(period.localStart()), zone);
-      resolveUnique(localDate.atTime(period.localEnd()), zone);
+      ZoneOffset startOffset =
+          resolveOffset(localDate.atTime(period.localStart()), zone, period.localStartOffset());
+      ZoneOffset endOffset =
+          resolveOffset(localDate.atTime(period.localEnd()), zone, period.localEndOffset());
+      Instant startInstant = localDate.atTime(period.localStart()).toInstant(startOffset);
+      Instant endInstant = localDate.atTime(period.localEnd()).toInstant(endOffset);
+      if (!startInstant.isBefore(endInstant)) {
+        throw new ScheduleValidationException(
+            "Os offsets informados devem manter o início antes do fim no tempo real");
+      }
+      if (previousEndInstant != null && previousEndInstant.isAfter(startInstant)) {
+        throw new ScheduleValidationException(
+            "Períodos especiais não podem se sobrepor no tempo real após aplicar os offsets");
+      }
+      previousEndInstant = endInstant;
       previous = period;
     }
   }
@@ -75,10 +90,26 @@ public record ScheduleException(
   }
 
   public static ZoneOffset resolveUnique(LocalDateTime localDateTime, ZoneId zone) {
+    return resolveOffset(localDateTime, zone, null);
+  }
+
+  public static ZoneOffset resolveOffset(
+      LocalDateTime localDateTime, ZoneId zone, ZoneOffset requestedOffset) {
     List<ZoneOffset> offsets = zone.getRules().getValidOffsets(localDateTime);
-    if (offsets.size() != 1) {
-      throw new ScheduleValidationException(
-          "Horário local inexistente ou ambíguo no fuso do tenant");
+    if (offsets.isEmpty()) {
+      throw new InvalidLocalTimeException(
+          "Esse horário local não existe por causa da mudança de fuso. Escolha outro horário.");
+    }
+    if (requestedOffset != null) {
+      if (!offsets.contains(requestedOffset)) {
+        throw new InvalidLocalTimeException(
+            "O offset não é válido para esse horário e fuso. Escolha uma ocorrência válida.");
+      }
+      return requestedOffset;
+    }
+    if (offsets.size() > 1) {
+      throw new InvalidLocalTimeException(
+          "Esse horário local ocorre duas vezes. Informe um offset válido ou escolha outro horário.");
     }
     return offsets.getFirst();
   }

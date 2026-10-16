@@ -1,9 +1,18 @@
 package com.appagendamento.availability.domain;
 
 import java.time.LocalTime;
+import java.time.ZoneOffset;
 
-public record SpecialPeriod(LocalTime localStart, LocalTime localEnd)
+public record SpecialPeriod(
+    LocalTime localStart,
+    LocalTime localEnd,
+    ZoneOffset localStartOffset,
+    ZoneOffset localEndOffset)
     implements Comparable<SpecialPeriod> {
+
+  public SpecialPeriod(LocalTime localStart, LocalTime localEnd) {
+    this(localStart, localEnd, null, null);
+  }
 
   public SpecialPeriod {
     if (localStart == null || localEnd == null) {
@@ -24,6 +33,17 @@ public record SpecialPeriod(LocalTime localStart, LocalTime localEnd)
   @Override
   public int compareTo(SpecialPeriod other) {
     int startComparison = localStart.compareTo(other.localStart);
-    return startComparison != 0 ? startComparison : localEnd.compareTo(other.localEnd);
+    if (startComparison != 0) return startComparison;
+    int endComparison = localEnd.compareTo(other.localEnd);
+    if (endComparison != 0) return endComparison;
+    int startOffsetComparison =
+        offsetValue(localStartOffset).compareTo(offsetValue(other.localStartOffset));
+    return startOffsetComparison != 0
+        ? startOffsetComparison
+        : offsetValue(localEndOffset).compareTo(offsetValue(other.localEndOffset));
+  }
+
+  private static String offsetValue(ZoneOffset value) {
+    return value == null ? "" : value.getId();
   }
 }

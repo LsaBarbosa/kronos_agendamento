@@ -284,8 +284,10 @@ public class PostgresScheduleRepository implements ScheduleRepository {
         value.exceptionId());
     jdbc.batchUpdate(
         """
-        INSERT INTO agendamento.schedule_exception_period(tenant_id, exception_id, local_start, local_end)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO agendamento.schedule_exception_period
+          (tenant_id, exception_id, local_start, local_end,
+           local_start_offset_seconds, local_end_offset_seconds)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
         value.periods(),
         value.periods().size(),
@@ -294,6 +296,14 @@ public class PostgresScheduleRepository implements ScheduleRepository {
           statement.setObject(2, value.exceptionId());
           statement.setTime(3, Time.valueOf(period.localStart()));
           statement.setTime(4, Time.valueOf(period.localEnd()));
+          statement.setObject(
+              5,
+              period.localStartOffset() == null
+                  ? null
+                  : period.localStartOffset().getTotalSeconds());
+          statement.setObject(
+              6,
+              period.localEndOffset() == null ? null : period.localEndOffset().getTotalSeconds());
         });
   }
 
@@ -302,12 +312,19 @@ public class PostgresScheduleRepository implements ScheduleRepository {
     List<SpecialPeriod> periods =
         jdbc.query(
             """
-        SELECT local_start, local_end FROM agendamento.schedule_exception_period
+        SELECT local_start, local_end, local_start_offset_seconds, local_end_offset_seconds
+        FROM agendamento.schedule_exception_period
         WHERE tenant_id = ? AND exception_id = ? ORDER BY local_start
         """,
-            (periodRs, row) ->
-                new SpecialPeriod(
-                    periodRs.getTime(1).toLocalTime(), periodRs.getTime(2).toLocalTime()),
+            (periodRs, row) -> {
+              Integer startOffset = periodRs.getObject(3, Integer.class);
+              Integer endOffset = periodRs.getObject(4, Integer.class);
+              return new SpecialPeriod(
+                  periodRs.getTime(1).toLocalTime(),
+                  periodRs.getTime(2).toLocalTime(),
+                  startOffset == null ? null : java.time.ZoneOffset.ofTotalSeconds(startOffset),
+                  endOffset == null ? null : java.time.ZoneOffset.ofTotalSeconds(endOffset));
+            },
             tenantId,
             exceptionId);
     return new ScheduleException(

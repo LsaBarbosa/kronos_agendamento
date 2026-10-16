@@ -24,7 +24,9 @@ public record ScheduleExceptionResponse(
                 p ->
                     new SpecialPeriodResponse(
                         p.localStart().format(DateTimeFormatter.ofPattern("HH:mm")),
-                        p.localEnd().format(DateTimeFormatter.ofPattern("HH:mm"))))
+                        p.localEnd().format(DateTimeFormatter.ofPattern("HH:mm")),
+                        p.localStartOffset() == null ? null : p.localStartOffset().getId(),
+                        p.localEndOffset() == null ? null : p.localEndOffset().getId()))
             .toList(),
         value.reason(),
         value.version(),

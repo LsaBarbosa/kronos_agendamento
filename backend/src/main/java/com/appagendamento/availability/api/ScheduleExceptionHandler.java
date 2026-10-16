@@ -3,6 +3,7 @@ package com.appagendamento.availability.api;
 import com.appagendamento.audit.api.AuditCorrelationId;
 import com.appagendamento.availability.domain.BlockedPeriodStateConflictException;
 import com.appagendamento.availability.domain.ConfirmedAppointmentConflictException;
+import com.appagendamento.availability.domain.InvalidLocalTimeException;
 import com.appagendamento.availability.domain.ScheduleAccessDeniedException;
 import com.appagendamento.availability.domain.ScheduleExceptionAlreadyExistsException;
 import com.appagendamento.availability.domain.ScheduleResourceNotFoundException;
@@ -26,6 +27,12 @@ public class ScheduleExceptionHandler {
 
   public ScheduleExceptionHandler(AuditCorrelationId correlationId) {
     this.correlationId = correlationId;
+  }
+
+  @ExceptionHandler(InvalidLocalTimeException.class)
+  ResponseEntity<ApiErrorResponse> invalidLocalTime(
+      InvalidLocalTimeException exception, HttpServletRequest request) {
+    return error(request, HttpStatus.BAD_REQUEST, "INVALID_LOCAL_TIME", exception.getMessage());
   }
 
   @ExceptionHandler(ScheduleValidationException.class)
