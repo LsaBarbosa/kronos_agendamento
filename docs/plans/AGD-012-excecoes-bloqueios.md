@@ -75,9 +75,10 @@
 - [x] 16/10/2026 — main atualizada em `4ce3cb5871ae89d026ebf61eb77534ff89742cad`, branch própria criada e V10 confirmada.
 - [x] 16/10/2026 — decisões temporais registradas em requisitos, contrato, ADR-0011 e `OPEN-QUESTIONS.md`; offsets explícitos para ocorrências ambíguas são persistidos em V11.
 - [x] 16/10/2026 — implementação inicial backend/API/UI e V10 em `5dbd1a30b7c35efe9b2928a9e7ab7e647f890b23`; browser E2E OIDC real executado nesse delta original.
-- [x] Publicado no PR [#7](https://github.com/LsaBarbosa/kronos_agendamento/pull/7); App CI/CodeQL push/PR passaram no head anterior `0e50d0324a2aa1ff3217e5da458f39167058c715`. Correções adicionais de DST/V11 estão em validação local; checks do head final ainda pendentes.
+- [x] PR [#7](https://github.com/LsaBarbosa/kronos_agendamento/pull/7), head atual `a2ef5434bd22650d0c850a04f55017a970a44dfd`; V11/DST validado localmente no commit `1664be2402bfd3322c5b41ca5547a2702c3bcc45` (69 testes de `spotless:check verify`, 7 Vitest). App CI push/PR (`38909492860`, `38909500156`) e CodeQL push/PR (`38909492570`, `38909499974`) passaram, incluindo browser E2E OIDC no head `a2ef543`.
 - [x] Revisões independentes em leitura encontraram e ajudaram a corrigir rejeição SQL de limite ambíguo sem offset, cobertura concorrente do trigger e documentação do erro `INVALID_LOCAL_TIME`. Os pareceres são de agentes e não equivalem a aprovação humana.
-- [ ] Prova de bloqueio concorrente com reservas e invalidação real de cache continuam indisponíveis por dependência de AGD-015/013; retenção de resultados idempotentes ainda depende de decisão.
+- [x] Falha de browser E2E no head `72490bd` investigada: após remoção, o teste clicava antes de terminar `saving` e o botão ainda trocava de texto. O roteiro agora espera o botão habilitado; nova execução de browser E2E passou no head `a2ef543`. A tentativa local de reprodução não alcançou o endpoint CDP do Chrome, então o resultado navegador desta correção é evidência de CI.
+- [ ] Prova integrada/concorrente de conflito com reservas e invalidação real de cache seguem indisponíveis por dependência de AGD-015/decisão arquitetural; retenção de resultados idempotentes ainda depende de decisão.
 - [ ] Integração concorrente com reservas, invalidação real, homologação, scan completo, retenção e integrações reais permanecem pendentes.
 
 ## Encerramento ou retomada
