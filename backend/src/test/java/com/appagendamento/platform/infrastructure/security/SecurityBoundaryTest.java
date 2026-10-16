@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.appagendamento.audit.api.AuditCorrelationId;
+import com.appagendamento.availability.application.CalculateAvailabilityForDateRange;
 import com.appagendamento.availability.application.GetBlockedPeriods;
 import com.appagendamento.availability.application.GetScheduleConfiguration;
 import com.appagendamento.availability.application.GetScheduleExceptions;
@@ -20,7 +21,15 @@ import com.appagendamento.catalog.application.ListServices;
 import com.appagendamento.catalog.application.SetServiceStatus;
 import com.appagendamento.catalog.application.UpdateService;
 import com.appagendamento.platform.infrastructure.web.CorrelationIdFilter;
+import com.appagendamento.publicpage.application.ChangePublicationStatus;
+import com.appagendamento.publicpage.application.GetPublicBusiness;
+import com.appagendamento.publicpage.application.GetPublicService;
+import com.appagendamento.publicpage.application.GetPublicationStatus;
+import com.appagendamento.publicpage.application.ListPublicServices;
+import com.appagendamento.publicpage.application.UpdatePublicContact;
+import com.appagendamento.publicpage.domain.PublicPageUnavailableException;
 import com.appagendamento.tenant.application.GetTenant;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -55,6 +64,14 @@ class SecurityBoundaryTest {
   @MockitoBean private ManageScheduleExceptions manageScheduleExceptions;
   @MockitoBean private ManageBlockedPeriods manageBlockedPeriods;
   @MockitoBean private AuditCorrelationId auditCorrelationId;
+  @MockitoBean private GetPublicationStatus getPublicationStatus;
+  @MockitoBean private ChangePublicationStatus changePublicationStatus;
+  @MockitoBean private UpdatePublicContact updatePublicContact;
+  @MockitoBean private GetPublicBusiness getPublicBusiness;
+  @MockitoBean private ListPublicServices listPublicServices;
+  @MockitoBean private GetPublicService getPublicService;
+  @MockitoBean private CalculateAvailabilityForDateRange calculateAvailability;
+  @MockitoBean private MeterRegistry meterRegistry;
 
   @Test
   void anonymousBusinessRequestReceivesConsistentError() throws Exception {
@@ -74,21 +91,30 @@ class SecurityBoundaryTest {
   }
 
   @Test
-  void publicAvailabilityIsNotExposedBeforePublicationGateExists() throws Exception {
+  void publicAvailabilityIsAnonymousButStillRequiresPublishedBusiness() throws Exception {
+    org.mockito.Mockito.when(auditCorrelationId.currentTraceId()).thenReturn(UUID.randomUUID());
+    org.mockito.Mockito.when(getPublicBusiness.execute("example"))
+        .thenThrow(new PublicPageUnavailableException());
     mvc.perform(
             get("/api/v1/public/example/availability")
                 .param("serviceId", UUID.randomUUID().toString())
                 .param("from", "2026-10-19")
                 .param("to", "2026-10-19"))
-        .andExpect(status().isUnauthorized());
+        .andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.error.code").value("PUBLIC_RESOURCE_NOT_FOUND"));
     mvc.perform(
             get("/api/v1/public/example/availability")
                 .param("serviceId", UUID.randomUUID().toString())
                 .param("from", "2026-10-19")
                 .param("to", "2026-10-19")
                 .with(user("test-user")))
-        .andExpect(status().isForbidden())
-        .andExpect(jsonPath("$.error.code").value("ACTION_NOT_ALLOWED"));
+        .andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.error.code").value("PUBLIC_RESOURCE_NOT_FOUND"));
+  }
+
+  @Test
+  void unimplementedPublicRoutesRemainDenied() throws Exception {
+    mvc.perform(get("/api/v1/public/example/appointments")).andExpect(status().isUnauthorized());
   }
 
   @Test

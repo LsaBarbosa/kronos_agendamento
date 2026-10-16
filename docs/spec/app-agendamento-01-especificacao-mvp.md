@@ -67,6 +67,8 @@ O onboarding deve permitir que o tenant publique o primeiro horário sem interve
 - Fuso horário é obrigatório e armazenado como identificador IANA, por exemplo `America/Sao_Paulo`.
 - Valores monetários usam moeda definida pelo produto e inteiros na menor unidade; nunca `float`.
 - O link público permanece despublicado até a configuração mínima ser válida.
+- Publicar é uma ação explícita do administrador autenticado; o estado inicial é despublicado e `Tenant.ACTIVE` não publica automaticamente. O servidor verifica a prontidão no comando de publicação e em toda leitura pública. Despublicar preserva configuração e histórico.
+- Prontidão deve apresentar bloqueios para dados ou evidências obrigatórias ausentes. Não criar defaults, texto/versão de termos, consentimento, trial ou assinatura ativa sem aprovação e integração correspondentes.
 
 ## 4. Catálogo de serviços
 

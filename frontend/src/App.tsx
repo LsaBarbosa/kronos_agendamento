@@ -4,6 +4,8 @@ import { apiBaseUrl } from './config';
 import { commandKey } from './commandKey';
 import { SchedulePanel } from './SchedulePanel';
 import { ScheduleExceptionsPanel } from './ScheduleExceptionsPanel';
+import { PublicPage } from './PublicPage';
+import { PublicPublicationPanel } from './PublicPublicationPanel';
 
 type Session = { authenticated: boolean; tenantId: string; role: string };
 type Csrf = { headerName: string; token: string };
@@ -43,7 +45,7 @@ async function responseError(response: Response): Promise<string> {
     }
 }
 
-export function App() {
+function AdminApp() {
     const [session, setSession] = useState<Session | null>(null);
     const [csrf, setCsrf] = useState<Csrf | null>(null);
     const [status, setStatus] = useState('Verificando sessão…');
@@ -518,10 +520,37 @@ export function App() {
                         );
                     }}
                 />
+                <PublicPublicationPanel
+                    enabled={Boolean(session)}
+                    csrf={csrf}
+                    onSessionInvalid={(responseStatus) => {
+                        setSession(null);
+                        setCsrf(null);
+                        setStatus(
+                            responseStatus === 401
+                                ? 'Sua sessão expirou. Entre novamente para continuar.'
+                                : 'Sua associação administrativa foi revogada ou o acesso foi negado.',
+                        );
+                    }}
+                />
                 <p className="api-note">
                     API: <code>{apiBaseUrl}</code>
                 </p>
             </section>
         </main>
     );
+}
+
+export function App() {
+    const match = /^\/public\/([^/]+)\/?$/.exec(window.location.pathname);
+    if (match) {
+        let slug = match[1];
+        try {
+            slug = decodeURIComponent(slug);
+        } catch {
+            slug = '';
+        }
+        return <PublicPage slug={slug} />;
+    }
+    return <AdminApp />;
 }
