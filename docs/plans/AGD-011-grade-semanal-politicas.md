@@ -2,7 +2,7 @@
 
 ## Identificação e objetivo
 
-- Branch `agd-011-grade-semanal-politicas`, derivada da `origin/main` `c5dbec26cf88843704c6bf1575b69666ed235ab0`; PR [#6](https://github.com/LsaBarbosa/kronos_agendamento/pull/6) aberto para `main`, head temporal `b2e76a590c886f14e0908355ccea62dd2c3df69e`.
+- Branch `agd-011-grade-semanal-politicas`, derivada da `origin/main` `c5dbec26cf88843704c6bf1575b69666ed235ab0`; PR [#6](https://github.com/LsaBarbosa/kronos_agendamento/pull/6) integrado em `main` pelo merge commit `035c0bf4ccf191b6bc33a0512a7c2867eb06fa95`. Head final revisado/validado: `ddf1f142924bebf204ba5786342ecfc34ee7c847`.
 - Objetivo: permitir ao `TENANT_ADMIN` manter uma grade semanal recorrente e as políticas de reserva de forma tenant-scoped, versionada, auditável e idempotente.
 - Fontes: documento 01 §§5.2–5.5; documento 02 §§1–5 e entidades `AvailabilityPolicy`/`WeeklyPeriod`; documento 03 §§2, 5, 6, 7, 13–15 e rotas administrativas de política/grade; documento 04 §§4–8, 14, 18 e critérios AGD-011 no documento 06.
 
@@ -72,9 +72,10 @@ Se houver linhas, interromper a promoção. O responsável apresenta cada grade 
 - [x] Contratos OpenAPI, domínio/casos de uso, V8, API e UI do incremento base implementados.
 - [x] Validação Maven/PostgreSQL, frontend, npm audit, parse YAML e sintaxe do browser passaram; detalhes em `VALIDATION.md`.
 - [x] Duas revisões independentes em leitura: inconsistência documental de cobertura e lacunas de evidência de rollback de substituição/replay após revogação corrigidas com testes/documentação; pareceres não equivalem a aprovação humana.
-- [x] Incremento temporal publicado no PR #6 em `b2e76a590c886f14e0908355ccea62dd2c3df69e`; quatro checks push/PR passaram nesse SHA. Head documental `9f170e8cd39e1f1bcef04e148d09d872ea9f2f53` também passou nos quatro checks após rerun do App CI PR por indisponibilidade de download do Maven Wrapper; falha inicial registrada abaixo.
+- [x] Incremento temporal publicado no PR #6 em `b2e76a590c886f14e0908355ccea62dd2c3df69e`; quatro checks push/PR passaram nesse SHA. Heads documentais anteriores e o head final `ddf1f142924bebf204ba5786342ecfc34ee7c847` passaram nos checks aplicáveis; falhas transitórias de download do Maven Wrapper estão registradas abaixo.
 - [x] Decisão temporal aprovada e refletida nos requisitos, ADR-0010, OpenAPI, domínio, API e UI.
 - [x] Commit temporal publicado no PR #6; App CI e CodeQL em push/PR passaram no SHA `b2e76a590c886f14e0908355ccea62dd2c3df69e`.
+- [x] Revisão final em leitura não encontrou bloqueadores; PR #6 integrado por merge commit `035c0bf4ccf191b6bc33a0512a7c2867eb06fa95`. App CI [38841439363](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38841439363) e CodeQL [38841439352](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/38841439352) passaram no merge SHA. Não havia regra de branch protection/ruleset exigindo aprovação humana; os pareceres de agentes não são aprovação humana.
 - [ ] Homologação/staging permanece separada e pendente.
 
 ## Validação
@@ -95,4 +96,4 @@ Se houver linhas, interromper a promoção. O responsável apresenta cada grade 
 
 ## Retomada
 
-AGD-011 permanece parcial enquanto houver critério aplicável sem evidência, inclusive homologação/staging. A semântica temporal está decidida, não é pendência de produto. A próxima história é AGD-012 — Exceções e bloqueios; sua preparação deve seguir os contratos do backlog sem antecipar implementação neste incremento. Scan completo de dependências, homologação HTTPS, retenção e integrações reais continuam pendentes.
+AGD-011 permanece parcial enquanto houver critério aplicável sem evidência, inclusive homologação/staging. A semântica temporal está decidida, não é pendência de produto. O merge e o CI pós-merge foram observados; isso não equivale a executar preflight V8→V9 em ambiente hospedado. A próxima história é AGD-012 — Exceções e bloqueios; sua preparação deve seguir os contratos do backlog sem antecipar implementação neste incremento. Scan completo de dependências (AGD-001), homologação HTTPS (AGD-003), preflight hospedado, retenção e integrações reais continuam pendentes.

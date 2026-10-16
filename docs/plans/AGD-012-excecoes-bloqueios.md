@@ -2,7 +2,7 @@
 
 ## Identificação e objetivo
 
-- Próxima história P0, tamanho M, backlog do documento 06; preparação vinculada à evolução do PR #6, sem implementar nem publicar comportamento AGD-012 nesta rodada.
+- Próxima história P0, tamanho M, backlog do documento 06; preparação documental apenas, sem implementar nem publicar comportamento AGD-012 nesta rodada.
 - Objetivo: permitir administrar exceções por data e períodos de bloqueio sem ocultar conflitos com reservas confirmadas, invalidando a disponibilidade derivada e preservando auditoria.
 - Fontes: `docs/spec/app-agendamento-01-especificacao-mvp.md` §5.3; `docs/spec/app-agendamento-02-modelo-dominio-estados.md` entidades `ScheduleException`/`BlockedPeriod` e §12; `docs/spec/app-agendamento-03-apis-eventos-integracoes.md` seção “Grade, exceções e bloqueios” e evento `ScheduleChanged`; `docs/spec/app-agendamento-04-arquitetura-implementacao.md` §§4, 8–10; critérios AGD-012 em `docs/spec/app-agendamento-06-backlog-criterios-aceite.md`.
 - Escopo: exceção de data fechada ou com horário especial; criar, consultar e remover bloqueios com motivo; detectar/resolver conflito com reserva confirmada segundo fluxo aprovado; invalidação pós-commit da disponibilidade em cache; histórico/auditoria do ator.
@@ -10,7 +10,7 @@
 
 ## Estado e dependências
 
-- AGD-011 fornece grade semanal, timezone IANA do tenant, OIDC, autorização tenant-scoped, CSRF, CAS, idempotência, auditoria transacional e outbox; V9 valida alinhamento temporal da grade. PR #6 está aberto, sem merge/deploy; confira o estado remoto e derive a branch da `main` atualizada após integração autorizada.
+- AGD-011 fornece grade semanal, timezone IANA do tenant, OIDC, autorização tenant-scoped, CSRF, CAS, idempotência, auditoria transacional e outbox; V9 valida alinhamento temporal da grade. PR #6 foi integrado em `main` pelo merge commit `035c0bf4ccf191b6bc33a0512a7c2867eb06fa95`; App CI/CodeQL pós-merge passaram. AGD-012 ainda não foi implementada; iniciar em branch própria baseada na `main` atualizada.
 - A especificação propõe `ScheduleException(tenant, local_date, kind, periods, reason, version)` e `BlockedPeriod(block_id, tenant, starts_at, ends_at, reason, status, version)`; contrato REST administrativo existe em forma proposta no documento 03.
 - Confirme a última migration integrada antes de reservar número. Esperado após integração de AGD-011: V10; nunca alterar V1–V9 nem assumir o estado apenas pelo plano.
 - Autorização deve reutilizar a associação ativa e o papel já existente `TENANT_ADMIN`; ator, tenant e timezone vêm do contexto autenticado/servidor, não do payload.
@@ -38,7 +38,7 @@
 
 ## Estratégia
 
-1. Confirmar que PR #6 foi integrado, atualizar `main`, abrir branch AGD-012 e reler `AGENTS.md`, requisitos, ADRs e estado dos contratos.
+1. Partir da `main` que contém o merge `035c0bf4ccf191b6bc33a0512a7c2867eb06fa95`, confirmar estado remoto/migrations e abrir branch AGD-012; reler `AGENTS.md`, requisitos, ADRs e estado dos contratos.
 2. Fechar as decisões de tempo local/DST e semântica de exceção; atualizar OpenAPI antes da implementação. Reutilizar validadores temporais apenas depois de confirmar compatibilidade de requisito.
 3. Implementar agregados/casos de uso no módulo `availability`, adapters PostgreSQL e API protegida, mantendo tenant isolation e consultas não reveladoras.
 4. Escolher bloqueio lógico (status ativo/cancelado) como padrão inicial coerente com auditoria e API proposta; efetivar em ADR apenas se houver consequência arquitetural relevante.
@@ -49,7 +49,7 @@
 
 ## Estratégia de migration e compatibilidade
 
-- Próxima migration estimada V10, a confirmar no remoto após merge do PR #6. Preservar V1–V9 e checksums.
+- Próxima migration estimada V10; confirmar no início do incremento contra a `main` integrada. Preservar V1–V9 e checksums.
 - Separar tabelas para exceção, períodos especiais e bloqueios se isso refletir o modelo sem comprometer atomicidade; FK tenant com isolamento e índices por tenant/data/instante.
 - Constraints PostgreSQL para `start < end`, intervalo semiaberto e integridade estrutural; exclusão/concorrência de bloqueios deve respeitar cancelamento lógico e reservas confirmadas. Justificar constraint por invariantes em vez de replicar somente validação Java.
 - Sem backfill presumido: não há evidência de dados antigos dessas entidades. Migração deve criar schema funcional, grants mínimos runtime e manter auditoria append-only.
@@ -70,7 +70,7 @@
 ## Progresso e retomada
 
 - [x] 15/10/2026 — preparação documental iniciada a partir das referências existentes; nenhum código, migration, endpoint ou regra AGD-012 implementados nesta etapa.
-- [ ] Após decisão temporal de exceções/DST e integração do PR #6, confirmar migration real, revisar contratos e iniciar implementação na branch própria.
+- [ ] Após decisão temporal de exceções/DST, confirmar migration real e revisar contratos antes de iniciar implementação na branch própria.
 - [ ] Homologação, operação de cache e políticas de retenção permanecem evidências/decisões próprias; não inferir aprovação por CI.
 
 ## Encerramento ou retomada
