@@ -30,7 +30,7 @@
 | Critério de aceite | Procedimento/comando | Resultado esperado | Resultado observado |
 |---|---|---|---|
 | Nome, E.164 e slot validados | domínio e `PublicAppointmentIT` com PostgreSQL | normalização, equivalência de telefone, offset/zona e serviço elegível | `spotless:check verify` passou localmente; browser real aguarda CI final |
-| Cliente, reserva, história, audit, idempotência e outbox atômicos | `./mvnw spotless:check verify` | falhas de audit/outbox revertem o conjunto; retry recupera receipt sem PII | 63 testes unitários/arquiteturais + 92 integrações PostgreSQL 16.13/Testcontainers passam localmente; associar ao SHA publicado em `VALIDATION.md` |
+| Cliente, reserva, história, audit, idempotência e outbox atômicos | `./mvnw spotless:check verify` | falhas de audit/outbox revertem o conjunto; retry recupera receipt sem PII | 63 testes unitários/arquiteturais + 92 integrações PostgreSQL 16.13/Testcontainers passam localmente no SHA `166ec0a7616405c820d79e5dd08a08340bc5ac94`; CI remoto ainda pendente |
 | Snapshot permanece inalterado após catálogo mudar | `PublicAppointmentIT` | nome/duração/buffer do serviço confirmados preservados; preço/moeda ausentes | Teste PostgreSQL passa; telefone permanece no cadastro Client, pois não é campo de snapshot documentado |
 | Restrição PostgreSQL e adjacência | V13 e `PublicAppointmentIT` | GiST rejeita overlap, permite adjacência; somente violação nomeada vira conflito de slot | Teste PostgreSQL passa |
 | Duas reservas no mesmo slot | `PublicAppointmentIT` com transações independentes | exatamente uma confirma; outra recebe `SLOT_NO_LONGER_AVAILABLE` | Teste PostgreSQL passa |
