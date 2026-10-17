@@ -1922,11 +1922,6 @@ export function AdminAgendaPanel({
                                                     {rescheduleError}
                                                 </p>
                                             )}
-                                            {rescheduleNotice && (
-                                                <output>
-                                                    {rescheduleNotice}
-                                                </output>
-                                            )}
                                             {rescheduleNotice.includes(
                                                 'mudou',
                                             ) && (
@@ -1952,6 +1947,9 @@ export function AdminAgendaPanel({
                                                 </button>
                                             )}
                                         </>
+                                    )}
+                                    {rescheduleNotice && (
+                                        <output>{rescheduleNotice}</output>
                                     )}
                                 </section>
                             )}

@@ -1687,7 +1687,7 @@ class PublicAppointmentIT {
     long revision = currentScheduleRevision();
     String firstDestination =
         bookingDate.plusWeeks(1).atTime(9, 30).atZone(ZONE).toOffsetDateTime().toString();
-    installRescheduleUpdatePause();
+    installRescheduleUpdatePause(appointmentId);
     try (ExecutorService requests = Executors.newFixedThreadPool(2)) {
       var winner =
           requests.submit(
@@ -1839,7 +1839,7 @@ class PublicAppointmentIT {
             tenantId);
     long revision = currentScheduleRevision();
     var destination = bookingDate.plusWeeks(1).atTime(9, 0).atZone(ZONE).toOffsetDateTime();
-    installRescheduleUpdatePause();
+    installRescheduleUpdatePause(appointmentId);
     try (ExecutorService commands = Executors.newFixedThreadPool(2)) {
       var reschedule =
           commands.submit(
@@ -1848,12 +1848,13 @@ class PublicAppointmentIT {
                           appointmentId,
                           "reschedule-lock-winner-" + UUID.randomUUID(),
                           rescheduleBody(1, revision, destination.toString()))
-                      .andReturn()
-                      .getResponse()
-                      .getStatus());
+                      .andReturn());
       awaitUpdateInProgress();
       var block = commands.submit(() -> createBlockAt(destination));
-      assertThat(reschedule.get()).isEqualTo(200);
+      var rescheduleResponse = reschedule.get().getResponse();
+      assertThat(rescheduleResponse.getStatus())
+          .as(rescheduleResponse.getContentAsString())
+          .isEqualTo(200);
       assertThat(block.get()).isFalse();
     } finally {
       removeRescheduleUpdatePause();
@@ -2224,9 +2225,11 @@ class PublicAppointmentIT {
             + "()");
   }
 
-  private void installRescheduleUpdatePause() {
+  private void installRescheduleUpdatePause(UUID appointmentId) {
     migrationJdbc.execute(
-        "CREATE FUNCTION agendamento.pause_reschedule_update() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.75); RETURN NEW; END $$");
+        "CREATE FUNCTION agendamento.pause_reschedule_update() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.appointment_id = '"
+            + appointmentId
+            + "'::uuid THEN PERFORM pg_sleep(0.75); END IF; RETURN NEW; END $$");
     migrationJdbc.execute(
         "CREATE TRIGGER pause_reschedule_update BEFORE UPDATE ON agendamento.appointment FOR EACH ROW EXECUTE FUNCTION agendamento.pause_reschedule_update()");
   }
@@ -2241,7 +2244,7 @@ class PublicAppointmentIT {
     while (System.nanoTime() < deadline) {
       Integer active =
           migrationJdbc.queryForObject(
-              "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND query ILIKE '%UPDATE agendamento.appointment%'",
+              "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND wait_event = 'PgSleep' AND query ILIKE '%UPDATE agendamento.appointment%'",
               Integer.class);
       if (active != null && active > 0) return;
       Thread.sleep(20);
