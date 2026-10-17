@@ -1111,6 +1111,7 @@ try {
     await clickButtonByText('Atualizar detalhes da reserva', evaluate);
     await waitUntil(() => evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('versão ${initialOutcomeAppointment.version + 1}')`));
     await waitForText('mudou em outra operação', evaluate);
+    await clickButtonByText('Remarcar', evaluate);
 
     await evaluate(`(() => {
       const originalFetch = window.fetch;
