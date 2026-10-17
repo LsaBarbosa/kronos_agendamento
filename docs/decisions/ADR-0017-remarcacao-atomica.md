@@ -13,12 +13,13 @@
 - Update, incremento de versão, revisão da agenda, história before/after, auditoria allowlisted, resultado idempotente e `AppointmentRescheduled` compartilham a transação. Rejeições/rollback não avançam revisão nem persistem efeitos de sucesso.
 - O digest canônico versionado inclui tenant, alvo, instante e offset, versões esperadas, políticas ordenadas e motivo normalizado. Replay revalida associação/acesso e retorna o receipt original antes de comparar o recurso com as versões já consumidas pelo próprio comando.
 - Overrides não são herdados. Quando enviados, aplicam-se somente `OUTSIDE_WEEKLY_SCHEDULE` e `MIN_NOTICE`, com motivo novo. CLOSED, SPECIAL, bloqueios, ocupações, overlap, horizonte, serviço inelegível e configuração ausente seguem as regras não ignoráveis vigentes.
+- **Decisão de produto aprovada pelo usuário em 17/10/2026:** uma nova remarcação exige serviço associado atualmente `ACTIVE` no mesmo tenant. A elegibilidade atual é consultada separadamente do snapshot e sincronizada pela leitura `FOR SHARE` do serviço antes do lock da revisão da agenda, preservando a ordem usada nos comandos administrativos de reserva. A ocupação, duração, buffer, nome e demais snapshots permanecem os originais; nenhum override ignora serviço inativo. A verificação ocorre somente na execução de nova mutação; replay autorizado de remarcação concluída retorna o receipt original mesmo após inativação.
 - Não existe pipeline persistido de lembretes nesta base. `AppointmentRescheduled` é uma solicitação lógica versionada, não prova de cancelamento ou envio de mensagem. A invalidação e criação efetivas de lembretes ficam para AGD-030/031.
 
 ## Consequências e limites
 
 - O lock de tenant serializa mutações por tenant; a simplicidade/garantia no MVP tem custo de concorrência intra-tenant.
-- A migration V16 amplia história e privilégios de update necessários ao runtime, preservando V1–V15.
+- V16 amplia história e privilégios de update necessários ao runtime; V17 torna a CHECK do histórico de remarcação estritamente booleana (`IS TRUE`) e exige todos os limites e versões. V1–V16 permanecem imutáveis. Upgrade falha se encontrar história legada inválida, sem backfill ou exclusão.
 - A integração com fornecedores, retenção, homologação e prontidão legal/comercial não são resolvidas por esta história.
 
 ## Referências

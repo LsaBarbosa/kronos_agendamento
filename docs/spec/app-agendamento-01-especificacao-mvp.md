@@ -255,6 +255,8 @@ O cliente não altera diretamente serviço ou horário no MVP; remarcação é f
 - desbloquear cliente;
 - consultar tentativas de notificação sem expor segredos do provedor.
 
+**Decisão de produto aprovada em 17/10/2026 (ADR-0017):** na remarcação administrativa, uma nova mutação exige que o serviço associado esteja atualmente ativo no tenant. A elegibilidade é consultada separadamente do snapshot: inativar o serviço preserva a reserva e sua ocupação, e duração, buffer, nome e demais dados históricos permanecem os confirmados originalmente. Overrides não contornam serviço inativo. Replay autorizado de uma remarcação já concluída devolve o resultado original mesmo se o serviço tiver sido inativado depois; essa verificação não impede o replay.
+
 ### Encaixe administrativo
 
 O encaixe permite ao administrador criar uma reserva fora da grade publicada ou das políticas de antecedência, mas **não** autoriza sobreposição. A tela precisa mostrar qual regra foi excepcionalmente ignorada e exigir motivo.

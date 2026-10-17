@@ -88,6 +88,11 @@ public class AvailabilityAdministrativeBookingPolicyQuery
       long expectedScheduleRevision,
       boolean allowOutsideWeeklySchedule,
       boolean allowMinimumNotice) {
+    services
+        .findForBooking(tenantId, serviceId)
+        .filter(value -> value.tenantId().equals(tenantId) && value.serviceId().equals(serviceId))
+        .filter(ServiceAvailabilityView::active)
+        .orElseThrow(AdministrativeScheduleConflictException::new);
     return assess(
         tenantId,
         serviceId,

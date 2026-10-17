@@ -197,6 +197,10 @@ export function AdminAgendaPanel({
     } | null>(null);
     const rescheduleKeys = useRef(new Map<string, string>());
     const rescheduleRequestGuard = useRef(false);
+    const rescheduleLocked = () =>
+        rescheduleRequestGuard.current ||
+        rescheduleSaving ||
+        rescheduleUncertain;
     const [schedule, setSchedule] = useState<WeeklySchedule | null>(null);
     const [availabilityPolicy, setAvailabilityPolicy] =
         useState<AvailabilityPolicy | null>(null);
@@ -462,7 +466,7 @@ export function AdminAgendaPanel({
     }, [load]);
 
     function changeFilter(setter: (value: string) => void, value: string) {
-        if (rescheduleUncertain) return;
+        if (rescheduleLocked()) return;
         setter(value);
         setPageIndex(0);
         setCursorStack([null]);
@@ -470,7 +474,7 @@ export function AdminAgendaPanel({
     }
 
     function movePeriod(amount: number) {
-        if (rescheduleUncertain) return;
+        if (rescheduleLocked()) return;
         setSelectedDate(
             addDateDays(anchorDate, amount * (view === 'day' ? 1 : 7)),
         );
@@ -479,12 +483,9 @@ export function AdminAgendaPanel({
     }
 
     async function openDetails(appointmentId: string) {
-        if (
-            rescheduleUncertain &&
-            reschedulePending?.appointmentId !== appointmentId
-        ) {
+        if (rescheduleLocked()) {
             setDetailsError(
-                'Resolva primeiro a remarcação pendente repetindo a mesma intenção.',
+                `Resolva primeiro a remarcação de ${reschedulePending?.appointmentId ?? details?.appointmentId ?? 'reserva original'} antes de navegar.`,
             );
             return;
         }
@@ -544,7 +545,7 @@ export function AdminAgendaPanel({
     }
 
     function beginReschedule(appointment: Appointment) {
-        if (rescheduleUncertain) return;
+        if (rescheduleLocked()) return;
         setRescheduleOpen(true);
         setRescheduleDate(
             dateInZone(appointment.startsAt, appointment.timeZone),
@@ -665,6 +666,8 @@ export function AdminAgendaPanel({
             setRescheduleUncertain(false);
             setRescheduleOpen(false);
             setRescheduleNotice('Remarcação confirmada e persistida.');
+            rescheduleRequestGuard.current = false;
+            setRescheduleSaving(false);
             await load();
             await openDetails(targetAppointmentId);
         } catch {
@@ -1409,7 +1412,11 @@ export function AdminAgendaPanel({
                             <button
                                 type="button"
                                 aria-pressed={view === 'day'}
+                                disabled={
+                                    rescheduleSaving || rescheduleUncertain
+                                }
                                 onClick={() => {
+                                    if (rescheduleLocked()) return;
                                     setView('day');
                                     resetPagination();
                                 }}
@@ -1419,7 +1426,11 @@ export function AdminAgendaPanel({
                             <button
                                 type="button"
                                 aria-pressed={view === 'week'}
+                                disabled={
+                                    rescheduleSaving || rescheduleUncertain
+                                }
                                 onClick={() => {
+                                    if (rescheduleLocked()) return;
                                     setView('week');
                                     resetPagination();
                                 }}
@@ -1427,19 +1438,29 @@ export function AdminAgendaPanel({
                                 Semana
                             </button>
                         </fieldset>
-                        <button type="button" onClick={() => movePeriod(-1)}>
+                        <button
+                            type="button"
+                            disabled={rescheduleSaving || rescheduleUncertain}
+                            onClick={() => movePeriod(-1)}
+                        >
                             Período anterior
                         </button>
                         <button
                             type="button"
+                            disabled={rescheduleSaving || rescheduleUncertain}
                             onClick={() => {
+                                if (rescheduleLocked()) return;
                                 setSelectedDate(today);
                                 resetPagination();
                             }}
                         >
                             Hoje
                         </button>
-                        <button type="button" onClick={() => movePeriod(1)}>
+                        <button
+                            type="button"
+                            disabled={rescheduleSaving || rescheduleUncertain}
+                            onClick={() => movePeriod(1)}
+                        >
                             Próximo período
                         </button>
                         <label>
@@ -1448,6 +1469,7 @@ export function AdminAgendaPanel({
                                 type="date"
                                 value={anchorDate}
                                 onChange={(event) => {
+                                    if (rescheduleLocked()) return;
                                     setSelectedDate(event.target.value);
                                     resetPagination();
                                 }}
@@ -1457,6 +1479,9 @@ export function AdminAgendaPanel({
                             Serviço
                             <select
                                 value={serviceFilter}
+                                disabled={
+                                    rescheduleSaving || rescheduleUncertain
+                                }
                                 onChange={(event) =>
                                     changeFilter(
                                         setServiceFilter,
@@ -1482,6 +1507,9 @@ export function AdminAgendaPanel({
                             Status
                             <select
                                 value={statusFilter}
+                                disabled={
+                                    rescheduleSaving || rescheduleUncertain
+                                }
                                 onChange={(event) =>
                                     changeFilter(
                                         setStatusFilter,
@@ -1662,8 +1690,14 @@ export function AdminAgendaPanel({
                     >
                         <button
                             type="button"
-                            disabled={pageIndex === 0 || loading}
+                            disabled={
+                                pageIndex === 0 ||
+                                loading ||
+                                rescheduleSaving ||
+                                rescheduleUncertain
+                            }
                             onClick={() =>
+                                !rescheduleLocked() &&
                                 setPageIndex((index) => Math.max(0, index - 1))
                             }
                         >
@@ -1675,8 +1709,15 @@ export function AdminAgendaPanel({
                         </span>
                         <button
                             type="button"
-                            disabled={!hasMore || !nextCursor || loading}
+                            disabled={
+                                !hasMore ||
+                                !nextCursor ||
+                                loading ||
+                                rescheduleSaving ||
+                                rescheduleUncertain
+                            }
                             onClick={() => {
+                                if (rescheduleLocked()) return;
                                 if (!nextCursor) return;
                                 setCursorStack((current) => [
                                     ...current.slice(0, pageIndex + 1),
@@ -1695,8 +1736,13 @@ export function AdminAgendaPanel({
                         >
                             <button
                                 type="button"
-                                disabled={rescheduleUncertain}
-                                onClick={() => setDetails(null)}
+                                disabled={
+                                    rescheduleSaving || rescheduleUncertain
+                                }
+                                onClick={() => {
+                                    if (rescheduleLocked()) return;
+                                    setDetails(null);
+                                }}
                             >
                                 Fechar detalhes
                             </button>
@@ -1786,6 +1832,10 @@ export function AdminAgendaPanel({
                                     {!rescheduleOpen && (
                                         <button
                                             type="button"
+                                            disabled={
+                                                rescheduleSaving ||
+                                                rescheduleUncertain
+                                            }
                                             onClick={() =>
                                                 beginReschedule(details)
                                             }
@@ -1817,14 +1867,16 @@ export function AdminAgendaPanel({
                                                     type="date"
                                                     value={rescheduleDate}
                                                     disabled={
-                                                        rescheduleUncertain ||
-                                                        rescheduleSaving
+                                                        rescheduleSaving ||
+                                                        rescheduleUncertain
                                                     }
-                                                    onChange={(event) =>
+                                                    onChange={(event) => {
+                                                        if (rescheduleLocked())
+                                                            return;
                                                         setRescheduleDate(
                                                             event.target.value,
-                                                        )
-                                                    }
+                                                        );
+                                                    }}
                                                 />
                                             </label>
                                             <label>
@@ -1834,14 +1886,16 @@ export function AdminAgendaPanel({
                                                     step="900"
                                                     value={rescheduleTime}
                                                     disabled={
-                                                        rescheduleUncertain ||
-                                                        rescheduleSaving
+                                                        rescheduleSaving ||
+                                                        rescheduleUncertain
                                                     }
-                                                    onChange={(event) =>
+                                                    onChange={(event) => {
+                                                        if (rescheduleLocked())
+                                                            return;
                                                         setRescheduleTime(
                                                             event.target.value,
-                                                        )
-                                                    }
+                                                        );
+                                                    }}
                                                 />
                                             </label>
                                             {rescheduleOffsets.length > 1 && (
@@ -1850,15 +1904,19 @@ export function AdminAgendaPanel({
                                                     <select
                                                         value={rescheduleOffset}
                                                         disabled={
-                                                            rescheduleUncertain ||
-                                                            rescheduleSaving
+                                                            rescheduleSaving ||
+                                                            rescheduleUncertain
                                                         }
-                                                        onChange={(event) =>
+                                                        onChange={(event) => {
+                                                            if (
+                                                                rescheduleLocked()
+                                                            )
+                                                                return;
                                                             setRescheduleOffset(
                                                                 event.target
                                                                     .value,
-                                                            )
-                                                        }
+                                                            );
+                                                        }}
                                                     >
                                                         <option value="">
                                                             Selecione
@@ -1889,7 +1947,10 @@ export function AdminAgendaPanel({
                                             {rescheduleUncertain ? (
                                                 <button
                                                     type="button"
-                                                    disabled={rescheduleSaving}
+                                                    disabled={
+                                                        rescheduleSaving ||
+                                                        !rescheduleUncertain
+                                                    }
                                                     onClick={() =>
                                                         void submitReschedule(
                                                             true,
@@ -1928,9 +1989,13 @@ export function AdminAgendaPanel({
                                                 <button
                                                     type="button"
                                                     disabled={
-                                                        scheduleRefreshing
+                                                        scheduleRefreshing ||
+                                                        rescheduleSaving ||
+                                                        rescheduleUncertain
                                                     }
                                                     onClick={async () => {
+                                                        if (rescheduleLocked())
+                                                            return;
                                                         await refreshScheduleRevision(
                                                             false,
                                                         );
@@ -1965,6 +2030,9 @@ export function AdminAgendaPanel({
                             {detailsError}{' '}
                             <button
                                 type="button"
+                                disabled={
+                                    rescheduleSaving || rescheduleUncertain
+                                }
                                 onClick={() =>
                                     void openDetails(selectedAppointmentId)
                                 }

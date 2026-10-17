@@ -55,10 +55,7 @@ try {
         const response = await fetch('http://127.0.0.1:9222/json/version');
         return response.ok;
     });
-    const targetResponse = await fetch(
-        'http://127.0.0.1:9222/json/new?about:blank',
-        { method: 'PUT' },
-    );
+    const targetResponse = await fetch('http://127.0.0.1:9222/json/new?about:blank', { method: 'PUT' });
     const target = await targetResponse.json();
     socket = await connectToCdp(target.webSocketDebuggerUrl, recentHttpResponses);
     const { command, evaluate } = socket;
@@ -68,33 +65,19 @@ try {
     await command('Network.enable');
     await navigate('http://localhost:5173/admin', command, evaluate);
     await waitForText('Entrar como administrador', evaluate);
-    const sessionBeforeLogin = (await cookies(command)).find(
-        (cookie) => cookie.name === 'AGDSESSION',
-    );
-    if (
-        sessionBeforeLogin &&
-        (!sessionBeforeLogin.httpOnly || sessionBeforeLogin.sameSite !== 'Lax')
-    ) {
+    const sessionBeforeLogin = (await cookies(command)).find((cookie) => cookie.name === 'AGDSESSION');
+    if (sessionBeforeLogin && (!sessionBeforeLogin.httpOnly || sessionBeforeLogin.sameSite !== 'Lax')) {
         throw new Error('Cookie de sessão não tem HttpOnly e SameSite=Lax.');
     }
     console.log('Browser: frontend carregado.');
     await evaluate("document.querySelector('a[href*=oauth2]').click()");
     await waitForText('username', evaluate, true);
     console.log('Browser: formulário Keycloak aberto.');
-    await submitLogin(
-        credentials.KEYCLOAK_DEMO_USERNAME,
-        credentials.KEYCLOAK_DEMO_PASSWORD,
-        evaluate,
-    );
+    await submitLogin(credentials.KEYCLOAK_DEMO_USERNAME, credentials.KEYCLOAK_DEMO_PASSWORD, evaluate);
     await waitForText('Sessão administrativa ativa.', evaluate);
     console.log('Browser: sessão autorizada estabelecida.');
-    const sessionAfterLogin = (await cookies(command)).find(
-        (cookie) => cookie.name === 'AGDSESSION',
-    );
-    if (
-        !sessionAfterLogin ||
-        (sessionBeforeLogin && sessionAfterLogin.value === sessionBeforeLogin.value)
-    ) {
+    const sessionAfterLogin = (await cookies(command)).find((cookie) => cookie.name === 'AGDSESSION');
+    if (!sessionAfterLogin || (sessionBeforeLogin && sessionAfterLogin.value === sessionBeforeLogin.value)) {
         throw new Error('Identificador da sessão não foi renovado após autenticação.');
     }
     if (!sessionAfterLogin.httpOnly || sessionAfterLogin.sameSite !== 'Lax') {
@@ -103,17 +86,13 @@ try {
     const authenticatedSession = await evaluate(
         "fetch('/api/v1/admin/session', {credentials:'same-origin'}).then(response => response.json())",
     );
-    if (
-        !authenticatedSession.authenticated ||
-        authenticatedSession.tenantId !== credentials.DEMO_TENANT_ID
-    ) {
+    if (!authenticatedSession.authenticated || authenticatedSession.tenantId !== credentials.DEMO_TENANT_ID) {
         throw new Error(
             `Sessão autenticada diverge do tenant de demonstração: esperado ${credentials.DEMO_TENANT_ID}, recebido ${authenticatedSession.tenantId}.`,
         );
     }
     const tenantDisplayed = await evaluate(
-        "document.querySelector('p code')?.textContent === " +
-            JSON.stringify(authenticatedSession.tenantId),
+        "document.querySelector('p code')?.textContent === " + JSON.stringify(authenticatedSession.tenantId),
     );
     if (!tenantDisplayed) throw new Error('Tenant autorizado não apareceu na UI.');
     await waitForText('Catálogo de serviços', evaluate);
@@ -230,7 +209,8 @@ try {
     const publicService = await evaluate(
         `fetch('/api/v1/admin/services', {credentials:'same-origin'}).then(response => response.json()).then(rows => rows.find(service => service.name === ${JSON.stringify(catalogName + ' Editado')} && service.status === 'ACTIVE'))`,
     );
-    if (!publicService?.serviceId) throw new Error('Serviço ativo de demonstração não encontrado para a página pública.');
+    if (!publicService?.serviceId)
+        throw new Error('Serviço ativo de demonstração não encontrado para a página pública.');
     await navigate(`http://localhost:5173/public/${encodeURIComponent(publication.slug)}`, command, evaluate);
     await waitForText(catalogName + ' Editado', evaluate);
     await setSelectById('public-service', publicService.serviceId, evaluate);
@@ -246,7 +226,9 @@ try {
     await setFieldById('public-date', publicDate, evaluate);
     await waitUntil(() => evaluate("document.querySelectorAll('.public-page__slot').length > 0"));
     const publicSlotsBeforeSelection = await evaluate("document.querySelectorAll('.public-page__slot').length");
-    const selectedStart = await evaluate(`fetch('/api/v1/public/${encodeURIComponent(publication.slug)}/availability?serviceId=${encodeURIComponent(publicService.serviceId)}&from=${publicDate}&to=${publicDate}').then(response => response.json()).then(result => result.days[0].slots[0].startsAt)`);
+    const selectedStart = await evaluate(
+        `fetch('/api/v1/public/${encodeURIComponent(publication.slug)}/availability?serviceId=${encodeURIComponent(publicService.serviceId)}&from=${publicDate}&to=${publicDate}').then(response => response.json()).then(result => result.days[0].slots[0].startsAt)`,
+    );
     await evaluate("document.querySelector('.public-page__slot').click()");
     if (!(await evaluate("document.body.innerText.includes('A seleção não confirma uma reserva.')"))) {
         throw new Error('A seleção pública não deixou claro que não confirma uma reserva.');
@@ -261,15 +243,21 @@ try {
     if (bookingInputState.nameLength === 0 || !bookingInputState.phoneValid) {
         throw new Error(`Browser booking inputs invalid: ${JSON.stringify(bookingInputState)}`);
     }
-    const browserVersion = await fetch('http://127.0.0.1:9222/json/version').then(response => response.json());
+    const browserVersion = await fetch('http://127.0.0.1:9222/json/version').then((response) => response.json());
     browserCdp = await connectToCdp(browserVersion.webSocketDebuggerUrl);
-    const secondTarget = await browserCdp.command('Target.createTarget', {url:'about:blank'});
+    const secondTarget = await browserCdp.command('Target.createTarget', {
+        url: 'about:blank',
+    });
     secondTargetId = secondTarget.targetId;
     const secondTargetInfo = await waitForTarget(secondTargetId);
     secondTab = await connectToCdp(secondTargetInfo.webSocketDebuggerUrl);
     await secondTab.command('Page.enable');
     await secondTab.command('Runtime.enable');
-    await navigate(`http://localhost:5173/public/${encodeURIComponent(publication.slug)}`, secondTab.command, secondTab.evaluate);
+    await navigate(
+        `http://localhost:5173/public/${encodeURIComponent(publication.slug)}`,
+        secondTab.command,
+        secondTab.evaluate,
+    );
     await waitForText(catalogName + ' Editado', secondTab.evaluate);
     await evaluate(`(() => {
       const originalFetch = window.fetch;
@@ -306,7 +294,8 @@ try {
         && slotButtons.length > 0 && slotButtons.every(button => button.disabled)
         && !document.querySelector('.public-page__booking-form button[type="submit"]').disabled;
     })()`);
-    if (!unresolvedIntentLocked) throw new Error('A interface permitiu alterar uma intenção de reserva ainda não resolvida.');
+    if (!unresolvedIntentLocked)
+        throw new Error('A interface permitiu alterar uma intenção de reserva ainda não resolvida.');
     await evaluate('window.__releaseRecoveryResponse?.()');
     await waitForText('Reserva confirmada recuperada.', evaluate);
     let appointmentIdInEachTab = [null, null];
@@ -316,18 +305,19 @@ try {
                 evaluate("document.querySelector('.public-page__confirmation strong')?.textContent"),
                 secondTab.evaluate("document.querySelector('.public-page__confirmation strong')?.textContent"),
             ]);
-            return Boolean(
-                appointmentIdInEachTab[0] &&
-                    appointmentIdInEachTab[0] === appointmentIdInEachTab[1],
-            );
+            return Boolean(appointmentIdInEachTab[0] && appointmentIdInEachTab[0] === appointmentIdInEachTab[1]);
         }, 10000);
     } catch (error) {
         const tabStates = await Promise.all([
-            evaluate("JSON.stringify({heading:document.querySelector('h2')?.innerText, alerts:[...document.querySelectorAll('[role=alert]')].map(item=>item.innerText).slice(0,3)})"),
-            secondTab.evaluate("JSON.stringify({heading:document.querySelector('h2')?.innerText, alerts:[...document.querySelectorAll('[role=alert]')].map(item=>item.innerText).slice(0,3)})"),
+            evaluate(
+                "JSON.stringify({heading:document.querySelector('h2')?.innerText, alerts:[...document.querySelectorAll('[role=alert]')].map(item=>item.innerText).slice(0,3)})",
+            ),
+            secondTab.evaluate(
+                "JSON.stringify({heading:document.querySelector('h2')?.innerText, alerts:[...document.querySelectorAll('[role=alert]')].map(item=>item.innerText).slice(0,3)})",
+            ),
         ]);
         throw new Error(
-            `Duas abas não recuperaram a mesma reserva original: ${JSON.stringify({appointmentIdInEachTab, tabStates})}`,
+            `Duas abas não recuperaram a mesma reserva original: ${JSON.stringify({ appointmentIdInEachTab, tabStates })}`,
             { cause: error },
         );
     }
@@ -342,53 +332,94 @@ try {
         containsPhone: value.includes('+5511999991234'),
       };
     })()`);
-    if (!storedIntent?.hasKey || !storedIntent?.hasCapability || storedIntent.containsName || storedIntent.containsPhone) {
+    if (
+        !storedIntent?.hasKey ||
+        !storedIntent?.hasCapability ||
+        storedIntent.containsName ||
+        storedIntent.containsPhone
+    ) {
         throw new Error(`Recovery storage contém formato inválido ou PII: ${JSON.stringify(storedIntent)}`);
     }
     await command('Page.reload');
     await waitForText('Reserva original recuperada.', evaluate);
     await waitForText('Reserva confirmada', evaluate);
-    const restoredDate = await evaluate(
-        "document.getElementById('public-date')?.value",
-    );
+    const restoredDate = await evaluate("document.getElementById('public-date')?.value");
     if (restoredDate !== publicDate) {
         throw new Error('Reload não restaurou a data da intenção original.');
     }
-    if (!(await evaluate(`document.body.innerText.includes(${JSON.stringify(publicService.name)}) && document.body.innerText.includes(${JSON.stringify(publication.timeZone)})`))) {
+    if (
+        !(await evaluate(
+            `document.body.innerText.includes(${JSON.stringify(publicService.name)}) && document.body.innerText.includes(${JSON.stringify(publication.timeZone)})`,
+        ))
+    ) {
         throw new Error('Confirmação não exibiu serviço e timezone esperados.');
     }
-    const persistedBookingCount = Number(queryPostgres(
-        `SELECT count(*) FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.status = 'CONFIRMED'`,
-        appEnvironment,
-    ));
-    if (persistedBookingCount !== 1) throw new Error('Retry após resposta perdida não manteve uma única reserva persistida.');
-    const slotsAfterConfirmation = await evaluate(`fetch('/api/v1/public/${encodeURIComponent(publication.slug)}/availability?serviceId=${encodeURIComponent(publicService.serviceId)}&from=${publicDate}&to=${publicDate}').then(response => response.json()).then(result => result.days[0].slots)`);
-    if (slotsAfterConfirmation.some(slot => slot.startsAt === selectedStart)) {
+    const persistedBookingCount = Number(
+        queryPostgres(
+            `SELECT count(*) FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.status = 'CONFIRMED'`,
+            appEnvironment,
+        ),
+    );
+    if (persistedBookingCount !== 1)
+        throw new Error('Retry após resposta perdida não manteve uma única reserva persistida.');
+    const slotsAfterConfirmation = await evaluate(
+        `fetch('/api/v1/public/${encodeURIComponent(publication.slug)}/availability?serviceId=${encodeURIComponent(publicService.serviceId)}&from=${publicDate}&to=${publicDate}').then(response => response.json()).then(result => result.days[0].slots)`,
+    );
+    if (slotsAfterConfirmation.some((slot) => slot.startsAt === selectedStart)) {
         throw new Error('Disponibilidade continuou oferecendo o horário já confirmado.');
     }
-    console.log('Browser: visitante perdeu a resposta após commit, recarregou e recuperou a reserva persistida; storage não contém PII e permaneceu uma única reserva.');
+    console.log(
+        'Browser: visitante perdeu a resposta após commit, recarregou e recuperou a reserva persistida; storage não contém PII e permaneceu uma única reserva.',
+    );
     await clickButtonByText('Fazer outra reserva', evaluate);
-    await waitUntil(async () => (await evaluate(
-        `localStorage.getItem('kronos.public-booking.intent.' + ${JSON.stringify(publication.slug)}) === null && !document.getElementById('public-service').disabled`,
-    )));
-    await waitUntil(async () => (await evaluate(
-        "[...document.querySelectorAll('.public-page__slot')].some(button => !button.disabled)",
-    )));
+    await waitUntil(
+        async () =>
+            await evaluate(
+                `localStorage.getItem('kronos.public-booking.intent.' + ${JSON.stringify(publication.slug)}) === null && !document.getElementById('public-service').disabled`,
+            ),
+    );
+    await waitUntil(
+        async () =>
+            await evaluate("[...document.querySelectorAll('.public-page__slot')].some(button => !button.disabled)"),
+    );
     const anotherSlotCanBeSelected = await evaluate(
         "[...document.querySelectorAll('.public-page__slot')].some(button => !button.disabled)",
     );
     if (!anotherSlotCanBeSelected) {
         throw new Error('Receipt recuperado bloqueou permanentemente uma nova intenção explícita.');
     }
-    await command('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:true});
+    await evaluate(
+        "document.querySelectorAll('.public-page__slot:not(:disabled)')[document.querySelectorAll('.public-page__slot:not(:disabled)').length - 1].click()",
+    );
+    await setFieldByLabel('Nome', 'Segundo visitante de demonstração', evaluate);
+    await setFieldByLabel('Telefone com código do país', '+5511999991235', evaluate);
+    await clickButtonByText('Confirmar reserva', evaluate);
+    await waitForText('Reserva confirmada', evaluate);
+    const secondAppointmentId = queryPostgres(
+        `SELECT a.appointment_id FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.client_name_snapshot = 'Segundo visitante de demonstração'`,
+        appEnvironment,
+    );
+    await command('Emulation.setDeviceMetricsOverride', {
+        width: 390,
+        height: 844,
+        deviceScaleFactor: 1,
+        mobile: true,
+    });
     if (!(await evaluate('document.documentElement.scrollWidth <= window.innerWidth'))) {
         throw new Error('A página pública excedeu a largura do viewport móvel.');
     }
-    await command('Emulation.setDeviceMetricsOverride', {width:1280,height:900,deviceScaleFactor:1,mobile:false});
+    await command('Emulation.setDeviceMetricsOverride', {
+        width: 1280,
+        height: 900,
+        deviceScaleFactor: 1,
+        mobile: false,
+    });
     if (!(await evaluate('document.documentElement.scrollWidth <= window.innerWidth'))) {
         throw new Error('A página pública excedeu a largura do viewport desktop.');
     }
-    console.log(`Browser: visitante consultou ${publicDate}, confirmou um de ${publicSlotsBeforeSelection} horários; layout móvel/desktop sem overflow.`);
+    console.log(
+        `Browser: visitante consultou ${publicDate}, confirmou duas intenções sem duplicação entre ${publicSlotsBeforeSelection} horários; layout móvel/desktop sem overflow.`,
+    );
     await navigate('http://localhost:5173/admin', command, evaluate);
     await waitForText('Estado: Publicado', evaluate);
     const adminAppointment = await evaluate(
@@ -401,7 +432,9 @@ try {
         adminAppointment.bufferAfterMinutes !== 0 ||
         adminAppointment.timeZone !== publication.timeZone
     ) {
-        throw new Error(`Reserva persistida não apareceu na consulta administrativa com snapshot esperado: ${JSON.stringify(adminAppointment)}`);
+        throw new Error(
+            `Reserva persistida não apareceu na consulta administrativa com snapshot esperado: ${JSON.stringify(adminAppointment)}`,
+        );
     }
     await setFieldByLabel('Data de referência', publicDate, evaluate);
     await clickButtonByText('Semana', evaluate);
@@ -424,6 +457,9 @@ try {
       window.fetch = async (...args) => {
         const response = await originalFetch(...args);
         if (String(args[0]).includes('/reschedule') && args[1]?.method === 'POST' && response.ok) {
+          window.__firstRescheduleRequest = { url: String(args[0]), body: args[1].body, key: args[1].headers['Idempotency-Key'] };
+          window.__rescheduleResponseReady = true;
+          await new Promise(resolve => { window.__releaseRescheduleResponse = resolve; });
           window.fetch = originalFetch;
           throw new TypeError('Simulated lost reschedule response after commit');
         }
@@ -431,9 +467,48 @@ try {
       };
     })()`);
     await clickButtonByText('Confirmar remarcação', evaluate);
+    await waitUntil(() => evaluate('window.__rescheduleResponseReady === true'));
+    const pendingAssociation = await evaluate(`(() => ({
+      detail: document.querySelector('.admin-agenda__details')?.innerText,
+      closeDisabled: [...document.querySelectorAll('button')].find(button => button.innerText === 'Fechar detalhes')?.disabled,
+      periodDisabled: [...document.querySelectorAll('button')].find(button => button.innerText === 'Próximo período')?.disabled,
+      firstRequest: window.__firstRescheduleRequest,
+    }))()`);
+    if (
+        !pendingAssociation.closeDisabled ||
+        !pendingAssociation.periodDisabled ||
+        !pendingAssociation.firstRequest.url.includes(appointmentIdInEachTab[0]) ||
+        !pendingAssociation.detail.includes('Visitante de demonstração') ||
+        pendingAssociation.detail.includes('Segundo visitante de demonstração')
+    ) {
+        throw new Error(`Remarcação pendente perdeu a associação visual com A: ${JSON.stringify(pendingAssociation)}`);
+    }
+    await evaluate(`(() => {
+      document.querySelector('[data-appointment-id="${secondAppointmentId}"] button')?.click();
+      [...document.querySelectorAll('button')].find(button => button.innerText === 'Fechar detalhes')?.click();
+    })()`);
+    await waitUntil(() =>
+        evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('Visitante de demonstração')`),
+    );
+    await evaluate('window.__releaseRescheduleResponse?.()');
     await waitForText('A resposta não chegou; o resultado pode estar confirmado.', evaluate);
+    const originalIntent = await evaluate('window.__firstRescheduleRequest');
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (...args) => {
+        if (String(args[0]).includes('/reschedule') && args[1]?.method === 'POST') {
+          window.__retryRescheduleRequest = { url: String(args[0]), body: args[1].body, key: args[1].headers['Idempotency-Key'] };
+          window.fetch = originalFetch;
+        }
+        return originalFetch(...args);
+      };
+    })()`);
     await clickButtonByText('Recuperar / repetir a mesma intenção', evaluate);
     await waitForText('Remarcação confirmada e persistida.', evaluate);
+    const retriedIntent = await evaluate('window.__retryRescheduleRequest');
+    if (JSON.stringify(originalIntent) !== JSON.stringify(retriedIntent)) {
+        throw new Error(`Retry não preservou alvo/body/chave: ${JSON.stringify({ originalIntent, retriedIntent })}`);
+    }
     const rescheduled = await evaluate(
         `fetch('/api/v1/admin/appointments/${appointmentIdInEachTab[0]}', {credentials:'same-origin'}).then(response => response.json())`,
     );
@@ -443,13 +518,70 @@ try {
     if (
         rescheduled.version !== 2 ||
         rescheduled.startsAt.slice(0, 16) !== `${rescheduleDate}T10:00` ||
-        !rescheduleHistory.items.some(item =>
-            item.reasonCode === 'APPOINTMENT_RESCHEDULED' &&
-            item.versionBefore === 1 && item.versionAfter === 2,
+        !rescheduleHistory.items.some(
+            (item) =>
+                item.reasonCode === 'APPOINTMENT_RESCHEDULED' && item.versionBefore === 1 && item.versionAfter === 2,
         )
     ) {
-        throw new Error(`Remarcação não persistiu com história/versionamento: ${JSON.stringify({rescheduled, rescheduleHistory})}`);
+        throw new Error(
+            `Remarcação não persistiu com história/versionamento: ${JSON.stringify({ rescheduled, rescheduleHistory })}`,
+        );
     }
+    const rescheduleEffects = Number(
+        queryPostgres(
+            `SELECT CASE WHEN (SELECT count(*) FROM agendamento.appointment_history WHERE appointment_id = '${appointmentIdInEachTab[0]}' AND reason_code = 'APPOINTMENT_RESCHEDULED') = 1 AND (SELECT count(*) FROM agendamento.audit_event WHERE target_id = '${appointmentIdInEachTab[0]}' AND action = 'APPOINTMENT_RESCHEDULED') = 1 AND (SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = '${appointmentIdInEachTab[0]}' AND event_type = 'AppointmentRescheduled') = 1 AND (SELECT version FROM agendamento.appointment WHERE appointment_id = '${appointmentIdInEachTab[0]}') = 2 THEN 1 ELSE 0 END`,
+            appEnvironment,
+        ),
+    );
+    if (rescheduleEffects !== 1) throw new Error('Retry duplicou efeitos ou não preservou versão única.');
+    await evaluate(`document.querySelector('[data-appointment-id="${secondAppointmentId}"] button')?.click()`);
+    await waitForText('Segundo visitante de demonstração', evaluate);
+    await clickButtonByText('Remarcar', evaluate);
+    await setFieldByLabel('Novo horário local', '10:00', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        if (String(args[0]).includes('/reschedule') && args[1]?.method === 'POST' && response.ok) {
+          window.__delayedSuccessReady = true;
+          await new Promise(resolve => { window.__releaseDelayedSuccess = resolve; });
+          window.fetch = originalFetch;
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Confirmar remarcação', evaluate);
+    await waitUntil(() => evaluate('window.__delayedSuccessReady === true'));
+    const delayedSuccessAssociation = await evaluate(`(() => ({
+      detail: document.querySelector('.admin-agenda__details')?.innerText,
+      closeDisabled: [...document.querySelectorAll('button')].find(button => button.innerText === 'Fechar detalhes')?.disabled,
+    }))()`);
+    if (
+        !delayedSuccessAssociation.closeDisabled ||
+        !delayedSuccessAssociation.detail.includes('Segundo visitante de demonstração')
+    ) {
+        throw new Error(
+            `Resposta bem-sucedida atrasada não manteve o alvo B: ${JSON.stringify(delayedSuccessAssociation)}`,
+        );
+    }
+    await evaluate(`document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"] button')?.click()`);
+    await waitUntil(() =>
+        evaluate(
+            `document.querySelector('.admin-agenda__details')?.innerText.includes('Segundo visitante de demonstração')`,
+        ),
+    );
+    await evaluate('window.__releaseDelayedSuccess?.()');
+    await waitForText('Remarcação confirmada e persistida.', evaluate);
+    const delayedSuccessVersion = Number(
+        queryPostgres(
+            `SELECT version FROM agendamento.appointment WHERE appointment_id = '${secondAppointmentId}'`,
+            appEnvironment,
+        ),
+    );
+    if (delayedSuccessVersion !== 2)
+        throw new Error('Resposta de sucesso atrasada não confirmou a única alteração esperada em B.');
+    await evaluate(`document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"] button')?.click()`);
+    await waitForText('Visitante de demonstração', evaluate);
     const oldDate = publicDate;
     const oldDateSlots = await evaluate(
         `fetch('/api/v1/public/${encodeURIComponent(publication.slug)}/availability?serviceId=${encodeURIComponent(publicService.serviceId)}&from=${oldDate}&to=${oldDate}').then(response => response.json()).then(result => result.days[0].slots)`,
@@ -458,8 +590,8 @@ try {
         `fetch('/api/v1/public/${encodeURIComponent(publication.slug)}/availability?serviceId=${encodeURIComponent(publicService.serviceId)}&from=${rescheduleDate}&to=${rescheduleDate}').then(response => response.json()).then(result => result.days[0].slots)`,
     );
     if (
-        !oldDateSlots.some(slot => slot.startsAt === selectedStart) ||
-        newDateSlots.some(slot => slot.startsAt === rescheduled.startsAt)
+        !oldDateSlots.some((slot) => slot.startsAt === selectedStart) ||
+        newDateSlots.some((slot) => slot.startsAt === rescheduled.startsAt)
     ) {
         throw new Error('A disponibilidade não refletiu atomicamente a troca do horário.');
     }
@@ -482,21 +614,17 @@ try {
         evaluate,
     );
     await clickButtonByText('Atualizar versões sem alterar o destino', evaluate);
-    await waitForText(
-        'Versões atualizadas. Revise a data e confirme uma nova intenção.',
-        evaluate,
-    );
+    await waitForText('Versões atualizadas. Revise a data e confirme uma nova intenção.', evaluate);
     const preservedRescheduleDraft = await evaluate(`(() => {
       const field = name => [...document.querySelectorAll('label')]
         .find(label => label.childNodes[0]?.textContent?.trim() === name)
         ?.querySelector('input')?.value;
       return { date: field('Nova data local'), time: field('Novo horário local') };
     })()`);
-    if (
-        preservedRescheduleDraft.date !== conflictingDate ||
-        preservedRescheduleDraft.time !== '10:00'
-    ) {
-        throw new Error(`A atualização de versões alterou o rascunho do destino: ${JSON.stringify(preservedRescheduleDraft)}`);
+    if (preservedRescheduleDraft.date !== conflictingDate || preservedRescheduleDraft.time !== '10:00') {
+        throw new Error(
+            `A atualização de versões alterou o rascunho do destino: ${JSON.stringify(preservedRescheduleDraft)}`,
+        );
     }
     await clickButtonByText('Confirmar remarcação', evaluate);
     await waitForText('O horário conflita com um bloqueio ou atendimento existente.', evaluate);
@@ -510,21 +638,33 @@ try {
     await waitForText('Conflito de remarcação E2E', evaluate);
     await setFieldByLabel('Motivo do cancelamento', 'Limpeza E2E', evaluate);
     await clickButtonByText('Cancelar bloqueio', evaluate);
-    await waitUntil(async () => (await evaluate(
-        `fetch('/api/v1/admin/blocked-periods?from=${conflictingDate}&to=${conflictingDate}', {credentials:'same-origin'}).then(response => response.json()).then(rows => rows.some(row => row.status === 'CANCELLED'))`,
-    )));
-    console.log('Browser: remarcação real preservou ID/snapshot, gravou história, trocou a disponibilidade; destino bloqueado foi rejeitado sem alterar a reserva.');
+    await waitUntil(
+        async () =>
+            await evaluate(
+                `fetch('/api/v1/admin/blocked-periods?from=${conflictingDate}&to=${conflictingDate}', {credentials:'same-origin'}).then(response => response.json()).then(rows => rows.some(row => row.status === 'CANCELLED'))`,
+            ),
+    );
+    console.log(
+        'Browser: remarcação real preservou ID/snapshot, gravou história, trocou a disponibilidade; destino bloqueado foi rejeitado sem alterar a reserva.',
+    );
     await setFieldByLabel('Data de referência', rescheduleDate, evaluate);
     await clickButtonByText('Dia', evaluate);
     await waitForText('Visitante de demonstração', evaluate);
     await command('Page.reload');
     await waitForText('Agenda', evaluate);
-    await waitUntil(async () => (await evaluate(
-        "[...document.querySelectorAll('label')].some(label => label.childNodes[0]?.textContent?.trim() === 'Data de referência' && label.querySelector('input'))",
-    )));
+    await waitUntil(
+        async () =>
+            await evaluate(
+                "[...document.querySelectorAll('label')].some(label => label.childNodes[0]?.textContent?.trim() === 'Data de referência' && label.querySelector('input'))",
+            ),
+    );
     await setFieldByLabel('Data de referência', rescheduleDate, evaluate);
     await waitForText('Visitante de demonstração', evaluate);
-    if (!(await evaluate(`document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"]')?.innerText.includes('45 min')`))) {
+    if (
+        !(await evaluate(
+            `document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"]')?.innerText.includes('45 min')`,
+        ))
+    ) {
         throw new Error('Reload não recuperou a reserva persistida na agenda administrativa.');
     }
     await setSelectByLabel('Serviço', publicService.serviceId, evaluate);
@@ -555,7 +695,11 @@ try {
     await waitUntil(() => evaluate('window.__latestAgendaResponseSeen === true'));
     await waitForText('Visitante de demonstração', evaluate);
     await evaluate('window.__releaseStaleAgenda?.(); window.fetch = window.__originalAgendaFetch');
-    if (!(await evaluate(`document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"]')?.innerText.includes('45 min')`))) {
+    if (
+        !(await evaluate(
+            `document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"]')?.innerText.includes('45 min')`,
+        ))
+    ) {
         throw new Error('Uma resposta antiga substituiu a consulta administrativa mais recente.');
     }
     await evaluate(`(() => {
@@ -595,9 +739,12 @@ try {
         return originalFetch(...args);
       };
     })()`);
-    await waitUntil(async () => (await evaluate(
-        "[...document.querySelectorAll('.admin-agenda button')].some(button => button.innerText.trim() === 'Atualizar' && !button.disabled)",
-    )));
+    await waitUntil(
+        async () =>
+            await evaluate(
+                "[...document.querySelectorAll('.admin-agenda button')].some(button => button.innerText.trim() === 'Atualizar' && !button.disabled)",
+            ),
+    );
     await clickButtonByText('Atualizar', evaluate);
     await waitForText('Falha simulada de rede da agenda', evaluate);
     await clickButtonByText('Tentar novamente', evaluate);
@@ -612,9 +759,12 @@ try {
         return originalFetch(...args);
       };
     })()`);
-    await waitUntil(async () => (await evaluate(
-        "[...document.querySelectorAll('.admin-agenda button')].some(button => button.innerText.trim() === 'Atualizar' && !button.disabled)",
-    )));
+    await waitUntil(
+        async () =>
+            await evaluate(
+                "[...document.querySelectorAll('.admin-agenda button')].some(button => button.innerText.trim() === 'Atualizar' && !button.disabled)",
+            ),
+    );
     await clickButtonByText('Atualizar', evaluate);
     await waitForText('Sua sessão expirou. Entre novamente para continuar.', evaluate);
     await evaluate('window.fetch = window.__originalSessionFetch');
@@ -630,9 +780,7 @@ try {
     );
     if (unpublishedRead !== 404) throw new Error('Despublicar não bloqueou uma leitura pública direta.');
     console.log('Browser: despublicação impediu leituras públicas diretas.');
-    const exceptionDate = new Date(Date.now() + 45 * 86400_000)
-        .toISOString()
-        .slice(0, 10);
+    const exceptionDate = new Date(Date.now() + 45 * 86400_000).toISOString().slice(0, 10);
     await setFieldByLabel('Data local', exceptionDate, evaluate);
     await waitForText('Nenhuma exceção nesta data; aplica-se a grade semanal.', evaluate);
     await setSelectByLabel('Tratamento da data', 'CLOSED', evaluate);
@@ -659,9 +807,12 @@ try {
     }
     await clickButtonByText('Remover exceção e restaurar grade', evaluate);
     await waitForText('Exceção removida; a grade semanal volta a ser aplicada.', evaluate);
-    await waitUntil(async () => (await evaluate(
-        `fetch('/api/v1/admin/schedule/exceptions?from=${exceptionDate}&to=${exceptionDate}', {credentials:'same-origin'}).then(response => response.json()).then(result => result.exceptions.length)`,
-    )) === 0);
+    await waitUntil(
+        async () =>
+            (await evaluate(
+                `fetch('/api/v1/admin/schedule/exceptions?from=${exceptionDate}&to=${exceptionDate}', {credentials:'same-origin'}).then(response => response.json()).then(result => result.exceptions.length)`,
+            )) === 0,
+    );
     await setSelectByLabel('Tratamento da data', 'SPECIAL', evaluate);
     await evaluate(`(() => {
       const section = document.querySelector('section[aria-labelledby="exceptions-title"]');
@@ -675,12 +826,16 @@ try {
     exceptionRows = await evaluate(
         `fetch('/api/v1/admin/schedule/exceptions?from=${exceptionDate}&to=${exceptionDate}', {credentials:'same-origin'}).then(response => response.json())`,
     );
-    if (exceptionRows.exceptions.length !== 1 || exceptionRows.exceptions[0].kind !== 'SPECIAL' || exceptionRows.exceptions[0].periods[0].localStart !== '09:00') {
-        throw new Error(`Horário especial não persistiu após recarregar: ${JSON.stringify(exceptionRows.exceptions.map(item => ({kind:item.kind,periods:item.periods,version:item.version,timeZone:item.timeZone})))}`);
+    if (
+        exceptionRows.exceptions.length !== 1 ||
+        exceptionRows.exceptions[0].kind !== 'SPECIAL' ||
+        exceptionRows.exceptions[0].periods[0].localStart !== '09:00'
+    ) {
+        throw new Error(
+            `Horário especial não persistiu após recarregar: ${JSON.stringify(exceptionRows.exceptions.map((item) => ({ kind: item.kind, periods: item.periods, version: item.version, timeZone: item.timeZone })))}`,
+        );
     }
-    const outsideRangeDate = new Date(Date.now() + 60 * 86400_000)
-        .toISOString()
-        .slice(0, 10);
+    const outsideRangeDate = new Date(Date.now() + 60 * 86400_000).toISOString().slice(0, 10);
     await setFieldByLabel('Data local', outsideRangeDate, evaluate);
     await waitForText('Nenhuma exceção nesta data; aplica-se a grade semanal.', evaluate);
     await setFieldByLabel('Data local', exceptionDate, evaluate);
@@ -719,14 +874,21 @@ try {
         throw new Error('Bloqueio não apareceu na consulta após criação.');
     }
     await setFieldByLabel('Data de referência', blockDay, evaluate);
-    await waitUntil(() => evaluate("document.querySelector('.admin-agenda__block--active')?.innerText.includes('Manutenção E2E')"));
+    await waitUntil(() =>
+        evaluate("document.querySelector('.admin-agenda__block--active')?.innerText.includes('Manutenção E2E')"),
+    );
     await setFieldByLabel('Motivo do cancelamento', 'Concluído E2E', evaluate);
     await clickButtonByText('Cancelar bloqueio', evaluate);
-    await waitUntil(async () => (await evaluate(
-        `fetch('/api/v1/admin/blocked-periods?from=${blockDay}&to=${blockDay}', {credentials:'same-origin'}).then(response => response.json()).then(rows => rows[0]?.status)`,
-    )) === 'CANCELLED');
+    await waitUntil(
+        async () =>
+            (await evaluate(
+                `fetch('/api/v1/admin/blocked-periods?from=${blockDay}&to=${blockDay}', {credentials:'same-origin'}).then(response => response.json()).then(rows => rows[0]?.status)`,
+            )) === 'CANCELLED',
+    );
     await clickButtonByText('Atualizar', evaluate);
-    await waitUntil(() => evaluate("document.querySelector('.admin-agenda__block--cancelled')?.innerText.includes('Manutenção E2E')"));
+    await waitUntil(() =>
+        evaluate("document.querySelector('.admin-agenda__block--cancelled')?.innerText.includes('Manutenção E2E')"),
+    );
     console.log('Browser: exceção fechada, horário especial, restauração e bloqueio cancelado persistem após reload.');
     await clickButtonByText('Nova reserva', evaluate);
     await setSelectByLabel('Serviço ativo', publicService.serviceId, evaluate);
@@ -739,24 +901,31 @@ try {
     await setAdminAppointmentField('Telefone para cadastro', '+5511999998310', evaluate);
     await setAdminAppointmentField('Data local', publicDate, evaluate);
     await setAdminAppointmentField('Horário local', '10:00', evaluate);
-    await waitUntil(() => evaluate(
-        "document.querySelector('form[aria-label=\\\"Criar reserva administrativa\\\"] button[type=submit]') && !document.querySelector('form[aria-label=\\\"Criar reserva administrativa\\\"] button[type=submit]').disabled",
-    ));
+    await waitUntil(() =>
+        evaluate(
+            'document.querySelector(\'form[aria-label=\\"Criar reserva administrativa\\"] button[type=submit]\') && !document.querySelector(\'form[aria-label=\\"Criar reserva administrativa\\"] button[type=submit]\').disabled',
+        ),
+    );
     await clickButtonByText('Confirmar reserva', evaluate);
     await waitForText('Reserva confirmada e persistida.', evaluate);
     await waitForText('Reserva administrativa E2E', evaluate);
-    const administrativeBookingCount = Number(queryPostgres(
-        `SELECT count(*) FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) JOIN agendamento.client c USING (tenant_id, client_id) WHERE t.slug = '${publication.slug}' AND c.display_name = 'Reserva administrativa E2E' AND a.status = 'CONFIRMED'`,
-        appEnvironment,
-    ));
-    if (administrativeBookingCount !== 1) throw new Error('Reserva administrativa comum não foi persistida uma única vez.');
+    const administrativeBookingCount = Number(
+        queryPostgres(
+            `SELECT count(*) FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) JOIN agendamento.client c USING (tenant_id, client_id) WHERE t.slug = '${publication.slug}' AND c.display_name = 'Reserva administrativa E2E' AND a.status = 'CONFIRMED'`,
+            appEnvironment,
+        ),
+    );
+    if (administrativeBookingCount !== 1)
+        throw new Error('Reserva administrativa comum não foi persistida uma única vez.');
 
     await setAdminAppointmentField('Horário local', '08:00', evaluate);
-    await waitUntil(() => evaluate(`(() => {
+    await waitUntil(() =>
+        evaluate(`(() => {
       const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
       const label = [...form.querySelectorAll('label')].find(item => item.innerText.includes('Ignorar somente a grade semanal'));
       return Boolean(label && !label.querySelector('input')?.disabled);
-    })()`));
+    })()`),
+    );
     await evaluate(`(() => {
       const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
       [...form.querySelectorAll('label')].find(item => item.innerText.includes('Ignorar somente a grade semanal'))?.querySelector('input')?.click();
@@ -768,10 +937,12 @@ try {
     await waitForText('Reserva confirmada e persistida.', evaluate);
     await waitForText('Encaixe administrativo E2E', evaluate);
     await waitForText('Motivo: Encaixe E2E autorizado', evaluate);
-    const administrativeOverrideCount = Number(queryPostgres(
-        `SELECT count(*) FROM agendamento.appointment_history h JOIN agendamento.appointment a USING (tenant_id, appointment_id) JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND h.reason_code = 'ADMIN_BOOKING_OVERRIDE' AND h.reason = 'Encaixe E2E autorizado'`,
-        appEnvironment,
-    ));
+    const administrativeOverrideCount = Number(
+        queryPostgres(
+            `SELECT count(*) FROM agendamento.appointment_history h JOIN agendamento.appointment a USING (tenant_id, appointment_id) JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND h.reason_code = 'ADMIN_BOOKING_OVERRIDE' AND h.reason = 'Encaixe E2E autorizado'`,
+            appEnvironment,
+        ),
+    );
     if (administrativeOverrideCount !== 1) throw new Error('Encaixe administrativo não persistiu história e motivo.');
 
     await setAdminAppointmentField('Nome', 'Encaixe conflitante E2E', evaluate);
@@ -779,12 +950,16 @@ try {
     await setAdminAppointmentTextarea('Motivo obrigatório', 'Tentativa conflitante E2E', evaluate);
     await clickButtonByText('Confirmar reserva', evaluate);
     await waitForText('O horário conflita com um bloqueio ou atendimento existente.', evaluate);
-    const conflictingBookingCount = Number(queryPostgres(
-        `SELECT count(*) FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.starts_at = '${publicDate} 08:00:00-03' AND a.status = 'CONFIRMED'`,
-        appEnvironment,
-    ));
+    const conflictingBookingCount = Number(
+        queryPostgres(
+            `SELECT count(*) FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.starts_at = '${publicDate} 08:00:00-03' AND a.status = 'CONFIRMED'`,
+            appEnvironment,
+        ),
+    );
     if (conflictingBookingCount !== 1) throw new Error('Tentativa sobreposta alterou a agenda persistida.');
-    console.log('Browser: reserva administrativa comum e encaixe real persistidos; motivo aparece na história e a sobreposição é recusada.');
+    console.log(
+        'Browser: reserva administrativa comum e encaixe real persistidos; motivo aparece na história e a sobreposição é recusada.',
+    );
     await setFieldByAriaLabel('Segunda-feira início 1', '08:00', evaluate);
     const concurrentUpdateStatus = await evaluate(`(async () => {
       const [currentResponse, csrfResponse] = await Promise.all([
@@ -799,16 +974,17 @@ try {
         body:JSON.stringify({expectedVersion:current.version, periods:[{weekday:'MONDAY',localStart:'10:00',localEnd:'11:00'}]})
       }).then(response => response.status);
     })()`);
-    if (concurrentUpdateStatus !== 200) throw new Error('Comando concorrente não atualizou a grade para o teste de CAS.');
+    if (concurrentUpdateStatus !== 200)
+        throw new Error('Comando concorrente não atualizou a grade para o teste de CAS.');
     await clickButtonByText('Salvar grade semanal', evaluate);
     await waitForText('Outra sessão salvou esta grade.', evaluate);
-    if (await evaluate("document.querySelector('[aria-label=\"Segunda-feira início 1\"]').value") !== '08:00') {
+    if ((await evaluate('document.querySelector(\'[aria-label="Segunda-feira início 1"]\').value')) !== '08:00') {
         throw new Error('Conflito de versão descartou o rascunho local.');
     }
     await evaluate('window.confirm = () => true');
     await clickButtonByText('Recarregar versão atual (substitui campos locais)', evaluate);
     await waitForText('Configuração recarregada.', evaluate);
-    if (await evaluate("document.querySelector('[aria-label=\"Segunda-feira início 1\"]').value") !== '10:00') {
+    if ((await evaluate('document.querySelector(\'[aria-label="Segunda-feira início 1"]\').value')) !== '10:00') {
         throw new Error('Recuperação explícita do conflito não carregou a versão atual.');
     }
     console.log('Browser: conflito CAS preservou rascunho e recuperação explícita carregou a versão vigente.');
@@ -827,11 +1003,7 @@ try {
     const csrfProtectedSessionStatus = await evaluate(
         "fetch('/api/v1/admin/session', {credentials:'same-origin'}).then(response => response.status)",
     );
-    if (
-        missingCsrfStatus !== 403 ||
-        invalidCsrfStatus !== 403 ||
-        csrfProtectedSessionStatus !== 200
-    ) {
+    if (missingCsrfStatus !== 403 || invalidCsrfStatus !== 403 || csrfProtectedSessionStatus !== 200) {
         throw new Error('Mutação sem CSRF válido não foi rejeitada com sessão preservada.');
     }
     setAccessStatus('admin_tenant_membership', 'DISABLED', credentials, appEnvironment);
@@ -877,15 +1049,9 @@ try {
     await evaluate("document.querySelector('a[href*=oauth2]').click()");
     await waitForText('Sessão administrativa ativa.', evaluate);
 
-    const sessionBeforeExpiry = (await cookies(command)).find(
-        (cookie) => cookie.name === 'AGDSESSION',
-    );
+    const sessionBeforeExpiry = (await cookies(command)).find((cookie) => cookie.name === 'AGDSESSION');
     if (!sessionBeforeExpiry) throw new Error('Cookie de sessão não encontrado antes do teste de expiração.');
-    const nearExpiryRecord = setSessionIdleMinutes(
-        sessionBeforeExpiry.value,
-        25,
-        appEnvironment,
-    );
+    const nearExpiryRecord = setSessionIdleMinutes(sessionBeforeExpiry.value, 25, appEnvironment);
     if (nearExpiryRecord.maxInactiveInterval !== 1800) {
         throw new Error(`Intervalo de inatividade inesperado: ${nearExpiryRecord.maxInactiveInterval}s.`);
     }
@@ -912,10 +1078,7 @@ try {
     const expiredApiResponse = await evaluate(
         "fetch('/api/v1/admin/session', {credentials:'same-origin'}).then(async response => ({status:response.status, body:await response.json()}))",
     );
-    if (
-        expiredApiResponse.status !== 401 ||
-        expiredApiResponse.body.error?.code !== 'AUTHENTICATION_REQUIRED'
-    ) {
+    if (expiredApiResponse.status !== 401 || expiredApiResponse.body.error?.code !== 'AUTHENTICATION_REQUIRED') {
         throw new Error('Cookie da sessão inativa por mais de 30 minutos acessou a API protegida.');
     }
     await navigate('http://localhost:5173/admin', command, evaluate);
@@ -925,7 +1088,7 @@ try {
     }
     await evaluate("document.querySelector('a[href*=oauth2]').click()");
     await waitForText('Sessão administrativa ativa.', evaluate);
-    if (await evaluate("Boolean(document.querySelector('input[name=\"username\"]'))")) {
+    if (await evaluate('Boolean(document.querySelector(\'input[name="username"]\'))')) {
         throw new Error('SSO Keycloak ativo deveria permitir novo login sem formulário de credenciais.');
     }
     const renewedSessionStatus = await evaluate(
@@ -945,9 +1108,7 @@ try {
     console.log('Browser: expiração local de 30 min, renovação por atividade e novo login via SSO validados.');
 
     await waitUntil(() =>
-        evaluate(
-            "Boolean([...document.querySelectorAll('button')].find(button => !button.disabled))",
-        ),
+        evaluate("Boolean([...document.querySelectorAll('button')].find(button => !button.disabled))"),
     );
     await evaluate(
         "[...document.querySelectorAll('button')].find(button => button.innerText.includes('Sair')).click()",
@@ -965,17 +1126,15 @@ try {
     await waitForText('Entrar como administrador', evaluate);
     await evaluate("document.querySelector('a[href*=oauth2]').click()");
     await waitForText('username', evaluate, true);
-    await submitLogin(
-        credentials.KEYCLOAK_UNLINKED_USERNAME,
-        credentials.KEYCLOAK_UNLINKED_PASSWORD,
-        evaluate,
-    );
+    await submitLogin(credentials.KEYCLOAK_UNLINKED_USERNAME, credentials.KEYCLOAK_UNLINKED_PASSWORD, evaluate);
     await waitForText('ADMIN_ACCESS_DENIED', evaluate);
     assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, credentials);
-    console.log('Browser E2E passed: OIDC login, tenant, 30-minute idle expiry, SSO reauthentication, revocation, CSRF logout, unlinked denial, no test credentials in backend logs.');
+    console.log(
+        'Browser E2E passed: OIDC login, tenant, 30-minute idle expiry, SSO reauthentication, revocation, CSRF logout, unlinked denial, no test credentials in backend logs.',
+    );
 } finally {
     if (browserCdp && secondTargetId) {
-        await browserCdp.command('Target.closeTarget', {targetId:secondTargetId}).catch(() => {});
+        await browserCdp.command('Target.closeTarget', { targetId: secondTargetId }).catch(() => {});
     }
     secondTab?.close();
     browserCdp?.close();
@@ -1025,22 +1184,26 @@ async function connectToCdp(webSocketDebuggerUrl, responseHistory = null) {
             awaitPromise: true,
         });
         if (result.exceptionDetails) {
-            const description = result.exceptionDetails.exception?.description
-                ?.split('\n', 1)[0];
+            const description = result.exceptionDetails.exception?.description?.split('\n', 1)[0];
             throw new Error(
                 `Execução do navegador falhou: ${result.exceptionDetails.text}${description ? ` (${description})` : ''}`,
             );
         }
         return result.result.value;
     };
-    return { socket: cdpSocket, command, evaluate, close: () => cdpSocket.close() };
+    return {
+        socket: cdpSocket,
+        command,
+        evaluate,
+        close: () => cdpSocket.close(),
+    };
 }
 
 async function waitForTarget(targetId) {
     let targetInfo;
     await waitUntil(async () => {
-        const targets = await fetch('http://127.0.0.1:9222/json/list').then(response => response.json());
-        targetInfo = targets.find(target => target.id === targetId);
+        const targets = await fetch('http://127.0.0.1:9222/json/list').then((response) => response.json());
+        targetInfo = targets.find((target) => target.id === targetId);
         return Boolean(targetInfo?.webSocketDebuggerUrl);
     });
     return targetInfo;
@@ -1231,8 +1394,7 @@ function readSessionRecord(sessionId, environment) {
 
 function normalizeSessionId(sessionId) {
     const decodedSessionId =
-        /^[0-9a-f]{32}$/i.test(sessionId) ||
-        /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(sessionId)
+        /^[0-9a-f]{32}$/i.test(sessionId) || /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(sessionId)
             ? sessionId
             : Buffer.from(sessionId, 'base64url').toString('utf8');
     if (/^[0-9a-f]{32}$/i.test(decodedSessionId)) {
@@ -1245,9 +1407,7 @@ function normalizeSessionId(sessionId) {
 }
 
 function parseSessionRecord(value) {
-    const [maxInactiveInterval, lastAccessTime, expiryTime] = value
-        .split('|')
-        .map(Number);
+    const [maxInactiveInterval, lastAccessTime, expiryTime] = value.split('|').map(Number);
     return { maxInactiveInterval, lastAccessTime, expiryTime };
 }
 
@@ -1330,7 +1490,9 @@ async function waitForText(text, evaluate, selector = false) {
         const diagnostic = await evaluate(
             `JSON.stringify({page: location.origin + location.pathname, title: document.title, heading: document.querySelector("h1")?.innerText, output: document.querySelector("output")?.innerText, alerts: [...document.querySelectorAll('[role="alert"]')].map(item => item.innerText).filter(Boolean).slice(0, 5), bookingError: window.__bookingE2eError, recentHttpResponses: ${JSON.stringify(recentHttpResponses)}})`,
         );
-        throw new Error(`Estado ${text} não alcançado: ${diagnostic}`, { cause: error });
+        throw new Error(`Estado ${text} não alcançado: ${diagnostic}`, {
+            cause: error,
+        });
     }
 }
 

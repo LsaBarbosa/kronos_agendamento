@@ -754,12 +754,17 @@ paths:
       description: >-
         Deriva tenant e ator da associação administrativa atual. Exige expectedVersion da reserva
         e expectedScheduleRevision da agenda (controles independentes), Idempotency-Key e CSRF.
-        Revalida destino, timezone/offset, serviço e buffer do snapshot, grade, exceção, políticas,
+        Em uma nova mutação exige o serviço associado atualmente ACTIVE no tenant, verificando sua
+        elegibilidade separadamente do snapshot e sincronizando com alterações concorrentes do catálogo.
+        O destino e a ocupação continuam usando duração/buffer e snapshots originais da reserva;
+        serviço inativo não é ignorável por override. Replay autorizado de comando concluído retorna
+        o receipt original mesmo se o serviço tiver sido inativado posteriormente. Revalida destino,
+        timezone/offset, grade, exceção, políticas,
         bloqueios e ocupações no protocolo READ COMMITTED com lock por tenant. O próprio appointment
         é excluído da consulta de ocupação; a exclusion constraint permanece como proteção final.
         Apenas OUTSIDE_WEEKLY_SCHEDULE e MIN_NOTICE podem ser solicitadas, sempre com confirmação
         representada no payload e motivo; CLOSED, SPECIAL, horizonte, bloqueios, overlap, serviço
-        histórico e configuração ausente não são ignorados. Não herda overrides anteriores.
+        inativo e configuração ausente não são ignorados. Não herda overrides anteriores.
         Mutação, história antes/depois, auditoria, receipt idempotente e AppointmentRescheduled
         compartilham uma transação. Não significa que lembrete foi cancelado ou WhatsApp enviado.
       security:

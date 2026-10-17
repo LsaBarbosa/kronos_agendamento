@@ -1674,7 +1674,237 @@ class PublicAppointmentIT {
   }
 
   @Test
-  void reschedulingMayOverlapItsOwnOldIntervalAndConcurrentStaleVersionLoses() throws Exception {
+  void rescheduleRejectsInactiveCurrentServiceWithoutSuccessEffects() throws Exception {
+    submitBooking(
+            "reschedule-inactive-service-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Snapshot", "+5511999991840"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    setServiceStatus.execute(
+        actor,
+        serviceId,
+        "deactivate-before-reschedule-" + UUID.randomUUID(),
+        0,
+        ServiceStatus.INACTIVE);
+    long revisionBefore = currentScheduleRevision();
+    int historyBefore = count("appointment_history", tenantId);
+    int auditBefore = countByAction("APPOINTMENT_RESCHEDULED");
+    int outboxBefore = countByEvent("AppointmentRescheduled");
+    int receiptsBefore = rescheduleReceiptCount();
+
+    submitReschedule(
+            appointmentId,
+            "reschedule-inactive-rejected-" + UUID.randomUUID(),
+            rescheduleBody(
+                1,
+                revisionBefore,
+                bookingDate.plusWeeks(1).atTime(9, 0).atZone(ZONE).toOffsetDateTime().toString()))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("ADMIN_BOOKING_POLICY_REJECTED"));
+
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT starts_at = ?::timestamptz AND version = 1 FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+                Boolean.class,
+                java.time.OffsetDateTime.parse(requestedStart),
+                tenantId,
+                appointmentId))
+        .isTrue();
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historyBefore);
+    assertThat(countByAction("APPOINTMENT_RESCHEDULED")).isEqualTo(auditBefore);
+    assertThat(countByEvent("AppointmentRescheduled")).isEqualTo(outboxBefore);
+    assertThat(currentScheduleRevision()).isEqualTo(revisionBefore);
+    assertThat(rescheduleReceiptCount()).isEqualTo(receiptsBefore);
+  }
+
+  @Test
+  void rescheduleUsesCurrentServiceEligibilityButKeepsOriginalSnapshotAndReplay() throws Exception {
+    submitBooking(
+            "reschedule-snapshot-service-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Snapshot original", "+5511999991841"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    updateService.execute(
+        actor,
+        serviceId,
+        "catalog-change-before-reschedule-" + UUID.randomUUID(),
+        0,
+        "Catálogo atualizado",
+        null,
+        60,
+        30);
+    long revision = currentScheduleRevision();
+    String destination = bookingDate.atTime(9, 30).atZone(ZONE).toOffsetDateTime().toString();
+    String key = "reschedule-current-active-service-" + UUID.randomUUID();
+    String body = rescheduleBody(1, revision, destination);
+
+    submitReschedule(appointmentId, key, body)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(2));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT service_name_snapshot || ':' || service_duration_minutes || ':' || service_buffer_after_minutes || ':' || (occupied_until - starts_at) FROM agendamento.appointment WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("Consulta:30:15:00:45:00");
+    int historyAfterSuccess = count("appointment_history", tenantId);
+    int auditAfterSuccess = countByAction("APPOINTMENT_RESCHEDULED");
+    int outboxAfterSuccess = countByEvent("AppointmentRescheduled");
+    int receiptsAfterSuccess = rescheduleReceiptCount();
+    setServiceStatus.execute(
+        actor,
+        serviceId,
+        "deactivate-after-reschedule-" + UUID.randomUUID(),
+        1,
+        ServiceStatus.INACTIVE);
+
+    submitReschedule(appointmentId, key, body)
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.appointmentId").value(appointmentId.toString()))
+        .andExpect(jsonPath("$.version").value(2));
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historyAfterSuccess);
+    assertThat(countByAction("APPOINTMENT_RESCHEDULED")).isEqualTo(auditAfterSuccess);
+    assertThat(countByEvent("AppointmentRescheduled")).isEqualTo(outboxAfterSuccess);
+    assertThat(rescheduleReceiptCount()).isEqualTo(receiptsAfterSuccess);
+  }
+
+  @Test
+  void reschedulingMayOverlapItsOwnOldOccupiedInterval() throws Exception {
+    submitBooking(
+            "reschedule-own-overlap-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Overlap próprio", "+5511999991842"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    var oldInterval =
+        appJdbc.queryForObject(
+            "SELECT starts_at, occupied_until FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+            (rs, row) ->
+                new java.time.OffsetDateTime[] {
+                  rs.getObject(1, java.time.OffsetDateTime.class),
+                  rs.getObject(2, java.time.OffsetDateTime.class)
+                },
+            tenantId,
+            appointmentId);
+    var newStart = bookingDate.atTime(9, 30).atZone(ZONE).toOffsetDateTime();
+    var newOccupiedUntil = newStart.plusMinutes(45);
+    long revision = currentScheduleRevision();
+
+    submitReschedule(
+            appointmentId,
+            "reschedule-real-overlap-" + UUID.randomUUID(),
+            rescheduleBody(1, revision, newStart.toString()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.appointmentId").value(appointmentId.toString()))
+        .andExpect(jsonPath("$.version").value(2));
+
+    assertThat(oldInterval[0].toInstant()).isBefore(newOccupiedUntil.toInstant());
+    assertThat(newStart.toInstant()).isBefore(oldInterval[1].toInstant());
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ? AND starts_at = ? AND occupied_until = ? AND version = 2",
+                UUID.class,
+                tenantId,
+                appointmentId,
+                newStart,
+                newOccupiedUntil))
+        .isEqualTo(appointmentId);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.appointment WHERE tenant_id = ? AND status = 'CONFIRMED' AND appointment_id <> ? AND tstzrange(starts_at, occupied_until, '[)') && tstzrange(?::timestamptz, ?::timestamptz, '[)')",
+                Integer.class,
+                tenantId,
+                appointmentId,
+                newStart,
+                newOccupiedUntil))
+        .isZero();
+  }
+
+  @Test
+  void historyConstraintRejectsUnknownAndInvalidRescheduleCombinations() throws Exception {
+    submitBooking(
+            "reschedule-history-constraint-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "History", "+5511999991843"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.appointment_history WHERE appointment_id = ? AND reason_code = 'APPOINTMENT_CREATED' AND previous_starts_at IS NULL AND previous_occupied_until IS NULL AND new_starts_at IS NULL AND new_occupied_until IS NULL AND version_before IS NULL AND version_after IS NULL",
+                Integer.class,
+                appointmentId))
+        .isEqualTo(1);
+
+    var start = java.time.OffsetDateTime.parse(requestedStart);
+    var end = start.plusMinutes(45);
+    assertInvalidRescheduleHistory(appointmentId, start, null, start, end, 1L, 2L);
+    assertInvalidRescheduleHistory(appointmentId, start, end, start, null, 1L, 2L);
+    assertInvalidRescheduleHistory(appointmentId, start, null, start, null, 1L, 2L);
+    assertInvalidRescheduleHistory(appointmentId, null, end, start, end, 1L, 2L);
+    assertInvalidRescheduleHistory(appointmentId, start, end, null, end, 1L, 2L);
+    assertInvalidRescheduleHistory(appointmentId, start, end, start, end, null, 2L);
+    assertInvalidRescheduleHistory(appointmentId, start, end, start, end, 2L, 2L);
+    assertInvalidRescheduleHistory(appointmentId, start, start, start, end, 1L, 2L);
+    assertInvalidRescheduleHistory(appointmentId, start, end, start, start, 1L, 2L);
+    assertInvalidRescheduleHistory(appointmentId, start, end, start, end, 1L, 3L);
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () ->
+                migrationJdbc.update(
+                    "INSERT INTO agendamento.appointment_history (history_id, tenant_id, appointment_id, from_status, to_status, actor_type, actor_ref, reason_code, occurred_at, previous_starts_at, previous_occupied_until, new_starts_at, new_occupied_until, version_before, version_after) VALUES (?, ?, ?, 'PENDING', 'CONFIRMED', 'ADMIN', 'TENANT_ADMIN', 'APPOINTMENT_RESCHEDULED', clock_timestamp(), ?, ?, ?, ?, 1, 2)",
+                    UUID.randomUUID(),
+                    tenantId,
+                    appointmentId,
+                    start,
+                    end,
+                    start,
+                    end))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () ->
+                migrationJdbc.update(
+                    "INSERT INTO agendamento.appointment_history (history_id, tenant_id, appointment_id, from_status, to_status, actor_type, actor_ref, reason_code, occurred_at, previous_starts_at, previous_occupied_until, new_starts_at, new_occupied_until, version_before, version_after) VALUES (?, ?, ?, 'CONFIRMED', 'CONFIRMED', 'ADMIN', 'TENANT_ADMIN', NULL, clock_timestamp(), ?, ?, ?, ?, 1, 2)",
+                    UUID.randomUUID(),
+                    tenantId,
+                    appointmentId,
+                    start,
+                    end,
+                    start,
+                    end))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(1);
+
+    String destination =
+        bookingDate.plusWeeks(1).atTime(9, 0).atZone(ZONE).toOffsetDateTime().toString();
+    submitReschedule(
+            appointmentId,
+            "reschedule-valid-history-" + UUID.randomUUID(),
+            rescheduleBody(1, currentScheduleRevision(), destination))
+        .andExpect(status().isOk());
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.appointment_history WHERE appointment_id = ? AND reason_code = 'APPOINTMENT_RESCHEDULED' AND previous_starts_at IS NOT NULL AND previous_occupied_until > previous_starts_at AND new_starts_at IS NOT NULL AND new_occupied_until > new_starts_at AND version_before = 1 AND version_after = 2",
+                Integer.class,
+                appointmentId))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void concurrentRescheduleWithStaleVersionLoses() throws Exception {
     submitBooking(
             "reschedule-own-overlap-" + UUID.randomUUID(),
             requestBody(serviceId, requestedStart, "Overlap próprio", "+5511999991811"))
@@ -2294,6 +2524,37 @@ class PublicAppointmentIT {
         Integer.class,
         tenantId,
         action);
+  }
+
+  private int rescheduleReceiptCount() {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope = 'appointments.admin.reschedule.v1'",
+        Integer.class,
+        tenantId);
+  }
+
+  private void assertInvalidRescheduleHistory(
+      UUID appointmentId,
+      java.time.OffsetDateTime previousStartsAt,
+      java.time.OffsetDateTime previousOccupiedUntil,
+      java.time.OffsetDateTime newStartsAt,
+      java.time.OffsetDateTime newOccupiedUntil,
+      Long versionBefore,
+      Long versionAfter) {
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () ->
+                migrationJdbc.update(
+                    "INSERT INTO agendamento.appointment_history (history_id, tenant_id, appointment_id, from_status, to_status, actor_type, actor_ref, reason_code, occurred_at, previous_starts_at, previous_occupied_until, new_starts_at, new_occupied_until, version_before, version_after) VALUES (?, ?, ?, 'CONFIRMED', 'CONFIRMED', 'ADMIN', 'TENANT_ADMIN', 'APPOINTMENT_RESCHEDULED', clock_timestamp(), ?, ?, ?, ?, ?, ?)",
+                    UUID.randomUUID(),
+                    tenantId,
+                    appointmentId,
+                    previousStartsAt,
+                    previousOccupiedUntil,
+                    newStartsAt,
+                    newOccupiedUntil,
+                    versionBefore,
+                    versionAfter))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
   }
 
   private static String requestBody(
