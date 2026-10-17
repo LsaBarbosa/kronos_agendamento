@@ -197,6 +197,7 @@ export function AdminAgendaPanel({
     } | null>(null);
     const rescheduleKeys = useRef(new Map<string, string>());
     const rescheduleRequestGuard = useRef(false);
+    const rescheduleSubmissionInFlight = useRef(false);
     const rescheduleLocked = () =>
         rescheduleRequestGuard.current ||
         rescheduleSaving ||
@@ -565,7 +566,13 @@ export function AdminAgendaPanel({
     }
 
     async function submitReschedule(retry = false) {
-        if (!csrf || !details || !schedule || rescheduleRequestGuard.current)
+        if (
+            !csrf ||
+            !details ||
+            !schedule ||
+            rescheduleSubmissionInFlight.current ||
+            (rescheduleRequestGuard.current && !retry)
+        )
             return;
         const offsets = validLocalTimeOffsets(
             rescheduleDate,
@@ -613,6 +620,7 @@ export function AdminAgendaPanel({
             });
         }
         rescheduleRequestGuard.current = true;
+        rescheduleSubmissionInFlight.current = true;
         setRescheduleSaving(true);
         setRescheduleError('');
         setRescheduleNotice('');
@@ -634,6 +642,11 @@ export function AdminAgendaPanel({
                 },
             );
             if (response.status === 401 || response.status === 403) {
+                if (!retry || !rescheduleUncertain) {
+                    setReschedulePending(null);
+                    setRescheduleUncertain(false);
+                    rescheduleRequestGuard.current = false;
+                }
                 sessionInvalidRef.current(response.status);
                 return;
             }
@@ -654,7 +667,10 @@ export function AdminAgendaPanel({
                         'A reserva ou agenda mudou. Atualize as versões e revise o destino antes de enviar uma nova intenção.',
                     );
                 }
-                if (!uncertain) setReschedulePending(null);
+                if (!uncertain) {
+                    setReschedulePending(null);
+                    rescheduleRequestGuard.current = false;
+                }
                 return;
             }
             const fingerprint = JSON.stringify([
@@ -676,7 +692,7 @@ export function AdminAgendaPanel({
                 'A resposta não chegou; o resultado pode estar confirmado. Repita exatamente a mesma intenção antes de alterar o destino.',
             );
         } finally {
-            rescheduleRequestGuard.current = false;
+            rescheduleSubmissionInFlight.current = false;
             setRescheduleSaving(false);
         }
     }

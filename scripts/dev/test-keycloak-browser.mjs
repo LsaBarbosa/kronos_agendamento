@@ -492,6 +492,21 @@ try {
     );
     await evaluate('window.__releaseRescheduleResponse?.()');
     await waitForText('A resposta não chegou; o resultado pode estar confirmado.', evaluate);
+    const uncertainAssociation = await evaluate(`(() => ({
+      detail: document.querySelector('.admin-agenda__details')?.innerText,
+      closeDisabled: [...document.querySelectorAll('button')].find(button => button.innerText === 'Fechar detalhes')?.disabled,
+      periodDisabled: [...document.querySelectorAll('button')].find(button => button.innerText === 'Próximo período')?.disabled,
+    }))()`);
+    if (
+        !uncertainAssociation.closeDisabled ||
+        !uncertainAssociation.periodDisabled ||
+        !uncertainAssociation.detail.includes('Visitante de demonstração') ||
+        uncertainAssociation.detail.includes('Segundo visitante de demonstração')
+    ) {
+        throw new Error(
+            `Após perda da resposta, a intenção deixou de estar associada a A: ${JSON.stringify(uncertainAssociation)}`,
+        );
+    }
     const originalIntent = await evaluate('window.__firstRescheduleRequest');
     await evaluate(`(() => {
       const originalFetch = window.fetch;
