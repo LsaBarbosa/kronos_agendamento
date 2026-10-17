@@ -415,6 +415,9 @@ try {
     await waitForText('Visitante de demonstração', evaluate);
     await command('Page.reload');
     await waitForText('Agenda', evaluate);
+    await waitUntil(async () => (await evaluate(
+        "[...document.querySelectorAll('label')].some(label => label.childNodes[0]?.textContent?.trim() === 'Data de referência' && label.querySelector('input'))",
+    )));
     await setFieldByLabel('Data de referência', publicDate, evaluate);
     await waitForText('Visitante de demonstração', evaluate);
     if (!(await evaluate(`document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"]')?.innerText.includes('45 min')`))) {
