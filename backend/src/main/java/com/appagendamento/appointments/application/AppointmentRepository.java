@@ -10,6 +10,14 @@ public interface AppointmentRepository {
 
   void insertConfirmed(Appointment appointment, String operationId, String traceId);
 
+  default void insertConfirmed(
+      Appointment appointment,
+      String operationId,
+      String traceId,
+      AppointmentCreationContext context) {
+    insertConfirmed(appointment, operationId, traceId);
+  }
+
   String findTenantTimeZone(UUID tenantId);
 
   List<AdminAppointmentView> findAdminAppointments(

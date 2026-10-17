@@ -107,6 +107,28 @@ public class PostgresScheduleRepository implements ScheduleRepository {
   }
 
   @Override
+  public long currentScheduleRevision(UUID tenantId) {
+    return jdbc
+        .query(
+            "SELECT revision FROM agendamento.schedule_revision WHERE tenant_id = ?",
+            (row, index) -> row.getLong(1),
+            tenantId)
+        .stream()
+        .findFirst()
+        .orElse(0L);
+  }
+
+  @Override
+  public boolean lockScheduleRevision(UUID tenantId, long expectedRevision) {
+    return !jdbc.query(
+            "SELECT revision FROM agendamento.schedule_revision WHERE tenant_id = ? AND revision = ? FOR SHARE",
+            (row, index) -> row.getLong(1),
+            tenantId,
+            expectedRevision)
+        .isEmpty();
+  }
+
+  @Override
   public List<ScheduleException> findScheduleExceptions(
       UUID tenantId, LocalDate from, LocalDate to) {
     return jdbc.query(

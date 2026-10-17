@@ -2,6 +2,10 @@
 
 | Tema | Referência | Efeito | Tratamento atual |
 |---|---|---|---|
+| Override `OUTSIDE_WEEKLY_SCHEDULE` em data com exceção | AGD-021; documento 02, modelo de exceção; documento 03, POST administrativo | encaixe em datas CLOSED/SPECIAL | Ambiguidade material: requisitos permitem ignorar grade, enquanto SPECIAL substitui a grade semanal e CLOSED significa sem atendimento. A implementação provisória e conservadora bloqueia overrides em ambas as exceções (CLOSED permanece fechado; SPECIAL limita aos períodos finais). Solicita-se confirmação do produto se `OUTSIDE_WEEKLY_SCHEDULE` deve poder ultrapassar períodos SPECIAL; essa interpretação do código não é decisão aprovada. |
+
+| Tema | Referência | Efeito | Tratamento atual |
+|---|---|---|---|
 | Identidade administrativa — provedor | AGD-003; documento 04 | login e sessão | **Resolvido pelo usuário:** Keycloak via OIDC, sessão JDBC server-side e autorização por vínculo persistido; ADR-0006. |
 | RBAC administrativo e suporte | AGD-003; documentos 01, 02 e 06 | autorização granular, acesso da operação e MFA | Especificação define um administrador principal por tenant e menciona “papel apropriado”, sem matriz. AGD-003 limita-se a `TENANT_ADMIN`; aprovar matriz e política de MFA para suporte antes de liberar papéis adicionais. |
 | Hospedagem e homologação da identidade | AGD-001/003; documento 04 | issuer/redirects/TLS e prova no ambiente | Keycloak local é reprodutível; domínio, hospedagem, secrets gerenciados e ambiente/staging continuam pendentes. |

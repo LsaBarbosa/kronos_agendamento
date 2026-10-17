@@ -25,6 +25,8 @@
 | `ClientRestriction` | bloqueio de autoagendamento | restriction_id, client, tipo, motivo, active_from, active_until, lifted_at |
 | `Appointment` | reserva e ocupação | appointment_id, tenant, client, service, starts_at, service_ends_at, occupied_until, status, snapshots, version |
 | `AppointmentHistory` | transições e remarcações | event_id, appointment, from_status, to_status, before/after, actor, reason, occurred_at |
+
+Na criação administrativa (AGD-021), a história inicial identifica `ADMIN/TENANT_ADMIN` e registra um código de origem. Motivo textual do encaixe é preservado na história de domínio para explicar a decisão, não no evento de auditoria nem na outbox. Auditoria registra somente overrides permitidos, presença de motivo e estado da integração de restrições; a fronteira `NOT_TRACKED` não significa que consultas reais de faltas/restrições já estejam implementadas.
 | `AccessChallenge` | código de acesso | challenge_id, tenant, phone_hash/ref, code_hash, expires_at, attempts, status |
 | `Notification` | intenção de comunicação | notification_id, tenant, type, target_ref, appointment_version, status, dedupe_key, attempts |
 | `Subscription` | direito de uso do tenant | subscription_id, tenant, plan, status, trial_end, period_end, grace_end, version |

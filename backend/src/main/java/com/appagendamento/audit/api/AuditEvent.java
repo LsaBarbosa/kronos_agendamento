@@ -94,9 +94,15 @@ public record AuditEvent(
                       "\\{\\\"changed_fields\\\":\\[\\\"contact_phone\\\"\\],\\\"version_before\\\":[0-9]+,\\\"version_after\\\":[0-9]+\\}");
           case "APPOINTMENT_CONFIRMED" ->
               actorType.equals("SYSTEM")
-                  && actorRef.equals("PUBLIC_BOOKING")
-                  && detailsJson.equals(
-                      "{\"changed_fields\":[\"appointment\"],\"version_before\":0,\"version_after\":1}");
+                      && actorRef.equals("PUBLIC_BOOKING")
+                      && detailsJson.equals(
+                          "{\"changed_fields\":[\"appointment\"],\"version_before\":0,\"version_after\":1}")
+                  || actorType.equals("ADMIN")
+                      && actorRef.equals("TENANT_ADMIN")
+                      && detailsJson.matches(
+                          "\\{\\\"changed_fields\\\":\\[\\\"appointment\\\"\\],\\\"version_before\\\":0,\\\"version_after\\\":1,\\\"override_policies\\\":\\[(?:\\\"(?:OUTSIDE_WEEKLY_SCHEDULE|MIN_NOTICE)\\\"(?:,\\\"(?:OUTSIDE_WEEKLY_SCHEDULE|MIN_NOTICE)\\\")?)?\\],\\\"reason_provided\\\":(?:true|false),\\\"client_restriction_status\\\":\\\"(?:NOT_TRACKED|CLEAR|RESTRICTED)\\\"\\}")
+                      && (detailsJson.contains("\"override_policies\":[]")
+                          == detailsJson.contains("\"reason_provided\":false,"));
           default -> false;
         };
     if (!validDetails) {

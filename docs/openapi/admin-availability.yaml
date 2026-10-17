@@ -283,7 +283,7 @@ paths:
         - backendSession: []
       responses:
         "200":
-          description: Grade semanal; configuração ausente é diferente de semana fechada.
+          description: Grade semanal; scheduleRevision é contador monotônico das alterações de agenda, independente das versões locais.
           content:
             application/json:
               schema:
@@ -649,6 +649,63 @@ paths:
         "401": { $ref: "#/components/responses/AuthenticationRequired" }
         "403": { $ref: "#/components/responses/ActionNotAllowed" }
         "503": { description: Fonte da agenda temporariamente indisponível. }
+    post:
+      operationId: createAdminAppointment
+      summary: Criar reserva administrativa ou encaixe
+      description: >-
+        Deriva tenant/ator da sessão atual. A lista ignorável contém somente OUTSIDE_WEEKLY_SCHEDULE
+        e MIN_NOTICE; ambas exigem reason. Horizonte, serviço inativo, falta de configuração,
+        exceção CLOSED/SPECIAL, bloqueios, ocupações e OVERLAP nunca são ignoráveis. O servidor
+        revalida revisão da agenda e serviço no commit, compartilha lock PostgreSQL com reserva
+        pública/bloqueio e mantém reserva, história, auditoria, idempotência e AppointmentConfirmed
+        atômicos. Publicação pública não é pré-requisito. Motivo é preservado somente na história
+        administrativa; não é copiado à auditoria nem outbox. Restrições de falta ainda não têm
+        fonte persistida (AGD-032/033).
+      security:
+        - backendSession: []
+          csrfToken: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateAdminAppointment" }
+      responses:
+        "201":
+          description: Reserva confirmada ou replay da criação original; resposta não contém telefone.
+          headers:
+            Idempotency-Replayed: { schema: { type: boolean } }
+            X-Operation-Id: { schema: { type: string, format: uuid } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminAppointmentCreated" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ActionNotAllowed" }
+        "404": { description: Cliente inexistente ou de outro tenant, sem revelar a diferença. }
+        "409":
+          description: Version conflict, regra não ignorável, OVERLAP, chave incompatível ou operação em andamento.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "503": { description: Leitura de agenda/ocupação indisponível; não assume agenda vazia. }
+  /admin/clients:
+    get:
+      operationId: searchAdminClients
+      summary: Busca limitada de clientes ativos para seleção administrativa
+      description: Tenant-scoped; exige ao menos dois caracteres; retorna no máximo 20 nomes e IDs, nunca telefone.
+      security: [{ backendSession: [] }]
+      parameters:
+        - name: query
+          in: query
+          required: true
+          schema: { type: string, minLength: 2, maxLength: 80 }
+      responses:
+        "200": { description: Resultados limitados; a lista vazia não concede acesso a outros tenants. }
+        "401": { $ref: "#/components/responses/AuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ActionNotAllowed" }
+        "400": { $ref: "#/components/responses/ValidationError" }
   /admin/appointments/{id}:
     get:
       operationId: getAdminAppointment
@@ -737,6 +794,58 @@ components:
         status: { type: string, enum: [CONFIRMED] }
         createdAt: { type: string, format: date-time }
         version: { type: integer, minimum: 1 }
+    CreateAdminAppointment:
+      type: object
+      additionalProperties: false
+      required: [serviceId, startsAt, overridePolicies, expectedScheduleVersion]
+      properties:
+        serviceId: { type: string, format: uuid }
+        startsAt:
+          type: string
+          format: date-time
+          description: Offset explícito validado contra o timezone IANA atual do tenant.
+        clientId: { type: string, format: uuid, description: Cliente existente no tenant atual. }
+        client:
+          type: object
+          additionalProperties: false
+          required: [name, phone]
+          properties:
+            name: { type: string, minLength: 1, maxLength: 120 }
+            phone: { type: string, maxLength: 80, description: Entrada normalizada/validada E.164 no servidor. }
+        overridePolicies:
+          type: array
+          uniqueItems: true
+          maxItems: 2
+          items:
+            type: string
+            enum: [OUTSIDE_WEEKLY_SCHEDULE, MIN_NOTICE]
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Obrigatório quando overridePolicies não estiver vazio; não é copiado à auditoria/outbox.
+        expectedScheduleVersion:
+          type: integer
+          minimum: 1
+          description: scheduleRevision lido junto da configuração administrativa.
+      oneOf:
+        - required: [clientId]
+          not: { required: [client] }
+        - required: [client]
+          not: { required: [clientId] }
+    AdminAppointmentCreated:
+      type: object
+      additionalProperties: false
+      required: [appointmentId, operationId, status, serviceName, startsAt, serviceEndsAt, occupiedUntil, timeZone]
+      properties:
+        appointmentId: { type: string, format: uuid }
+        operationId: { type: string, format: uuid }
+        status: { type: string, enum: [CONFIRMED] }
+        serviceName: { type: string }
+        startsAt: { type: string, format: date-time }
+        serviceEndsAt: { type: string, format: date-time }
+        occupiedUntil: { type: string, format: date-time }
+        timeZone: { type: string }
     AdminAppointmentHistory:
       type: object
       additionalProperties: false
@@ -748,13 +857,14 @@ components:
           items:
             type: object
             additionalProperties: false
-            required: [toStatus, actorType, actorRef, reasonCode, occurredAt]
+            required: [toStatus, actorType, actorRef, reasonCode, reason, occurredAt]
             properties:
               fromStatus: { type: [string, "null"] }
               toStatus: { type: string }
               actorType: { type: string }
               actorRef: { type: string }
               reasonCode: { type: string }
+              reason: { type: [string, "null"], description: Motivo fornecido no encaixe administrativo; somente visível no contexto autorizado. }
               occurredAt: { type: string, format: date-time }
     PublicBusiness:
       type: object
@@ -907,7 +1017,7 @@ components:
     WeeklySchedule:
       type: object
       additionalProperties: false
-      required: [configured, timeZone, version, periods]
+      required: [configured, timeZone, version, scheduleRevision, periods]
       properties:
         configured: { type: boolean }
         timeZone:
@@ -916,6 +1026,10 @@ components:
         version:
           type: integer
           minimum: 0
+        scheduleRevision:
+          type: integer
+          minimum: 0
+          description: Contador monotônico agregado usado para detectar alteração concorrente; zero indica que ainda não houve alteração persistida, e não é soma das versões locais.
         periods:
           type: array
           items: { $ref: "#/components/schemas/WeeklyPeriod" }

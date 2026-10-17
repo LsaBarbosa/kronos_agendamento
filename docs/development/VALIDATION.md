@@ -338,7 +338,7 @@ O upgrade V8→V9 exige rodar a consulta preflight documentada em cada ambiente 
 
 **Pendências mantidas:** provisionar keyring no secret manager e validar rotação/restart em staging; prontidão legal/comercial, HTTPS/staging, preflight hospedado, scan completo de dependências, retenção aprovada e fornecedores reais. HMAC não remove PII das tabelas de cliente/reserva; capability é bearer acessível ao JavaScript, com validade de acesso de 7 dias, não retenção. E2E com Chrome/Keycloak/PostgreSQL passou em CI no head `f3b0515`; revisão adicional final foi sequencial por limite de threads. Nenhuma aprovação humana foi inferida. PR #11 e checks pós-merge estão concluídos nos SHAs e links acima.
 
-## AGD-020 — Agenda diária/semanal (PR #12 aberto para revisão)
+## AGD-020 — Agenda diária/semanal (PR #12 integrado)
 
 | Critério/gate | Comando/procedimento | Resultado observado |
 |---|---|---|
@@ -350,3 +350,26 @@ O upgrade V8→V9 exige rodar a consulta preflight documentada em cada ambiente 
 | PR e CI final | PR [#12](https://github.com/LsaBarbosa/kronos_agendamento/pull/12), head funcional `5087d2d510c3c566b694cb923f69e0dc18cca665` | App CI push [39029288453](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39029288453) e PR [39029291785](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39029291785), CodeQL push [39029288460](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39029288460) e PR [39029291781](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39029291781): todos concluíram `success`, incluindo `verify`, `oidc-browser-e2e`, frontend, security e scans de segredos. PR permanece aberto; sem merge/deploy. |
 
 Revisão independente por subagentes não foi possível pelo limite de threads da sessão. Revisão sequencial pelo coordenador não é parecer independente nem aprovação humana no GitHub. O merge #11/AGD-016 foi concluído anteriormente; validação operacional de secrets/staging permanece pendente.
+
+### Integração de AGD-020
+
+| Evidência | SHA/run | Resultado |
+|---|---|---|
+| PR #12 e head esperado | Head `f8b6c1dde251964ee43b6d9d4dede7118f16bdfe`; merge `160db144adc6bcff72b6f293a2a561a33bdfb2f1` | PR #12 integrado por merge commit após revisão sequencial sem bloqueadores e checks obrigatórios aprovados. Não se presume aprovação humana separada. |
+| Checks do head PR/push | App CI push [39029575868](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39029575868), PR [39029578730](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39029578730); CodeQL push [39029575865](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39029575865), PR [39029578776](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39029578776) | Todos `success`; inclui `oidc-browser-e2e`. A descrição do PR foi atualizada para evidências concluídas antes da integração. |
+| Checks de main no merge | App CI [39030596903](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39030596903); CodeQL [39030596739](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39030596739) | Ambos `success` no merge commit `160db144adc6bcff72b6f293a2a561a33bdfb2f1`. Sem deploy. |
+
+## AGD-021 — Reserva administrativa e encaixe
+
+| Critério/gate | Comando/procedimento | Resultado observado |
+|---|---|---|
+| Contrato e base | Plano AGD-021; docs/spec 01–03/06; ADRs e contratos de AGD-015/020 | Branch `agd-021-reserva-administrativa-encaixe` derivada da main integrada em `160db144adc6bcff72b6f293a2a561a33bdfb2f1`. POST administrativo, busca mínima de cliente sem telefone, revisão monotônica `schedule_revision`, allowlist de override e resposta de conflito documentados. Interpretação `OUTSIDE_WEEKLY_SCHEDULE` em exceção `CLOSED`/`SPECIAL` está explicitamente sob confirmação; código/UI adotam provisoriamente comportamento conservador e não o apresentam como decisão aprovada. |
+| Backend e arquitetura | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` (`backend/`) | `BUILD SUCCESS` local em 17/10/2026: 70 unitários/arquiteturais e 111 integrações com PostgreSQL 16.13/Testcontainers; zero falhas/erros. Cobre CSRF, associação atual, tenant próprio/alheio, CAS, cliente existente/novo, snapshot, allowlist/motivo, replay sem duplicar, idempotência incompatível, rollback conjunto, locks concorrentes reserva pública/admin e reserva–bloqueio nos dois sentidos, além de isolamento/grants. |
+| Migration e grants | `TenantPersistenceIT`, Flyway em banco isolado, upgrade V13/V14→V15, `validate` e rerun | V15 funcional aprovada em instalação limpa e upgrades; V1–V14 intactas; digests legados V13 não reescritos; histórico e grants runtime conferidos. Não há integração real de restrições/faltas do cliente, pendente AGD-032/033. |
+| Frontend | `npm run format:check && npm run lint && npm test -- --run && npm run check` (`frontend/`, Node 24) | Passou localmente em 17/10/2026: Prettier, Oxlint, 23 testes Vitest, TypeScript e Vite build. |
+| Script E2E e higiene | `node --check scripts/dev/test-keycloak-browser.mjs`; `git diff --check` | Sintaxe do script e diff check passaram. O E2E foi ampliado para criar reserva e encaixe, consultar história e recusar overlap, mas não foi executado localmente: Compose/volumes de desenvolvimento já estavam em uso e não foram reiniciados/reconstruídos. Browser E2E real aguarda App CI. |
+| Execução local sem Docker | Tentativa inicial de `verify` no sandbox sem acesso ao socket | Testcontainers não conseguiu obter ambiente Docker; falha de execução ambiental, não de teste. O mesmo comando foi repetido com acesso aprovado ao daemon; os 111 testes de integração PostgreSQL passaram. |
+| Revisão | Revisão sequencial do diff pelo coordenador; ferramentas de subagentes não disponíveis por limite de threads | Não se afirma revisão independente nem aprovação humana. Dúvida CLOSED/SPECIAL está mantida como pendência de produto; sem confirmação no momento deste registro. |
+| CI remoto | App CI/CodeQL nos eventos push e PR do SHA final | Pendente até push/criação do PR; não classificar workflow escrito como CI aprovado. |
+
+Limites mantidos: gates comerciais/legais reais não são fabricados; disponibilidade e bloqueios usam ocupações persistidas já existentes, mas restrições de autoagendamento/faltas reais dependem de AGD-032/033. Sem WhatsApp enviado, sem public/private gate ampliado, sem chamada externa transacional. Homologação HTTPS/staging, preflight hospedado, scan completo de dependências, retenção aprovada e fornecedores reais seguem pendentes. Próxima história prevista: AGD-022 — Remarcação atômica.

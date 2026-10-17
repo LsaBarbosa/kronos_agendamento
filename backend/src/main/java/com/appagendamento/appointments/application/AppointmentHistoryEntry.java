@@ -8,4 +8,5 @@ public record AppointmentHistoryEntry(
     String actorType,
     String actorRef,
     String reasonCode,
+    String reason,
     Instant occurredAt) {}

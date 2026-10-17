@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiBaseUrl } from './config';
+import { commandKey } from './commandKey';
+import { validLocalTimeOffsets } from './localTimeOffsets';
 
 type Appointment = {
     appointmentId: string;
@@ -33,6 +35,8 @@ type Service = {
     serviceId: string;
     name: string;
     status: 'ACTIVE' | 'INACTIVE';
+    durationMinutes: number;
+    bufferAfterMinutes: number;
 };
 type HistoryEntry = {
     fromStatus: string | null;
@@ -40,9 +44,33 @@ type HistoryEntry = {
     actorType: string;
     actorRef: string;
     reasonCode: string;
+    reason: string | null;
     occurredAt: string;
 };
 type Details = Appointment & { history: HistoryEntry[] };
+type Csrf = { headerName: string; token: string };
+type WeeklySchedule = {
+    configured: boolean;
+    timeZone: string;
+    version: number;
+    scheduleRevision: number;
+    periods: Array<{
+        weekday: string;
+        localStart: string;
+        localEnd: string;
+    }>;
+};
+type AvailabilityPolicy = {
+    configured: boolean;
+    slotStepMinutes: number | null;
+    minimumNoticeHours: number | null;
+    bookingHorizonDays: number | null;
+};
+type SpecialException = {
+    kind: 'CLOSED' | 'SPECIAL';
+    periods: Array<{ localStart: string; localEnd: string }>;
+};
+type ClientOption = { clientId: string; displayName: string };
 
 function addDateDays(date: string, days: number) {
     const value = new Date(`${date}T12:00:00Z`);
@@ -117,9 +145,11 @@ async function readJson<T>(response: Response): Promise<T> {
 
 export function AdminAgendaPanel({
     enabled,
+    csrf,
     onSessionInvalid,
 }: {
     enabled: boolean;
+    csrf: Csrf | null;
     onSessionInvalid: (status: number) => void;
 }) {
     const [view, setView] = useState<'day' | 'week'>('day');
@@ -142,6 +172,36 @@ export function AdminAgendaPanel({
     const [selectedAppointmentId, setSelectedAppointmentId] = useState('');
     const [detailsLoading, setDetailsLoading] = useState(false);
     const [detailsError, setDetailsError] = useState('');
+    const [schedule, setSchedule] = useState<WeeklySchedule | null>(null);
+    const [availabilityPolicy, setAvailabilityPolicy] =
+        useState<AvailabilityPolicy | null>(null);
+    const [createOpen, setCreateOpen] = useState(false);
+    const [createSaving, setCreateSaving] = useState(false);
+    const [createError, setCreateError] = useState('');
+    const [createNotice, setCreateNotice] = useState('');
+    const [createUncertain, setCreateUncertain] = useState(false);
+    const [scheduleConflict, setScheduleConflict] = useState(false);
+    const [createServiceId, setCreateServiceId] = useState('');
+    const [clientMode, setClientMode] = useState<'existing' | 'new'>(
+        'existing',
+    );
+    const [clientQuery, setClientQuery] = useState('');
+    const [clientOptions, setClientOptions] = useState<ClientOption[]>([]);
+    const [selectedClientId, setSelectedClientId] = useState('');
+    const [newClientName, setNewClientName] = useState('');
+    const [newClientPhone, setNewClientPhone] = useState('');
+    const [bookingDate, setBookingDate] = useState('');
+    const [bookingTime, setBookingTime] = useState('09:00');
+    const [bookingOffset, setBookingOffset] = useState('');
+    const [dateException, setDateException] = useState<SpecialException | null>(
+        null,
+    );
+    const [exceptionDateLoaded, setExceptionDateLoaded] = useState('');
+    const [overrideSchedule, setOverrideSchedule] = useState(false);
+    const [overrideNotice, setOverrideNotice] = useState(false);
+    const [overrideReason, setOverrideReason] = useState('');
+    const createRequestGuard = useRef(false);
+    const createKeys = useRef(new Map<string, string>());
     const sequence = useRef(0);
     const detailSequence = useRef(0);
     const sessionInvalidRef = useRef(onSessionInvalid);
@@ -184,6 +244,121 @@ export function AdminAgendaPanel({
                 ),
             );
     }, [enabled]);
+
+    useEffect(() => {
+        if (!enabled) return;
+        let active = true;
+        void Promise.all([
+            fetch(apiBaseUrl + '/v1/admin/schedule/weekly-periods', {
+                credentials: 'same-origin',
+                cache: 'no-store',
+            }),
+            fetch(apiBaseUrl + '/v1/admin/availability-policy', {
+                credentials: 'same-origin',
+                cache: 'no-store',
+            }),
+        ])
+            .then(async ([weeklyResponse, policyResponse]) => {
+                if (
+                    [weeklyResponse.status, policyResponse.status].some(
+                        (status) => status === 401 || status === 403,
+                    )
+                ) {
+                    sessionInvalidRef.current(
+                        weeklyResponse.status === 401 ||
+                            weeklyResponse.status === 403
+                            ? weeklyResponse.status
+                            : policyResponse.status,
+                    );
+                    return;
+                }
+                const [weekly, policy] = await Promise.all([
+                    readJson<WeeklySchedule>(weeklyResponse),
+                    readJson<AvailabilityPolicy>(policyResponse),
+                ]);
+                if (!active) return;
+                setSchedule(weekly);
+                setAvailabilityPolicy(policy);
+                setTimeZone(weekly.timeZone);
+            })
+            .catch(() => {
+                if (active)
+                    setCreateError(
+                        'Não foi possível carregar as políticas atuais da agenda.',
+                    );
+            });
+        return () => {
+            active = false;
+        };
+    }, [enabled]);
+
+    useEffect(() => {
+        if (!enabled || !createOpen || bookingDate.length !== 10) return;
+        let active = true;
+        void fetch(
+            apiBaseUrl +
+                '/v1/admin/schedule/exceptions?' +
+                new URLSearchParams({ from: bookingDate, to: bookingDate }),
+            { credentials: 'same-origin', cache: 'no-store' },
+        )
+            .then(async (response) => {
+                if (response.status === 401 || response.status === 403) {
+                    sessionInvalidRef.current(response.status);
+                    return;
+                }
+                const result = await readJson<{
+                    exceptions: SpecialException[];
+                }>(response);
+                if (!active) return;
+                setDateException(result.exceptions[0] ?? null);
+                setExceptionDateLoaded(bookingDate);
+            })
+            .catch(() => {
+                if (active)
+                    setCreateError(
+                        'Não foi possível consultar exceções da data.',
+                    );
+            });
+        return () => {
+            active = false;
+        };
+    }, [bookingDate, createOpen, enabled]);
+
+    useEffect(() => {
+        if (
+            !enabled ||
+            !createOpen ||
+            clientMode !== 'existing' ||
+            clientQuery.trim().length < 2
+        ) {
+            return;
+        }
+        let active = true;
+        const timer = window.setTimeout(() => {
+            void fetch(
+                apiBaseUrl +
+                    '/v1/admin/clients?' +
+                    new URLSearchParams({ query: clientQuery.trim() }),
+                { credentials: 'same-origin', cache: 'no-store' },
+            )
+                .then(async (response) => {
+                    if (response.status === 401 || response.status === 403) {
+                        sessionInvalidRef.current(response.status);
+                        return;
+                    }
+                    const values = await readJson<ClientOption[]>(response);
+                    if (active) setClientOptions(values);
+                })
+                .catch(() => {
+                    if (active)
+                        setCreateError('Não foi possível buscar clientes.');
+                });
+        }, 250);
+        return () => {
+            active = false;
+            window.clearTimeout(timer);
+        };
+    }, [clientMode, clientQuery, createOpen, enabled]);
 
     const load = useCallback(async () => {
         if (!enabled) return;
@@ -354,6 +529,252 @@ export function AdminAgendaPanel({
         });
     }
 
+    const activeServices = services.filter(
+        (service) => service.status === 'ACTIVE',
+    );
+    const bookingService = activeServices.find(
+        (service) => service.serviceId === createServiceId,
+    );
+    const bookingOffsets = validLocalTimeOffsets(
+        bookingDate,
+        bookingTime,
+        timeZone,
+    );
+    const effectiveOffset = bookingOffsets.includes(bookingOffset)
+        ? bookingOffset
+        : bookingOffsets.length === 1
+          ? bookingOffsets[0]
+          : '';
+    const exceptionLoaded = exceptionDateLoaded === bookingDate;
+    const visibleClientOptions =
+        clientQuery.trim().length >= 2 ? clientOptions : [];
+    const weekdayNames = [
+        'SUNDAY',
+        'MONDAY',
+        'TUESDAY',
+        'WEDNESDAY',
+        'THURSDAY',
+        'FRIDAY',
+        'SATURDAY',
+    ];
+    const dateWeekday = bookingDate
+        ? weekdayNames[new Date(`${bookingDate}T12:00:00Z`).getUTCDay()]
+        : '';
+    const selectedPeriods =
+        dateException?.kind === 'SPECIAL'
+            ? dateException.periods
+            : (schedule?.periods.filter(
+                  (period) => period.weekday === dateWeekday,
+              ) ?? []);
+    const localMinute = bookingTime
+        ? Number(bookingTime.slice(0, 2)) * 60 + Number(bookingTime.slice(3, 5))
+        : -1;
+    const policyViolationBySchedule = Boolean(
+        bookingService &&
+        availabilityPolicy?.configured &&
+        schedule?.configured &&
+        !selectedPeriods.some((period) => {
+            const begin =
+                Number(period.localStart.slice(0, 2)) * 60 +
+                Number(period.localStart.slice(3, 5));
+            const end =
+                Number(period.localEnd.slice(0, 2)) * 60 +
+                Number(period.localEnd.slice(3, 5));
+            const occupiedMinutes =
+                bookingService.durationMinutes +
+                bookingService.bufferAfterMinutes;
+            return (
+                localMinute >= begin &&
+                localMinute < end &&
+                (localMinute - begin) %
+                    (availabilityPolicy.slotStepMinutes ?? 1) ===
+                    0 &&
+                localMinute + occupiedMinutes <= end
+            );
+        }),
+    );
+    const selectedStart =
+        effectiveOffset && bookingDate && bookingTime
+            ? new Date(`${bookingDate}T${bookingTime}:00${effectiveOffset}`)
+            : null;
+    const policyViolationByNotice = Boolean(
+        selectedStart &&
+        availabilityPolicy?.minimumNoticeHours != null &&
+        selectedStart.getTime() <
+            new Date(nowInstant).getTime() +
+                availabilityPolicy.minimumNoticeHours * 60 * 60 * 1000,
+    );
+    const outsideBookingHorizon = Boolean(
+        bookingDate &&
+        availabilityPolicy?.bookingHorizonDays != null &&
+        (bookingDate < today ||
+            bookingDate >
+                addDateDays(today, availabilityPolicy.bookingHorizonDays - 1)),
+    );
+    const specialOrClosedBlocksScheduleOverride = Boolean(
+        dateException && policyViolationBySchedule,
+    );
+
+    async function submitAdministrativeAppointment() {
+        if (
+            !csrf ||
+            !schedule ||
+            !bookingService ||
+            !selectedStart ||
+            createRequestGuard.current
+        )
+            return;
+        if (!exceptionLoaded || outsideBookingHorizon) {
+            setCreateError(
+                'A data ainda não foi validada ou está fora do horizonte permitido.',
+            );
+            return;
+        }
+        if (clientMode === 'existing' && !selectedClientId) {
+            setCreateError('Selecione um cliente ativo do tenant.');
+            return;
+        }
+        if (
+            clientMode === 'new' &&
+            (!newClientName.trim() || !newClientPhone.trim())
+        ) {
+            setCreateError('Informe nome e telefone do novo cliente.');
+            return;
+        }
+        if (
+            policyViolationBySchedule &&
+            (!overrideSchedule || specialOrClosedBlocksScheduleOverride)
+        ) {
+            setCreateError(
+                'Revise a regra de grade. Exceções CLOSED/SPECIAL não podem ser ultrapassadas por encaixe.',
+            );
+            return;
+        }
+        if (policyViolationByNotice && !overrideNotice) {
+            setCreateError(
+                'A antecedência mínima exige confirmação explícita do override.',
+            );
+            return;
+        }
+        const overridePolicies = [
+            ...(overrideSchedule ? ['OUTSIDE_WEEKLY_SCHEDULE'] : []),
+            ...(overrideNotice ? ['MIN_NOTICE'] : []),
+        ].sort();
+        if (overridePolicies.length > 0 && !overrideReason.trim()) {
+            setCreateError('Informe o motivo obrigatório para o encaixe.');
+            return;
+        }
+        if (
+            overrideSchedule !== policyViolationBySchedule ||
+            overrideNotice !== policyViolationByNotice
+        ) {
+            setCreateError(
+                'As exceções selecionadas precisam corresponder às regras estimadas para este horário.',
+            );
+            return;
+        }
+        const body = {
+            serviceId: createServiceId,
+            startsAt: `${bookingDate}T${bookingTime}:00${effectiveOffset}`,
+            ...(clientMode === 'existing'
+                ? { clientId: selectedClientId }
+                : { client: { name: newClientName, phone: newClientPhone } }),
+            overridePolicies,
+            ...(overridePolicies.length > 0
+                ? { reason: overrideReason.trim() }
+                : {}),
+            expectedScheduleVersion: schedule.scheduleRevision,
+        };
+        const scope = 'admin-appointment-create-v1';
+        const fingerprint = JSON.stringify([scope, body]);
+        const key = commandKey(createKeys.current, scope, body);
+        createRequestGuard.current = true;
+        setCreateSaving(true);
+        setCreateError('');
+        setCreateNotice('');
+        try {
+            const response = await fetch(
+                apiBaseUrl + '/v1/admin/appointments',
+                {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        [csrf.headerName]: csrf.token,
+                        'Idempotency-Key': key,
+                    },
+                    body: JSON.stringify(body),
+                },
+            );
+            if (response.status === 401 || response.status === 403) {
+                sessionInvalidRef.current(response.status);
+                return;
+            }
+            if (!response.ok) {
+                const errorBody = (await response.json().catch(() => null)) as {
+                    error?: { code?: string; message?: string };
+                } | null;
+                const code = errorBody?.error?.code ?? 'HTTP_ERROR';
+                setCreateError(
+                    errorBody?.error?.message ??
+                        `Falha HTTP ${response.status}.`,
+                );
+                if (code === 'VERSION_CONFLICT') {
+                    setScheduleConflict(true);
+                    setCreateNotice(
+                        'Atualize a agenda/revisão antes de decidir novamente; os campos permanecem preservados.',
+                    );
+                }
+                if (code === 'OPERATION_IN_PROGRESS') setCreateUncertain(true);
+                else setCreateUncertain(false);
+                return;
+            }
+            const created = (await response.json()) as {
+                appointmentId: string;
+            };
+            createKeys.current.delete(fingerprint);
+            setCreateUncertain(false);
+            setCreateNotice('Reserva confirmada e persistida.');
+            setOverrideReason('');
+            await load();
+            await openDetails(created.appointmentId);
+        } catch {
+            setCreateUncertain(true);
+            setCreateError(
+                'A resposta não chegou; o resultado pode estar confirmado. Repita o mesmo comando sem alterar os campos.',
+            );
+        } finally {
+            createRequestGuard.current = false;
+            setCreateSaving(false);
+        }
+    }
+
+    async function refreshScheduleRevision() {
+        try {
+            const response = await fetch(
+                apiBaseUrl + '/v1/admin/schedule/weekly-periods',
+                {
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                },
+            );
+            if (response.status === 401 || response.status === 403) {
+                sessionInvalidRef.current(response.status);
+                return;
+            }
+            const updated = await readJson<WeeklySchedule>(response);
+            setSchedule(updated);
+            setScheduleConflict(false);
+            setCreateNotice(
+                'Revisão atualizada. Revise as regras e confirme novamente.',
+            );
+            setOverrideSchedule(false);
+            setOverrideNotice(false);
+        } catch {
+            setCreateError('Não foi possível atualizar a revisão da agenda.');
+        }
+    }
+
     return (
         <section className="admin-agenda" aria-labelledby="admin-agenda-title">
             <h2 id="admin-agenda-title">Agenda</h2>
@@ -363,6 +784,402 @@ export function AdminAgendaPanel({
                         Horários exibidos no fuso do tenant:{' '}
                         <strong>{timeZone || 'carregando…'}</strong>.
                     </p>
+                    <div className="admin-agenda__creation">
+                        <button
+                            type="button"
+                            aria-expanded={createOpen}
+                            onClick={() => {
+                                setCreateOpen((open) => !open);
+                                if (!bookingDate) setBookingDate(anchorDate);
+                                if (!createServiceId && activeServices[0]) {
+                                    setCreateServiceId(
+                                        activeServices[0].serviceId,
+                                    );
+                                }
+                                setCreateError('');
+                            }}
+                        >
+                            {createOpen
+                                ? 'Fechar nova reserva'
+                                : 'Nova reserva'}
+                        </button>
+                        {createOpen && (
+                            <form
+                                aria-label="Criar reserva administrativa"
+                                onSubmit={(event) => {
+                                    event.preventDefault();
+                                    void submitAdministrativeAppointment();
+                                }}
+                            >
+                                <fieldset
+                                    disabled={createSaving || createUncertain}
+                                >
+                                    <legend>Reserva administrativa</legend>
+                                    <p>
+                                        Escolha um horário diretamente; a lista
+                                        carregada da agenda não representa
+                                        disponibilidade. O servidor revalida
+                                        grade, exceções, bloqueios e ocupações
+                                        no commit.
+                                    </p>
+                                    {!schedule ||
+                                    !availabilityPolicy?.configured ? (
+                                        <p role="alert">
+                                            Grade/revisão ou políticas
+                                            obrigatórias ausentes. Não há
+                                            defaults; configure a agenda antes
+                                            de reservar.
+                                        </p>
+                                    ) : (
+                                        <p>
+                                            Revisão da agenda:{' '}
+                                            {schedule.scheduleRevision} · fuso{' '}
+                                            {schedule.timeZone}
+                                        </p>
+                                    )}
+                                    <label>
+                                        Serviço ativo
+                                        <select
+                                            value={createServiceId}
+                                            onChange={(event) =>
+                                                setCreateServiceId(
+                                                    event.target.value,
+                                                )
+                                            }
+                                            required
+                                        >
+                                            <option value="">Selecione</option>
+                                            {activeServices.map((service) => (
+                                                <option
+                                                    key={service.serviceId}
+                                                    value={service.serviceId}
+                                                >
+                                                    {service.name} ·{' '}
+                                                    {service.durationMinutes}{' '}
+                                                    min +{' '}
+                                                    {service.bufferAfterMinutes}{' '}
+                                                    min de buffer
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </label>
+                                    <fieldset>
+                                        <legend>Cliente</legend>
+                                        <label>
+                                            <input
+                                                type="radio"
+                                                checked={
+                                                    clientMode === 'existing'
+                                                }
+                                                onChange={() =>
+                                                    setClientMode('existing')
+                                                }
+                                            />
+                                            Cliente existente
+                                        </label>
+                                        <label>
+                                            <input
+                                                type="radio"
+                                                checked={clientMode === 'new'}
+                                                onChange={() =>
+                                                    setClientMode('new')
+                                                }
+                                            />
+                                            Novo cliente
+                                        </label>
+                                        {clientMode === 'existing' ? (
+                                            <>
+                                                <label>
+                                                    Buscar por nome (mínimo 2
+                                                    caracteres; sem telefone)
+                                                    <input
+                                                        value={clientQuery}
+                                                        onChange={(event) =>
+                                                            setClientQuery(
+                                                                event.target
+                                                                    .value,
+                                                            )
+                                                        }
+                                                        autoComplete="off"
+                                                    />
+                                                </label>
+                                                <label>
+                                                    Cliente
+                                                    <select
+                                                        value={selectedClientId}
+                                                        onChange={(event) =>
+                                                            setSelectedClientId(
+                                                                event.target
+                                                                    .value,
+                                                            )
+                                                        }
+                                                        required
+                                                    >
+                                                        <option value="">
+                                                            Selecione um cliente
+                                                            encontrado
+                                                        </option>
+                                                        {visibleClientOptions.map(
+                                                            (client) => (
+                                                                <option
+                                                                    key={
+                                                                        client.clientId
+                                                                    }
+                                                                    value={
+                                                                        client.clientId
+                                                                    }
+                                                                >
+                                                                    {
+                                                                        client.displayName
+                                                                    }
+                                                                </option>
+                                                            ),
+                                                        )}
+                                                    </select>
+                                                </label>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <label>
+                                                    Nome
+                                                    <input
+                                                        value={newClientName}
+                                                        onChange={(event) =>
+                                                            setNewClientName(
+                                                                event.target
+                                                                    .value,
+                                                            )
+                                                        }
+                                                        maxLength={120}
+                                                        required
+                                                    />
+                                                </label>
+                                                <label>
+                                                    Telefone para cadastro (será
+                                                    normalizado em E.164; não
+                                                    verifica identidade)
+                                                    <input
+                                                        value={newClientPhone}
+                                                        onChange={(event) =>
+                                                            setNewClientPhone(
+                                                                event.target
+                                                                    .value,
+                                                            )
+                                                        }
+                                                        maxLength={80}
+                                                        autoComplete="tel"
+                                                        required
+                                                    />
+                                                </label>
+                                            </>
+                                        )}
+                                    </fieldset>
+                                    <div className="admin-agenda__controls">
+                                        <label>
+                                            Data local ({timeZone})
+                                            <input
+                                                type="date"
+                                                value={bookingDate}
+                                                onChange={(event) =>
+                                                    setBookingDate(
+                                                        event.target.value,
+                                                    )
+                                                }
+                                                required
+                                            />
+                                        </label>
+                                        <label>
+                                            Horário local
+                                            <input
+                                                type="time"
+                                                value={bookingTime}
+                                                onChange={(event) =>
+                                                    setBookingTime(
+                                                        event.target.value,
+                                                    )
+                                                }
+                                                required
+                                            />
+                                        </label>
+                                    </div>
+                                    {bookingOffsets.length === 0 &&
+                                        bookingDate && (
+                                            <p role="alert">
+                                                Horário local inexistente no
+                                                fuso do tenant.
+                                            </p>
+                                        )}
+                                    {bookingOffsets.length > 1 && (
+                                        <label>
+                                            Horário ambíguo: escolha
+                                            explicitamente o offset
+                                            <select
+                                                value={bookingOffset}
+                                                onChange={(event) =>
+                                                    setBookingOffset(
+                                                        event.target.value,
+                                                    )
+                                                }
+                                                required
+                                            >
+                                                <option value="">
+                                                    Escolha o offset
+                                                </option>
+                                                {bookingOffsets.map(
+                                                    (offset) => (
+                                                        <option
+                                                            key={offset}
+                                                            value={offset}
+                                                        >
+                                                            {offset}
+                                                        </option>
+                                                    ),
+                                                )}
+                                            </select>
+                                        </label>
+                                    )}
+                                    {dateException?.kind === 'CLOSED' && (
+                                        <p role="alert">
+                                            Esta data foi explicitamente fechada
+                                            e não pode ser ignorada.
+                                        </p>
+                                    )}
+                                    {dateException?.kind === 'SPECIAL' && (
+                                        <p>
+                                            Esta data usa os períodos especiais
+                                            como configuração final; o encaixe
+                                            não ultrapassa esses períodos.
+                                        </p>
+                                    )}
+                                    <p>
+                                        Estimativa local:{' '}
+                                        {policyViolationBySchedule
+                                            ? 'fora da grade/slot configurado'
+                                            : 'dentro da grade estimada'}
+                                        ;{' '}
+                                        {policyViolationByNotice
+                                            ? 'antecedência abaixo do mínimo'
+                                            : 'antecedência estimada válida'}
+                                        . A hora do navegador é apenas
+                                        indicativa; servidor e PostgreSQL
+                                        decidem.
+                                    </p>
+                                    <fieldset>
+                                        <legend>Exceções explícitas</legend>
+                                        <label>
+                                            <input
+                                                type="checkbox"
+                                                checked={overrideSchedule}
+                                                disabled={
+                                                    !policyViolationBySchedule ||
+                                                    specialOrClosedBlocksScheduleOverride ||
+                                                    outsideBookingHorizon
+                                                }
+                                                onChange={(event) =>
+                                                    setOverrideSchedule(
+                                                        event.target.checked,
+                                                    )
+                                                }
+                                            />
+                                            Ignorar somente a grade semanal/slot
+                                            para este encaixe
+                                        </label>
+                                        <label>
+                                            <input
+                                                type="checkbox"
+                                                checked={overrideNotice}
+                                                disabled={
+                                                    !policyViolationByNotice ||
+                                                    outsideBookingHorizon
+                                                }
+                                                onChange={(event) =>
+                                                    setOverrideNotice(
+                                                        event.target.checked,
+                                                    )
+                                                }
+                                            />
+                                            Ignorar somente a antecedência
+                                            mínima
+                                        </label>
+                                    </fieldset>
+                                    {(overrideSchedule || overrideNotice) && (
+                                        <label>
+                                            Motivo obrigatório
+                                            <textarea
+                                                value={overrideReason}
+                                                onChange={(event) =>
+                                                    setOverrideReason(
+                                                        event.target.value,
+                                                    )
+                                                }
+                                                maxLength={500}
+                                                required
+                                            />
+                                        </label>
+                                    )}
+                                    {outsideBookingHorizon && (
+                                        <p role="alert">
+                                            Data fora do horizonte configurado;
+                                            essa regra não pode ser ignorada.
+                                        </p>
+                                    )}
+                                </fieldset>
+                                {createError && (
+                                    <p role="alert">{createError}</p>
+                                )}
+                                {createNotice && (
+                                    <output aria-live="polite">
+                                        {createNotice}
+                                    </output>
+                                )}
+                                {createUncertain && (
+                                    <p role="alert">
+                                        Resultado incerto: não altere os campos.
+                                        Reenvie o mesmo comando para recuperar o
+                                        resultado original.
+                                    </p>
+                                )}
+                                {scheduleConflict && (
+                                    <button
+                                        type="button"
+                                        onClick={() =>
+                                            void refreshScheduleRevision()
+                                        }
+                                    >
+                                        Atualizar revisão da agenda
+                                    </button>
+                                )}
+                                <button
+                                    type="submit"
+                                    disabled={
+                                        !csrf ||
+                                        createSaving ||
+                                        !schedule ||
+                                        !availabilityPolicy?.configured ||
+                                        !bookingService ||
+                                        !effectiveOffset ||
+                                        !exceptionLoaded ||
+                                        outsideBookingHorizon ||
+                                        dateException?.kind === 'CLOSED' ||
+                                        policyViolationBySchedule !==
+                                            overrideSchedule ||
+                                        policyViolationByNotice !==
+                                            overrideNotice ||
+                                        (specialOrClosedBlocksScheduleOverride &&
+                                            policyViolationBySchedule) ||
+                                        ((overrideSchedule || overrideNotice) &&
+                                            !overrideReason.trim())
+                                    }
+                                >
+                                    {createSaving
+                                        ? 'Confirmando…'
+                                        : createUncertain
+                                          ? 'Repetir mesmo comando'
+                                          : 'Confirmar reserva'}
+                                </button>
+                            </form>
+                        )}
+                    </div>
                     <div
                         className="admin-agenda__controls"
                         aria-label="Controles da agenda"
@@ -708,6 +1525,12 @@ export function AdminAgendaPanel({
                                                 item.occurredAt,
                                                 details.timeZone,
                                                 true,
+                                            )}
+                                            {item.reason && (
+                                                <span>
+                                                    {' '}
+                                                    · Motivo: {item.reason}
+                                                </span>
                                             )}
                                         </li>
                                     ))}
