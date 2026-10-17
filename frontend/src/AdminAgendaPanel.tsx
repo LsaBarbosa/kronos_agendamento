@@ -1963,6 +1963,18 @@ export function AdminAgendaPanel({
                                                         {item.versionAfter}
                                                     </span>
                                                 )}
+                                            {(!item.previousStartsAt ||
+                                                !item.newStartsAt) &&
+                                                item.versionBefore !== null &&
+                                                item.versionAfter !== null && (
+                                                    <span>
+                                                        {' '}
+                                                        · versão{' '}
+                                                        {
+                                                            item.versionBefore
+                                                        } → {item.versionAfter}
+                                                    </span>
+                                                )}
                                             {item.reason && (
                                                 <span>
                                                     {' '}
