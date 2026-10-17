@@ -1164,7 +1164,7 @@ try {
     await waitForText('Estado atualizado e persistido.', evaluate);
     await waitUntil(() => evaluate(`(() => {
       const text = document.querySelector('.admin-agenda__details')?.innerText ?? '';
-      return text.includes('COMPLETED') && text.includes('versão 2') && text.includes('APPOINTMENT_COMPLETED');
+      return text.includes('COMPLETED') && text.includes('versão 3') && text.includes('APPOINTMENT_COMPLETED') && text.includes('versão 2 → 3');
     })()`));
 
     const noShowAppointment = await evaluate(

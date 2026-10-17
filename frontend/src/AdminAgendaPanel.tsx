@@ -2310,11 +2310,9 @@ export function AdminAgendaPanel({
                                             Atualizar detalhes da reserva
                                         </button>
                                     )}
-                                    {outcomeNotice && (
-                                        <output>{outcomeNotice}</output>
-                                    )}
                                 </section>
                             )}
+                            {outcomeNotice && <output>{outcomeNotice}</output>}
                         </section>
                     )}
                     {detailsLoading && (
