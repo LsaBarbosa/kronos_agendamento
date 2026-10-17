@@ -319,6 +319,16 @@ Preferir cancelamento lógico para objetos que já produziram efeitos auditávei
 | POST | `/api/v1/admin/appointments/{id}/correct-outcome` | correção excepcional |
 | GET | `/api/v1/admin/appointments/{id}/history` | linha do tempo |
 
+#### Consulta administrativa da agenda (AGD-020)
+
+- `from` e `to` são datas locais inclusivas no timezone IANA atual do tenant; `from` não pode ser posterior a `to`. A consulta aceita no máximo 366 datas locais inclusivas, igual ao limite das consultas administrativas de bloqueios. Esta janela não é limitada pelo horizonte de novas reservas e permite consultar histórico existente.
+- `status` é opcional e aceita somente estados realmente persistidos/documentados; no estado atual, `CONFIRMED`. `serviceId` é opcional e pode localizar reservas cujo serviço foi inativado. Um filtro inválido retorna `400 VALIDATION_ERROR`; datas invertidas ou janela maior que 366 também retornam `400 VALIDATION_ERROR`.
+- A listagem é ordenada por `starts_at ASC, appointment_id ASC`. `limit` default 50, intervalo 1–100; `cursor` opaco é keyset dessa ordenação e a resposta informa `nextCursor`, `hasMore` e `timeZone`. Cursor não seleciona tenant e não é credencial. Cada página é uma leitura independente; novas reservas podem aparecer somente após atualizar, sem estabilidade de snapshot entre requisições.
+- A janela temporal é `[from.atStartOfDay(zone), (to + 1 dia).atStartOfDay(zone))`, convertida para instantes com regras IANA (inclusive DST). Entram reservas cuja ocupação [startsAt, occupiedUntil) intersecta a janela: `startsAt < windowEnd AND occupiedUntil > windowStart`; uma reserva iniciada antes de `from` permanece visível se seu buffer alcançar a janela.
+- Lista e detalhe usam snapshot imutável da reserva: nome do serviço, duração, buffer, início/fim do atendimento, fim da ocupação e timezone. Nome do cliente é exposto apenas no contexto administrativo autorizado; telefone é omitido. Histórico vem de `appointment_history` e não expõe tabela/detalhes internos de auditoria, credenciais ou contexto OIDC. ID alheio e inexistente são indistinguíveis (`404 RESOURCE_NOT_FOUND`).
+- Bloqueios são consultados pela rota administrativa existente, tenant-scoped e com a mesma janela local. Bloqueio ativo e cancelado continuam consultáveis; UI distingue estado e não esconde interseções. A ausência em uma página não prova disponibilidade.
+- As rotas de agenda são somente leitura e não têm CAS. A proteção contra sobrescrita concorrente é aplicável quando histórias de mutação administrativa forem implementadas; esta história não cria comandos nem altera versões.
+
 Comandos de encaixe incluem:
 
 ```json
