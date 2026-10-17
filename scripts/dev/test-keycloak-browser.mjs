@@ -1132,6 +1132,13 @@ try {
     await setFieldByLabel('Nova data local', retryRescheduleDate.toISOString().slice(0, 10), evaluate);
     await setFieldByLabel('Novo horário local', '10:00', evaluate);
     await clickButtonByText('Confirmar remarcação', evaluate);
+    await waitForText(
+        'A reserva ou agenda mudou. Atualize as versões e revise o destino antes de enviar uma nova intenção.',
+        evaluate,
+    );
+    await clickButtonByText('Atualizar versões sem alterar o destino', evaluate);
+    await waitForText('Versões atualizadas. Revise a data e confirme uma nova intenção.', evaluate);
+    await clickButtonByText('Confirmar remarcação', evaluate);
     await waitUntil(() => evaluate(`window.__pendingRescheduleReady === true`));
     const originalRescheduleRequest = await evaluate('window.__pendingRescheduleRequest');
     if (!originalRescheduleRequest.url.includes(appointmentIdInEachTab[0])) {
