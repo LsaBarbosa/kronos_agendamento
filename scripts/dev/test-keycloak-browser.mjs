@@ -488,7 +488,7 @@ try {
       [...document.querySelectorAll('button')].find(button => button.innerText === 'Fechar detalhes')?.click();
     })()`);
     await waitUntil(() =>
-        evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('Visitante de demonstração')`),
+        evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('Visitante de demonstração') && [...document.querySelectorAll('[role=alert]')].some(alert => alert.innerText.includes('Resolva primeiro a remarcação'))`),
     );
     await evaluate('window.__releaseRescheduleResponse?.()');
     await waitForText('A resposta não chegou; o resultado pode estar confirmado.', evaluate);
@@ -550,7 +550,11 @@ try {
     );
     if (rescheduleEffects !== 1) throw new Error('Retry duplicou efeitos ou não preservou versão única.');
     await evaluate(`document.querySelector('[data-appointment-id="${secondAppointmentId}"] button')?.click()`);
-    await waitForText('Segundo visitante de demonstração', evaluate);
+    await waitUntil(() =>
+        evaluate(
+            `document.querySelector('.admin-agenda__details')?.innerText.includes('Segundo visitante de demonstração')`,
+        ),
+    );
     await clickButtonByText('Remarcar', evaluate);
     await setFieldByLabel('Novo horário local', '10:00', evaluate);
     await evaluate(`(() => {
@@ -582,7 +586,7 @@ try {
     await evaluate(`document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"] button')?.click()`);
     await waitUntil(() =>
         evaluate(
-            `document.querySelector('.admin-agenda__details')?.innerText.includes('Segundo visitante de demonstração')`,
+            `document.querySelector('.admin-agenda__details')?.innerText.includes('Segundo visitante de demonstração') && [...document.querySelectorAll('[role=alert]')].some(alert => alert.innerText.includes('Resolva primeiro a remarcação'))`,
         ),
     );
     await evaluate('window.__releaseDelayedSuccess?.()');
@@ -596,7 +600,11 @@ try {
     if (delayedSuccessVersion !== 2)
         throw new Error('Resposta de sucesso atrasada não confirmou a única alteração esperada em B.');
     await evaluate(`document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"] button')?.click()`);
-    await waitForText('Visitante de demonstração', evaluate);
+    await waitUntil(() =>
+        evaluate(
+            `document.querySelector('.admin-agenda__details')?.innerText.includes('Visitante de demonstração') && !document.querySelector('.admin-agenda__details')?.innerText.includes('Segundo visitante de demonstração')`,
+        ),
+    );
     const oldDate = publicDate;
     const oldDateSlots = await evaluate(
         `fetch('/api/v1/public/${encodeURIComponent(publication.slug)}/availability?serviceId=${encodeURIComponent(publicService.serviceId)}&from=${oldDate}&to=${oldDate}').then(response => response.json()).then(result => result.days[0].slots)`,
