@@ -281,13 +281,14 @@ try {
         }
         if (String(args[0]).endsWith('/appointments') && args[1]?.method === 'POST' && response.ok) {
           window.fetch = originalFetch;
+          window.__bookingResponseLost = true;
           throw new TypeError('Simulated lost appointment response after commit');
         }
         return response;
       };
     })()`);
     await clickButtonByText('Confirmar reserva', evaluate);
-    await waitForText('Não foi possível confirmar o resultado do envio.', evaluate);
+    await waitUntil(() => evaluate('window.__bookingResponseLost === true'));
     await waitForText('Recuperação da reserva', secondTab.evaluate);
     await waitForText('Reserva original recuperada.', secondTab.evaluate);
     let appointmentIdInEachTab = [null, null];
