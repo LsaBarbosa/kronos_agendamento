@@ -446,9 +446,7 @@ try {
     await waitForText('APPOINTMENT_CREATED', evaluate);
     await clickButtonByText('Remarcar', evaluate);
     const rescheduleDate = await evaluate(`(() => {
-      const date = new Date(${JSON.stringify(publicDate)} + 'T12:00:00Z');
-      date.setUTCDate(date.getUTCDate() + 1);
-      return date.toISOString().slice(0, 10);
+      return ${JSON.stringify(publicDate)};
     })()`);
     await setFieldByLabel('Nova data local', rescheduleDate, evaluate);
     await setFieldByLabel('Novo horário local', '10:00', evaluate);
@@ -556,7 +554,7 @@ try {
         ),
     );
     await clickButtonByText('Remarcar', evaluate);
-    await setFieldByLabel('Novo horário local', '10:00', evaluate);
+    await setFieldByLabel('Novo horário local', '11:00', evaluate);
     await clickButtonByText('Confirmar remarcação', evaluate);
     await waitForText(
         'A reserva ou agenda mudou. Atualize as versões e revise o destino antes de enviar uma nova intenção.',
