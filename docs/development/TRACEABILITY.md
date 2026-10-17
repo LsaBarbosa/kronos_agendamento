@@ -119,6 +119,8 @@ Correção da revisão do PR #4 (`01f3c62`, formatação `9852453`): resultado d
 | V13, Flyway e privilégios | `V13__create_public_appointments.sql`; teste fresh/upgrade, `validate`/rerun, referências tenant, exclusion constraint e permissões runtime. | V1–V12 imutáveis. Preflight hospedado e ambiente de homologação seguem pendentes. |
 | Revisão | Dois agentes independentes, somente leitura: requisitos/snapshot/UI e concorrência/isolamento/transações. Finding de `READ_COMMITTED` explícito aplicado; outros achados esclarecidos/cobertos por teste ou registrados como risco de privacidade. | Revisão de agente não é aprovação humana no GitHub. |
 
+| Retry incerto seguido de despublicação | Revisão independente do head `1a66e71b03de4243761b219d31a7b11bcf684d9e` apontou que 404 no replay liberava a UI para nova intenção. | Corrigido: em retry que já estava incerto, resposta 404 preserva estado `uncertain`, chave/corpo e bloqueio de campos, com mensagem para não iniciar outra reserva. `frontend`: `npm run format:check`, `npm run lint`, `npm test` (23 Vitest), `npm run check` passaram localmente em 16/10/2026; SHA commitado/CI remoto ainda pendentes. Revisão de agentes não equivale a aprovação humana. |
+
 ### Verificação corretiva e publicação de AGD-015
 
 | Evidência | SHA/execução | Resultado |

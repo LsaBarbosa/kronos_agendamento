@@ -49,7 +49,7 @@
 5. [x] Implementar caso de uso/API com chave idempotente e revalidação antes do replay e sob lock.
 6. [x] Conectar formulário/retry com CSRF e estado de resultado desconhecido.
 7. [x] Adicionar testes PostgreSQL de constraints, rollback, replay e corridas; browser E2E criado para App CI.
-8. [x] Revisões independentes somente leitura concluídas; incompatibilidade do `@MockitoBean` multimódulo corrigida por bean `@Primary` isolado. Após primeiro CI, corrigido import faltante na fixture E2E e, depois, serialização HTTP que removia o offset tenant; teste PostgreSQL passou com `-03:00`. Revisão final identificou risco de alterar uma intenção incerta: controles de serviço/data/slot/dados ficam bloqueados e `OPERATION_IN_PROGRESS` mantém o estado incerto, deixando ativo somente o retry com mesma chave/corpo. App CI/CodeQL passaram no head `35c6ff8`; a falha anterior foi uma expectativa E2E desatualizada sobre o texto final, corrigida sem reduzir assertions.
+8. [x] Revisões independentes somente leitura concluídas; incompatibilidade do `@MockitoBean` multimódulo corrigida por bean `@Primary` isolado. Após primeiro CI, corrigido import faltante na fixture E2E e, depois, serialização HTTP que removia o offset tenant; teste PostgreSQL passou com `-03:00`. Revisão final encontrou que um retry incerto recebendo 404 após despublicação liberaria a intenção. A UI agora mantém estado incerto e bloqueia nova intenção, sem alegar confirmação nem permitir troca do comando; o caso novo passou em Vitest local. App CI/CodeQL do head anterior passaram, mas não validam esta correção ainda. A falha anterior de E2E por texto desatualizado foi corrigida sem reduzir assertions.
 
 ## Riscos e limites
 
@@ -63,4 +63,5 @@
 ## Encerramento ou retomada
 
 - AGD-015 permanece parcial: fluxo funcional, concorrência, atomicidade, PostgreSQL e CI têm evidência neste incremento; readiness legal/comercial real, homologação HTTPS/staging, preflight hospedado, scan completo, retenção e WhatsApp real continuam pendentes. A intenção incerta fica em memória enquanto a página está montada; reload/fechamento perde o estado local, sem persistir PII no browser. Recuperação após reload permanece evolução de AGD-016.
+- A nova correção para 404 após resultado incerto está localmente validada, aguardando commit/publicação e App CI/CodeQL do head final antes de qualquer integração.
 - O próximo incremento recomendado é AGD-016 para endurecer retry consultável/recuperável; futuras histórias continuam responsáveis por acesso de cliente, notificações e comandos de agenda.

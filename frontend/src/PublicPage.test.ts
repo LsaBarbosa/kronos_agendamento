@@ -6,6 +6,7 @@ import {
     loadPublicBusiness,
     loadPublicServices,
     publishTelemetry,
+    unavailableBookingOutcome,
 } from './PublicPage';
 import { createPublicBooking, PublicBookingError } from './publicBookingApi';
 
@@ -36,6 +37,19 @@ const availability = {
         },
     ],
 };
+
+describe('uncertain public booking state', () => {
+    it('does not release an unresolved intent when the page is unpublished', () => {
+        expect(unavailableBookingOutcome(true)).toEqual({
+            state: 'uncertain',
+            message: expect.stringContaining('não inicie outra reserva'),
+        });
+        expect(unavailableBookingOutcome(false)).toEqual({
+            state: 'unavailable',
+            message: 'Esta página pública não está mais disponível.',
+        });
+    });
+});
 
 function jsonResponse(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), {

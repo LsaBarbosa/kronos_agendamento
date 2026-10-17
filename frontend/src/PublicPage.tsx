@@ -48,6 +48,19 @@ export type PublicAvailability = {
 export type PublicTelemetryEvent =
     'SERVICE_SELECTED' | 'SLOT_SELECTED' | 'FLOW_ABANDONED';
 
+export function unavailableBookingOutcome(wasUncertain: boolean) {
+    return wasUncertain
+        ? {
+              state: 'uncertain' as const,
+              message:
+                  'Esta página pública deixou de estar disponível. Não foi possível verificar o resultado da operação original; não inicie outra reserva. Tente recuperar quando o serviço estiver disponível.',
+          }
+        : {
+              state: 'unavailable' as const,
+              message: 'Esta página pública não está mais disponível.',
+          };
+}
+
 export type PublicPageState =
     | 'loading'
     | 'ready'
@@ -475,6 +488,7 @@ function PublicPageContent({
             };
         }
         const intent = bookingIntent.current;
+        const retryingUncertainIntent = bookingState === 'uncertain';
         bookingInFlight.current = true;
         setBookingState('submitting');
         setBookingMessage('Enviando sua solicitação…');
@@ -528,10 +542,11 @@ function PublicPageContent({
                     );
                     setAvailabilityRefresh((current) => current + 1);
                 } else if (error.status === 404) {
-                    setBookingState('unavailable');
-                    setBookingMessage(
-                        'Esta página pública não está mais disponível.',
+                    const outcome = unavailableBookingOutcome(
+                        retryingUncertainIntent,
                     );
+                    setBookingState(outcome.state);
+                    setBookingMessage(outcome.message);
                 } else if (error.status === 503) {
                     setBookingState('unavailable');
                     setBookingMessage(
