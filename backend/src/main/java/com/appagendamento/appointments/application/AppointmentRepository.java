@@ -32,5 +32,13 @@ public interface AppointmentRepository {
 
   Optional<AdminAppointmentView> findAdminAppointment(UUID tenantId, UUID appointmentId);
 
+  Optional<Appointment> findForReschedule(UUID tenantId, UUID appointmentId);
+
+  boolean reschedule(
+      Appointment current,
+      long expectedVersion,
+      com.appagendamento.appointments.api.AdministrativeBookingAssessment assessment,
+      String reason);
+
   List<AppointmentHistoryEntry> findAdminAppointmentHistory(UUID tenantId, UUID appointmentId);
 }

@@ -228,6 +228,8 @@ Critérios de aceite:
 - Versão é incrementada e história registra antes/depois.
 - Lembrete antigo é invalidado e nova notificação é solicitada.
 
+**Nota de evidência:** a base ainda não possui pipeline/intenção persistida de lembretes. AGD-022 pode registrar `AppointmentRescheduled` na mesma transação, mas isso não comprova invalidação do lembrete obsoleto nem solicitação entregue. O subcritério permanece pendente até a integração versionada prevista em AGD-030/031; não alegar envio por fornecedor.
+
 ### AGD-023 — Cancelamento e encerramento
 
 **Prioridade:** P0 · **Tamanho:** M

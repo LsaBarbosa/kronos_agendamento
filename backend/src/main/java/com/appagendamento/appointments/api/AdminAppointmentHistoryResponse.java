@@ -21,7 +21,21 @@ public record AdminAppointmentHistoryResponse(String timeZone, List<Entry> items
                         item.actorRef(),
                         item.reasonCode(),
                         item.reason(),
-                        item.occurredAt().atZone(zone).toOffsetDateTime()))
+                        item.occurredAt().atZone(zone).toOffsetDateTime(),
+                        item.previousStartsAt() == null
+                            ? null
+                            : item.previousStartsAt().atZone(zone).toOffsetDateTime(),
+                        item.previousOccupiedUntil() == null
+                            ? null
+                            : item.previousOccupiedUntil().atZone(zone).toOffsetDateTime(),
+                        item.newStartsAt() == null
+                            ? null
+                            : item.newStartsAt().atZone(zone).toOffsetDateTime(),
+                        item.newOccupiedUntil() == null
+                            ? null
+                            : item.newOccupiedUntil().atZone(zone).toOffsetDateTime(),
+                        item.versionBefore(),
+                        item.versionAfter()))
             .toList());
   }
 
@@ -32,5 +46,11 @@ public record AdminAppointmentHistoryResponse(String timeZone, List<Entry> items
       String actorRef,
       String reasonCode,
       String reason,
-      OffsetDateTime occurredAt) {}
+      OffsetDateTime occurredAt,
+      OffsetDateTime previousStartsAt,
+      OffsetDateTime previousOccupiedUntil,
+      OffsetDateTime newStartsAt,
+      OffsetDateTime newOccupiedUntil,
+      Long versionBefore,
+      Long versionAfter) {}
 }

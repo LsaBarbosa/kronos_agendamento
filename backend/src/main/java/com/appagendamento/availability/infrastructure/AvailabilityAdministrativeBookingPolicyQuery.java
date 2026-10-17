@@ -58,9 +58,6 @@ public class AvailabilityAdministrativeBookingPolicyQuery
       long expectedScheduleRevision,
       boolean allowOutsideWeeklySchedule,
       boolean allowMinimumNotice) {
-    if (!schedules.lockScheduleRevision(tenantId, expectedScheduleRevision)) {
-      throw new AdministrativeScheduleVersionConflictException();
-    }
     ServiceAvailabilityView service =
         services
             .findForBooking(tenantId, serviceId)
@@ -68,6 +65,54 @@ public class AvailabilityAdministrativeBookingPolicyQuery
                 value -> value.tenantId().equals(tenantId) && value.serviceId().equals(serviceId))
             .filter(ServiceAvailabilityView::active)
             .orElseThrow(AdministrativeScheduleConflictException::new);
+    return assess(
+        tenantId,
+        serviceId,
+        service.durationMinutes(),
+        service.bufferAfterMinutes(),
+        null,
+        requestedStart,
+        expectedScheduleRevision,
+        allowOutsideWeeklySchedule,
+        allowMinimumNotice);
+  }
+
+  @Override
+  public AdministrativeBookingAssessment assessReschedule(
+      UUID tenantId,
+      UUID appointmentId,
+      UUID serviceId,
+      int durationMinutes,
+      int bufferAfterMinutes,
+      java.time.OffsetDateTime requestedStart,
+      long expectedScheduleRevision,
+      boolean allowOutsideWeeklySchedule,
+      boolean allowMinimumNotice) {
+    return assess(
+        tenantId,
+        serviceId,
+        durationMinutes,
+        bufferAfterMinutes,
+        appointmentId,
+        requestedStart,
+        expectedScheduleRevision,
+        allowOutsideWeeklySchedule,
+        allowMinimumNotice);
+  }
+
+  private AdministrativeBookingAssessment assess(
+      UUID tenantId,
+      UUID serviceId,
+      int durationMinutes,
+      int bufferAfterMinutes,
+      UUID excludedAppointmentId,
+      java.time.OffsetDateTime requestedStart,
+      long expectedScheduleRevision,
+      boolean allowOutsideWeeklySchedule,
+      boolean allowMinimumNotice) {
+    if (!schedules.lockScheduleRevision(tenantId, expectedScheduleRevision)) {
+      throw new AdministrativeScheduleVersionConflictException();
+    }
     WeeklySchedule weekly = schedules.findWeeklySchedule(tenantId);
     Optional<AvailabilityPolicy> policy = schedules.findAvailabilityPolicy(tenantId);
     if (!weekly.configured() || policy.isEmpty()) {
@@ -100,12 +145,7 @@ public class AvailabilityAdministrativeBookingPolicyQuery
         AvailabilityDaySchedule.resolve(
             tenantId, localDate, weekly, Optional.ofNullable(exception));
     AvailabilityService availabilityService =
-        new AvailabilityService(
-            service.serviceId(),
-            service.tenantId(),
-            service.active(),
-            service.durationMinutes(),
-            service.bufferAfterMinutes());
+        new AvailabilityService(serviceId, tenantId, true, durationMinutes, bufferAfterMinutes);
     List<AvailabilitySlot> regularSlots = new ArrayList<>();
     if (!day.periods().isEmpty()) {
       for (var period : day.periods()) {
@@ -118,8 +158,8 @@ public class AvailabilityAdministrativeBookingPolicyQuery
                 period.endOffset(),
                 zone,
                 configuredPolicy.slotStepMinutes(),
-                service.durationMinutes(),
-                service.bufferAfterMinutes()));
+                durationMinutes,
+                bufferAfterMinutes));
       }
     }
     var matchingSlot =
@@ -149,7 +189,12 @@ public class AvailabilityAdministrativeBookingPolicyQuery
     if (blocks.stream().anyMatch(block -> block.status() == BlockedPeriodStatus.ACTIVE)) {
       throw new SlotNoLongerAvailableException();
     }
-    if (!appointments.findOverlapping(tenantId, startsAt, occupiedUntil).isEmpty()) {
+    List<com.appagendamento.appointments.api.AppointmentOccupancy> occupancies =
+        excludedAppointmentId == null
+            ? appointments.findOverlapping(tenantId, startsAt, occupiedUntil)
+            : appointments.findOverlappingExcluding(
+                tenantId, startsAt, occupiedUntil, excludedAppointmentId);
+    if (!occupancies.isEmpty()) {
       throw new SlotNoLongerAvailableException();
     }
     List<AdministrativeOverridePolicy> violated = new ArrayList<>();

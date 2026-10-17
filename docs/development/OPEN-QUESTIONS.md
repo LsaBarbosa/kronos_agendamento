@@ -5,6 +5,7 @@
 | Tema | Referência | Decisão | Registro |
 |---|---|---|---|
 | Override `OUTSIDE_WEEKLY_SCHEDULE` em datas com exceção | AGD-021; documentos 01–03 e 06 | Só ignora a grade semanal quando não há exceção. CLOSED permanece fechado; SPECIAL é lista final e exige ocupação completa dentro de um período; MIN_NOTICE é independente e pode ser ignorada dentro de SPECIAL com motivo. Nenhuma mutação de grade/exceção pelo encaixe. | Aprovado pelo usuário em 17/10/2026; ADR-0016 e contratos atualizados. |
+| Protocolo de remarcação administrativa | AGD-022; ADR-0014/0017 | Atualização atômica da reserva confirmada com CAS independente da revisão da agenda e lock tenant-first compartilhado. | Decisão técnica registrada na ADR-0017; não agrega versões nem herda overrides. |
 
 ## Dúvidas abertas
 
@@ -26,6 +27,7 @@
 | Retenção da trilha de auditoria | documentos 01 seção 14, 05 seção 15 e 06 | base legal/contratual, prazo por categoria, legal hold, descarte e minimização | decidir com produto/jurídico/ operação antes de configurar retenção ou excluir eventos; AGD-004 não aplica prazo nem exclusão |
 | Retenção de idempotência, outbox e receipts | AGD-005; documentos 03/04/05/06 | prazo de replay, tombstones, retenção de eventos entregues/terminais, deduplicação do consumidor, legal hold e expurgo | pendente de aprovação de produto/jurídico/operação; V6 não define expiração nem job de exclusão. Manter registros até decisão evita reabrir chave ou duplicar efeito. |
 | WhatsApp e templates | documento 01; AGD-024/030 | códigos e notificações | não implementados; isolar por adapter; ADR-0003 |
+| Intenções de lembrete após remarcação | AGD-022/030/031 | invalidar intenção da versão anterior e solicitar a nova intenção sem afirmar envio | Não há pipeline/tabela persistido de lembretes na base. `AppointmentRescheduled` grava a mudança lógica transacionalmente; integração com cancelamento/recriação de intenções e fornecedores depende de AGD-030/031. Não declarar lembrete invalidado ou enviado até existir consumidor real e evidência. |
 | Cobrança e sandbox | AGD-041 | assinatura e reconciliação | não implementadas; não assumir fornecedor; ADR-0003 |
 | Identidade visual, fluxo UX e hospedagem | AGD-001/014; documento 04 | identidade, telas finais e entrega | tecnologia React/Vite adotada em ADR-0002; decisões de produto/UX permanecem pendentes; ADR-0003 |
 | Janela excepcional de dez minutos | documento 01, seção 7 | semântica ainda indefinida | manter desabilitada; ADR-0003 |

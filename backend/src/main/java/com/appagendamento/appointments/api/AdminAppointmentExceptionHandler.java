@@ -5,6 +5,8 @@ import com.appagendamento.appointments.domain.AdminAppointmentNotFoundException;
 import com.appagendamento.appointments.domain.AdministrativeScheduleConflictException;
 import com.appagendamento.appointments.domain.AdministrativeScheduleVersionConflictException;
 import com.appagendamento.appointments.domain.AppointmentDataUnavailableException;
+import com.appagendamento.appointments.domain.AppointmentNotReschedulableException;
+import com.appagendamento.appointments.domain.AppointmentVersionConflictException;
 import com.appagendamento.appointments.domain.InvalidAdminAgendaQueryException;
 import com.appagendamento.appointments.domain.SlotNoLongerAvailableException;
 import com.appagendamento.audit.api.AuditCorrelationId;
@@ -51,6 +53,24 @@ public class AdminAppointmentExceptionHandler {
         HttpStatus.CONFLICT,
         "VERSION_CONFLICT",
         "A agenda mudou. Recarregue os dados e confirme novamente as exceções.");
+  }
+
+  @ExceptionHandler(AppointmentVersionConflictException.class)
+  ResponseEntity<ApiErrorResponse> appointmentVersionConflict(
+      AppointmentVersionConflictException exception, HttpServletRequest request) {
+    return error(
+        HttpStatus.CONFLICT,
+        "VERSION_CONFLICT",
+        "A reserva mudou. Atualize os dados e confirme novamente a remarcação.");
+  }
+
+  @ExceptionHandler(AppointmentNotReschedulableException.class)
+  ResponseEntity<ApiErrorResponse> appointmentNotReschedulable(
+      AppointmentNotReschedulableException exception, HttpServletRequest request) {
+    return error(
+        HttpStatus.CONFLICT,
+        "APPOINTMENT_NOT_RESCHEDULABLE",
+        "Somente reservas confirmadas podem ser remarcadas.");
   }
 
   @ExceptionHandler(SlotNoLongerAvailableException.class)

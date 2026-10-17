@@ -53,7 +53,7 @@ class TenantPersistenceIT {
     String schema = isolatedSchemaName();
     Flyway fresh = isolatedFlyway(schema);
 
-    assertThat(fresh.migrate().migrationsExecuted).isEqualTo(15);
+    assertThat(fresh.migrate().migrationsExecuted).isEqualTo(16);
     fresh.validate();
     assertThat(fresh.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -63,7 +63,8 @@ class TenantPersistenceIT {
                     + ".flyway_schema_history WHERE success ORDER BY installed_rank",
                 String.class))
         .containsExactly(
-            null, "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15");
+            null, "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15",
+            "16");
     assertThat(
             jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = ? AND table_name = 'tenant')",
@@ -86,7 +87,7 @@ class TenantPersistenceIT {
 
     assertThat(v1.info().current().getVersion().getVersion()).isEqualTo("1");
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(14);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(15);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -96,7 +97,8 @@ class TenantPersistenceIT {
                     + ".flyway_schema_history WHERE success ORDER BY installed_rank",
                 String.class))
         .containsExactly(
-            null, "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15");
+            null, "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15",
+            "16");
     assertThat(
             jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = ? AND table_name = 'tenant')",
@@ -112,7 +114,7 @@ class TenantPersistenceIT {
     assertThat(v2.migrate().migrationsExecuted).isEqualTo(2);
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(13);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(14);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -122,7 +124,8 @@ class TenantPersistenceIT {
                     + ".flyway_schema_history WHERE success ORDER BY installed_rank",
                 String.class))
         .containsExactly(
-            null, "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15");
+            null, "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15",
+            "16");
     assertThat(
             jdbc.queryForObject("SELECT to_regclass(?||'.spring_session')", String.class, schema))
         .isEqualTo(schema + ".spring_session");
@@ -136,14 +139,14 @@ class TenantPersistenceIT {
     assertThat(v5.info().current().getVersion().getVersion()).isEqualTo("5");
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(10);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(11);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
             jdbc.queryForObject(
                 "SELECT count(*) FROM " + schema + ".flyway_schema_history WHERE success",
                 Integer.class))
-        .isEqualTo(16);
+        .isEqualTo(17);
     assertThat(
             jdbc.queryForObject(
                 "SELECT has_table_privilege('agendamento_app', ?, 'SELECT') "
@@ -164,7 +167,7 @@ class TenantPersistenceIT {
     assertThat(v6.info().current().getVersion().getVersion()).isEqualTo("6");
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(9);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(10);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(jdbc.queryForObject("SELECT to_regclass(?||'.service')", String.class, schema))
@@ -176,7 +179,7 @@ class TenantPersistenceIT {
             jdbc.queryForObject(
                 "SELECT count(*) FROM " + schema + ".flyway_schema_history WHERE success",
                 Integer.class))
-        .isEqualTo(16);
+        .isEqualTo(17);
   }
 
   @Test
@@ -187,7 +190,7 @@ class TenantPersistenceIT {
     assertThat(v7.info().current().getVersion().getVersion()).isEqualTo("7");
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(8);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(9);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -198,7 +201,7 @@ class TenantPersistenceIT {
             jdbc.queryForObject(
                 "SELECT count(*) FROM " + schema + ".flyway_schema_history WHERE success",
                 Integer.class))
-        .isEqualTo(16);
+        .isEqualTo(17);
   }
 
   @Test
@@ -237,7 +240,7 @@ class TenantPersistenceIT {
     jdbc.update(
         "UPDATE " + schema + ".weekly_period SET local_start = '09:15' WHERE tenant_id = ?",
         tenantId);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(7);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(8);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -269,7 +272,7 @@ class TenantPersistenceIT {
         tenantId);
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(7);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(8);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -281,16 +284,16 @@ class TenantPersistenceIT {
   }
 
   @Test
-  void upgradesV9ToV15AndRerunsWithoutChangingHistory() {
+  void upgradesV9ToV16AndRerunsWithoutChangingHistory() {
     String schema = isolatedSchemaName();
     Flyway v9 = isolatedFlyway(schema, MigrationVersion.fromVersion("9"));
     assertThat(v9.migrate().migrationsExecuted).isEqualTo(9);
     assertThat(v9.info().current().getVersion().getVersion()).isEqualTo("9");
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(6);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(7);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("15");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("16");
     assertThat(
             jdbc.queryForObject(
                 "SELECT to_regclass(?||'.schedule_exception')", String.class, schema))
@@ -334,7 +337,7 @@ class TenantPersistenceIT {
         });
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(5);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(6);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -357,7 +360,7 @@ class TenantPersistenceIT {
             privilegedJdbc.queryForObject(
                 "SELECT count(*) FROM " + schema + ".flyway_schema_history WHERE success",
                 Integer.class))
-        .isEqualTo(16);
+        .isEqualTo(17);
   }
 
   @Test
@@ -374,7 +377,7 @@ class TenantPersistenceIT {
         "existing-business-" + suffix());
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(5);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -490,7 +493,7 @@ class TenantPersistenceIT {
   }
 
   @Test
-  void upgradesPublishedV13ToV15WithoutRewritingLegacyDigestsAndKeepsRuntimeLeastPrivilege() {
+  void upgradesPublishedV13ToV16WithoutRewritingLegacyDigestsAndKeepsRuntimeLeastPrivilege() {
     String schema = isolatedSchemaName();
     Flyway v13 = isolatedFlyway(schema, MigrationVersion.fromVersion("13"));
     assertThat(v13.migrate().migrationsExecuted).isEqualTo(13);
@@ -513,10 +516,10 @@ class TenantPersistenceIT {
         UUID.randomUUID());
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(3);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("15");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("16");
     assertThat(
             jdbc.queryForObject(
                 "SELECT rtrim(request_digest) FROM "
@@ -541,17 +544,17 @@ class TenantPersistenceIT {
   }
 
   @Test
-  void upgradesPublishedV14SchemaToV15AndRerunsWithoutChangingHistoryOrPrivileges() {
+  void upgradesPublishedV14SchemaToV16AndRerunsWithoutChangingHistoryOrPrivileges() {
     String schema = isolatedSchemaName();
     Flyway v14 = isolatedFlyway(schema, MigrationVersion.fromVersion("14"));
     assertThat(v14.migrate().migrationsExecuted).isEqualTo(14);
     assertThat(v14.info().current().getVersion().getVersion()).isEqualTo("14");
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(1);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(2);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("15");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("16");
     assertThat(
             jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = ? AND table_name = 'appointment_history' AND column_name = 'reason')",
@@ -569,6 +572,38 @@ class TenantPersistenceIT {
                 schema + ".appointment_history",
                 schema + ".appointment_history",
                 schema + ".appointment_history"))
+        .isTrue();
+  }
+
+  @Test
+  void upgradesPublishedV15ToV16AndGrantsOnlyRescheduleColumns() {
+    String schema = isolatedSchemaName();
+    Flyway v15 = isolatedFlyway(schema, MigrationVersion.fromVersion("15"));
+    assertThat(v15.migrate().migrationsExecuted).isEqualTo(15);
+    assertThat(v15.info().current().getVersion().getVersion()).isEqualTo("15");
+
+    Flyway upgrade = isolatedFlyway(schema);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(1);
+    upgrade.validate();
+    assertThat(upgrade.migrate().migrationsExecuted).isZero();
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("16");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT has_column_privilege('agendamento_app', ?, 'starts_at', 'UPDATE') "
+                    + "AND has_column_privilege('agendamento_app', ?, 'service_ends_at', 'UPDATE') "
+                    + "AND has_column_privilege('agendamento_app', ?, 'occupied_until', 'UPDATE') "
+                    + "AND has_column_privilege('agendamento_app', ?, 'version', 'UPDATE') "
+                    + "AND NOT has_column_privilege('agendamento_app', ?, 'client_id', 'UPDATE') "
+                    + "AND NOT has_column_privilege('agendamento_app', ?, 'service_name_snapshot', 'UPDATE') "
+                    + "AND NOT has_table_privilege('agendamento_app', ?, 'UPDATE')",
+                Boolean.class,
+                schema + ".appointment",
+                schema + ".appointment",
+                schema + ".appointment",
+                schema + ".appointment",
+                schema + ".appointment",
+                schema + ".appointment",
+                schema + ".appointment"))
         .isTrue();
   }
 

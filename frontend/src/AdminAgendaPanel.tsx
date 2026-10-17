@@ -46,6 +46,12 @@ type HistoryEntry = {
     reasonCode: string;
     reason: string | null;
     occurredAt: string;
+    previousStartsAt: string | null;
+    previousOccupiedUntil: string | null;
+    newStartsAt: string | null;
+    newOccupiedUntil: string | null;
+    versionBefore: number | null;
+    versionAfter: number | null;
 };
 type Details = Appointment & { history: HistoryEntry[] };
 type Csrf = { headerName: string; token: string };
@@ -172,6 +178,25 @@ export function AdminAgendaPanel({
     const [selectedAppointmentId, setSelectedAppointmentId] = useState('');
     const [detailsLoading, setDetailsLoading] = useState(false);
     const [detailsError, setDetailsError] = useState('');
+    const [rescheduleDate, setRescheduleDate] = useState('');
+    const [rescheduleTime, setRescheduleTime] = useState('');
+    const [rescheduleOffset, setRescheduleOffset] = useState('');
+    const [rescheduleError, setRescheduleError] = useState('');
+    const [rescheduleNotice, setRescheduleNotice] = useState('');
+    const [rescheduleSaving, setRescheduleSaving] = useState(false);
+    const [rescheduleUncertain, setRescheduleUncertain] = useState(false);
+    const [rescheduleOpen, setRescheduleOpen] = useState(false);
+    const [reschedulePending, setReschedulePending] = useState<{
+        appointmentId: string;
+        body: {
+            expectedVersion: number;
+            expectedScheduleRevision: number;
+            startsAt: string;
+        };
+        key: string;
+    } | null>(null);
+    const rescheduleKeys = useRef(new Map<string, string>());
+    const rescheduleRequestGuard = useRef(false);
     const [schedule, setSchedule] = useState<WeeklySchedule | null>(null);
     const [availabilityPolicy, setAvailabilityPolicy] =
         useState<AvailabilityPolicy | null>(null);
@@ -215,6 +240,13 @@ export function AdminAgendaPanel({
     const to = view === 'day' ? anchorDate : addDateDays(from, 6);
     const visibleDates = useMemo(() => datesBetween(from, to), [from, to]);
     const currentCursor = cursorStack[pageIndex] ?? null;
+    const rescheduleOffsets = details
+        ? validLocalTimeOffsets(
+              rescheduleDate,
+              rescheduleTime,
+              details.timeZone,
+          )
+        : [];
 
     useEffect(() => {
         sessionInvalidRef.current = onSessionInvalid;
@@ -430,6 +462,7 @@ export function AdminAgendaPanel({
     }, [load]);
 
     function changeFilter(setter: (value: string) => void, value: string) {
+        if (rescheduleUncertain) return;
         setter(value);
         setPageIndex(0);
         setCursorStack([null]);
@@ -437,6 +470,7 @@ export function AdminAgendaPanel({
     }
 
     function movePeriod(amount: number) {
+        if (rescheduleUncertain) return;
         setSelectedDate(
             addDateDays(anchorDate, amount * (view === 'day' ? 1 : 7)),
         );
@@ -445,6 +479,15 @@ export function AdminAgendaPanel({
     }
 
     async function openDetails(appointmentId: string) {
+        if (
+            rescheduleUncertain &&
+            reschedulePending?.appointmentId !== appointmentId
+        ) {
+            setDetailsError(
+                'Resolva primeiro a remarcação pendente repetindo a mesma intenção.',
+            );
+            return;
+        }
         const requestSequence = ++detailSequence.current;
         setSelectedAppointmentId(appointmentId);
         setDetails(null);
@@ -497,6 +540,141 @@ export function AdminAgendaPanel({
         } finally {
             if (requestSequence === detailSequence.current)
                 setDetailsLoading(false);
+        }
+    }
+
+    function beginReschedule(appointment: Appointment) {
+        if (rescheduleUncertain) return;
+        setRescheduleOpen(true);
+        setRescheduleDate(
+            dateInZone(appointment.startsAt, appointment.timeZone),
+        );
+        setRescheduleTime(
+            new Intl.DateTimeFormat('en-GB', {
+                timeZone: appointment.timeZone,
+                hour: '2-digit',
+                minute: '2-digit',
+                hourCycle: 'h23',
+            }).format(new Date(appointment.startsAt)),
+        );
+        setRescheduleOffset('');
+        setRescheduleError('');
+        setRescheduleNotice('');
+        setReschedulePending(null);
+    }
+
+    async function submitReschedule(retry = false) {
+        if (!csrf || !details || !schedule || rescheduleRequestGuard.current)
+            return;
+        const offsets = validLocalTimeOffsets(
+            rescheduleDate,
+            rescheduleTime,
+            details.timeZone,
+        );
+        const chosenOffset =
+            offsets.length === 1 ? offsets[0] : rescheduleOffset;
+        if (
+            !retry &&
+            (offsets.length === 0 || !offsets.includes(chosenOffset))
+        ) {
+            setRescheduleError(
+                offsets.length === 0
+                    ? 'Esse horário local não existe no fuso do tenant.'
+                    : 'Selecione um offset válido para esse horário local.',
+            );
+            return;
+        }
+        const body = retry
+            ? reschedulePending?.body
+            : {
+                  expectedVersion: details.version,
+                  expectedScheduleRevision: schedule.scheduleRevision,
+                  startsAt: `${rescheduleDate}T${rescheduleTime}:00${chosenOffset}`,
+              };
+        if (!body) return;
+        const targetAppointmentId = retry
+            ? reschedulePending?.appointmentId
+            : details.appointmentId;
+        if (!targetAppointmentId) return;
+        const scope = 'admin-appointment-reschedule-v1';
+        const key = retry
+            ? reschedulePending?.key
+            : commandKey(rescheduleKeys.current, scope, [
+                  targetAppointmentId,
+                  body,
+              ]);
+        if (!key) return;
+        if (!retry) {
+            setReschedulePending({
+                appointmentId: targetAppointmentId,
+                body,
+                key,
+            });
+        }
+        rescheduleRequestGuard.current = true;
+        setRescheduleSaving(true);
+        setRescheduleError('');
+        setRescheduleNotice('');
+        try {
+            const response = await fetch(
+                apiBaseUrl +
+                    '/v1/admin/appointments/' +
+                    targetAppointmentId +
+                    '/reschedule',
+                {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        [csrf.headerName]: csrf.token,
+                        'Idempotency-Key': key,
+                    },
+                    body: JSON.stringify(body),
+                },
+            );
+            if (response.status === 401 || response.status === 403) {
+                sessionInvalidRef.current(response.status);
+                return;
+            }
+            if (!response.ok) {
+                const errorBody = (await response.json().catch(() => null)) as {
+                    error?: { code?: string; message?: string };
+                } | null;
+                const code = errorBody?.error?.code ?? 'HTTP_ERROR';
+                setRescheduleError(
+                    errorBody?.error?.message ??
+                        `Falha HTTP ${response.status}.`,
+                );
+                const uncertain =
+                    code === 'OPERATION_IN_PROGRESS' || response.status >= 500;
+                setRescheduleUncertain(uncertain);
+                if (code === 'VERSION_CONFLICT') {
+                    setRescheduleNotice(
+                        'A reserva ou agenda mudou. Atualize as versões e revise o destino antes de enviar uma nova intenção.',
+                    );
+                }
+                if (!uncertain) setReschedulePending(null);
+                return;
+            }
+            const fingerprint = JSON.stringify([
+                scope,
+                [targetAppointmentId, body],
+            ]);
+            rescheduleKeys.current.delete(fingerprint);
+            setReschedulePending(null);
+            setRescheduleUncertain(false);
+            setRescheduleOpen(false);
+            setRescheduleNotice('Remarcação confirmada e persistida.');
+            await load();
+            await openDetails(targetAppointmentId);
+        } catch {
+            setRescheduleUncertain(true);
+            setRescheduleError(
+                'A resposta não chegou; o resultado pode estar confirmado. Repita exatamente a mesma intenção antes de alterar o destino.',
+            );
+        } finally {
+            rescheduleRequestGuard.current = false;
+            setRescheduleSaving(false);
         }
     }
 
@@ -1517,6 +1695,7 @@ export function AdminAgendaPanel({
                         >
                             <button
                                 type="button"
+                                disabled={rescheduleUncertain}
                                 onClick={() => setDetails(null)}
                             >
                                 Fechar detalhes
@@ -1568,6 +1747,27 @@ export function AdminAgendaPanel({
                                                 details.timeZone,
                                                 true,
                                             )}
+                                            {item.previousStartsAt &&
+                                                item.newStartsAt && (
+                                                    <span>
+                                                        {' '}
+                                                        · horário:{' '}
+                                                        {formatInstant(
+                                                            item.previousStartsAt,
+                                                            details.timeZone,
+                                                            true,
+                                                        )}{' '}
+                                                        →{' '}
+                                                        {formatInstant(
+                                                            item.newStartsAt,
+                                                            details.timeZone,
+                                                            true,
+                                                        )}{' '}
+                                                        · versão{' '}
+                                                        {item.versionBefore} →{' '}
+                                                        {item.versionAfter}
+                                                    </span>
+                                                )}
                                             {item.reason && (
                                                 <span>
                                                     {' '}
@@ -1577,6 +1777,183 @@ export function AdminAgendaPanel({
                                         </li>
                                     ))}
                                 </ol>
+                            )}
+                            {details.status === 'CONFIRMED' && (
+                                <section aria-labelledby="reschedule-title">
+                                    <h4 id="reschedule-title">
+                                        Remarcar atendimento
+                                    </h4>
+                                    {!rescheduleOpen && (
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                beginReschedule(details)
+                                            }
+                                        >
+                                            Remarcar
+                                        </button>
+                                    )}
+                                    {rescheduleOpen && (
+                                        <>
+                                            <p>
+                                                Horário atual:{' '}
+                                                {formatInstant(
+                                                    details.startsAt,
+                                                    details.timeZone,
+                                                    true,
+                                                )}{' '}
+                                                · ocupação com buffer até{' '}
+                                                {formatInstant(
+                                                    details.occupiedUntil,
+                                                    details.timeZone,
+                                                    true,
+                                                )}
+                                                . Destino no fuso{' '}
+                                                {details.timeZone}.
+                                            </p>
+                                            <label>
+                                                Nova data local
+                                                <input
+                                                    type="date"
+                                                    value={rescheduleDate}
+                                                    disabled={
+                                                        rescheduleUncertain ||
+                                                        rescheduleSaving
+                                                    }
+                                                    onChange={(event) =>
+                                                        setRescheduleDate(
+                                                            event.target.value,
+                                                        )
+                                                    }
+                                                />
+                                            </label>
+                                            <label>
+                                                Novo horário local
+                                                <input
+                                                    type="time"
+                                                    step="900"
+                                                    value={rescheduleTime}
+                                                    disabled={
+                                                        rescheduleUncertain ||
+                                                        rescheduleSaving
+                                                    }
+                                                    onChange={(event) =>
+                                                        setRescheduleTime(
+                                                            event.target.value,
+                                                        )
+                                                    }
+                                                />
+                                            </label>
+                                            {rescheduleOffsets.length > 1 && (
+                                                <label>
+                                                    Offset para horário ambíguo
+                                                    <select
+                                                        value={rescheduleOffset}
+                                                        disabled={
+                                                            rescheduleUncertain ||
+                                                            rescheduleSaving
+                                                        }
+                                                        onChange={(event) =>
+                                                            setRescheduleOffset(
+                                                                event.target
+                                                                    .value,
+                                                            )
+                                                        }
+                                                    >
+                                                        <option value="">
+                                                            Selecione
+                                                        </option>
+                                                        {rescheduleOffsets.map(
+                                                            (offset) => (
+                                                                <option
+                                                                    key={offset}
+                                                                    value={
+                                                                        offset
+                                                                    }
+                                                                >
+                                                                    {offset}
+                                                                </option>
+                                                            ),
+                                                        )}
+                                                    </select>
+                                                </label>
+                                            )}
+                                            <p>
+                                                Duração{' '}
+                                                {details.durationMinutes} min;
+                                                buffer{' '}
+                                                {details.bufferAfterMinutes}{' '}
+                                                min. A configuração será
+                                                revalidada no servidor.
+                                            </p>
+                                            {rescheduleUncertain ? (
+                                                <button
+                                                    type="button"
+                                                    disabled={rescheduleSaving}
+                                                    onClick={() =>
+                                                        void submitReschedule(
+                                                            true,
+                                                        )
+                                                    }
+                                                >
+                                                    {rescheduleSaving
+                                                        ? 'Recuperando…'
+                                                        : 'Recuperar / repetir a mesma intenção'}
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    disabled={
+                                                        rescheduleSaving ||
+                                                        !csrf ||
+                                                        !schedule
+                                                    }
+                                                    onClick={() =>
+                                                        void submitReschedule()
+                                                    }
+                                                >
+                                                    {rescheduleSaving
+                                                        ? 'Salvando…'
+                                                        : 'Confirmar remarcação'}
+                                                </button>
+                                            )}
+                                            {rescheduleError && (
+                                                <p role="alert">
+                                                    {rescheduleError}
+                                                </p>
+                                            )}
+                                            {rescheduleNotice && (
+                                                <output>
+                                                    {rescheduleNotice}
+                                                </output>
+                                            )}
+                                            {rescheduleNotice.includes(
+                                                'mudou',
+                                            ) && (
+                                                <button
+                                                    type="button"
+                                                    disabled={
+                                                        scheduleRefreshing
+                                                    }
+                                                    onClick={async () => {
+                                                        await refreshScheduleRevision(
+                                                            false,
+                                                        );
+                                                        await openDetails(
+                                                            details.appointmentId,
+                                                        );
+                                                        setRescheduleNotice(
+                                                            'Versões atualizadas. Revise a data e confirme uma nova intenção.',
+                                                        );
+                                                    }}
+                                                >
+                                                    Atualizar versões sem
+                                                    alterar o destino
+                                                </button>
+                                            )}
+                                        </>
+                                    )}
+                                </section>
                             )}
                         </section>
                     )}

@@ -411,6 +411,87 @@ try {
     await clickButtonByText('Detalhes e história', evaluate);
     await waitForText('Detalhes da reserva', evaluate);
     await waitForText('APPOINTMENT_CREATED', evaluate);
+    await clickButtonByText('Remarcar', evaluate);
+    const rescheduleDate = await evaluate(`(() => {
+      const date = new Date(${JSON.stringify(publicDate)} + 'T12:00:00Z');
+      date.setUTCDate(date.getUTCDate() + 7);
+      return date.toISOString().slice(0, 10);
+    })()`);
+    await setFieldByLabel('Nova data local', rescheduleDate, evaluate);
+    await setFieldByLabel('Novo horário local', '10:00', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        if (String(args[0]).includes('/reschedule') && args[1]?.method === 'POST' && response.ok) {
+          window.fetch = originalFetch;
+          throw new TypeError('Simulated lost reschedule response after commit');
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Confirmar remarcação', evaluate);
+    await waitForText('A resposta não chegou; o resultado pode estar confirmado.', evaluate);
+    await clickButtonByText('Recuperar / repetir a mesma intenção', evaluate);
+    await waitForText('Remarcação confirmada e persistida.', evaluate);
+    const rescheduled = await evaluate(
+        `fetch('/api/v1/admin/appointments/${appointmentIdInEachTab[0]}', {credentials:'same-origin'}).then(response => response.json())`,
+    );
+    const rescheduleHistory = await evaluate(
+        `fetch('/api/v1/admin/appointments/${appointmentIdInEachTab[0]}/history', {credentials:'same-origin'}).then(response => response.json())`,
+    );
+    if (
+        rescheduled.version !== 2 ||
+        rescheduled.startsAt.slice(0, 16) !== `${rescheduleDate}T10:00` ||
+        !rescheduleHistory.items.some(item =>
+            item.reasonCode === 'APPOINTMENT_RESCHEDULED' &&
+            item.versionBefore === 1 && item.versionAfter === 2,
+        )
+    ) {
+        throw new Error(`Remarcação não persistiu com história/versionamento: ${JSON.stringify({rescheduled, rescheduleHistory})}`);
+    }
+    const oldDate = publicDate;
+    const oldDateSlots = await evaluate(
+        `fetch('/api/v1/public/${encodeURIComponent(publication.slug)}/availability?serviceId=${encodeURIComponent(publicService.serviceId)}&from=${oldDate}&to=${oldDate}').then(response => response.json()).then(result => result.days[0].slots)`,
+    );
+    const newDateSlots = await evaluate(
+        `fetch('/api/v1/public/${encodeURIComponent(publication.slug)}/availability?serviceId=${encodeURIComponent(publicService.serviceId)}&from=${rescheduleDate}&to=${rescheduleDate}').then(response => response.json()).then(result => result.days[0].slots)`,
+    );
+    if (
+        !oldDateSlots.some(slot => slot.startsAt === selectedStart) ||
+        newDateSlots.some(slot => slot.startsAt === rescheduled.startsAt)
+    ) {
+        throw new Error('A disponibilidade não refletiu atomicamente a troca do horário.');
+    }
+    const conflictingDate = await evaluate(`(() => {
+      const date = new Date(${JSON.stringify(rescheduleDate)} + 'T12:00:00Z');
+      date.setUTCDate(date.getUTCDate() + 7);
+      return date.toISOString().slice(0, 10);
+    })()`);
+    await setFieldByLabel('Início local', `${conflictingDate}T10:00`, evaluate);
+    await setFieldByLabel('Fim local', `${conflictingDate}T11:00`, evaluate);
+    await setFieldByLabel('Motivo obrigatório', 'Conflito de remarcação E2E', evaluate);
+    await clickButtonByText('Criar bloqueio', evaluate);
+    await waitForText('Bloqueio persistido.', evaluate);
+    await clickButtonByText('Remarcar', evaluate);
+    await setFieldByLabel('Nova data local', conflictingDate, evaluate);
+    await setFieldByLabel('Novo horário local', '10:00', evaluate);
+    await clickButtonByText('Confirmar remarcação', evaluate);
+    await waitForText('O horário conflita com um bloqueio ou atendimento existente.', evaluate);
+    const afterRejectedReschedule = await evaluate(
+        `fetch('/api/v1/admin/appointments/${appointmentIdInEachTab[0]}', {credentials:'same-origin'}).then(response => response.json())`,
+    );
+    if (afterRejectedReschedule.startsAt !== rescheduled.startsAt || afterRejectedReschedule.version !== 2) {
+        throw new Error('Conflito no navegador alterou a reserva anterior.');
+    }
+    await setFieldByLabel('Data de referência', conflictingDate, evaluate);
+    await waitForText('Conflito de remarcação E2E', evaluate);
+    await setFieldByLabel('Motivo do cancelamento', 'Limpeza E2E', evaluate);
+    await clickButtonByText('Cancelar bloqueio', evaluate);
+    await waitUntil(async () => (await evaluate(
+        `fetch('/api/v1/admin/blocked-periods?from=${conflictingDate}&to=${conflictingDate}', {credentials:'same-origin'}).then(response => response.json()).then(rows => rows.some(row => row.status === 'CANCELLED'))`,
+    )));
+    console.log('Browser: remarcação real preservou ID/snapshot, gravou história, trocou a disponibilidade; destino bloqueado foi rejeitado sem alterar a reserva.');
     await clickButtonByText('Dia', evaluate);
     await waitForText('Visitante de demonstração', evaluate);
     await command('Page.reload');

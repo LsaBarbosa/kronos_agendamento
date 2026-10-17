@@ -11,6 +11,7 @@ import com.appagendamento.appointments.application.CreatePublicAppointment;
 import com.appagendamento.appointments.application.GetAdminAppointments;
 import com.appagendamento.appointments.application.GetPublicBookingIntent;
 import com.appagendamento.appointments.application.PreparePublicBookingIntent;
+import com.appagendamento.appointments.application.RescheduleAdministrativeAppointment;
 import com.appagendamento.audit.api.AuditCorrelationId;
 import com.appagendamento.availability.application.CalculateAvailabilityForDateRange;
 import com.appagendamento.availability.application.GetBlockedPeriods;
@@ -59,6 +60,7 @@ class SecurityBoundaryTest {
 
   @MockitoBean private CreatePublicAppointment createPublicAppointment;
   @MockitoBean private CreateAdministrativeAppointment createAdministrativeAppointment;
+  @MockitoBean private RescheduleAdministrativeAppointment rescheduleAdministrativeAppointment;
   @MockitoBean private SearchAdministrativeClients searchAdministrativeClients;
   @MockitoBean private GetAdminAppointments getAdminAppointments;
   @MockitoBean private PreparePublicBookingIntent preparePublicBookingIntent;
@@ -151,5 +153,15 @@ class SecurityBoundaryTest {
   void validCsrfTokenDoesNotBypassAuthentication() throws Exception {
     mvc.perform(post("/api/v1/admin/appointments").with(csrf()))
         .andExpect(status().isUnauthorized());
+    mvc.perform(
+            post("/api/v1/admin/appointments/{id}/reschedule", UUID.randomUUID())
+                .with(csrf())
+                .header("Idempotency-Key", "reschedule-security-test-key"))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(
+            post("/api/v1/admin/appointments/{id}/reschedule", UUID.randomUUID())
+                .with(user("test-user"))
+                .header("Idempotency-Key", "reschedule-security-test-key"))
+        .andExpect(status().isForbidden());
   }
 }

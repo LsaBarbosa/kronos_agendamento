@@ -37,7 +37,7 @@ public record AuditEvent(
                     || actorRef.equals("PUBLIC_BOOKING")))
         || !result.equals("COMMITTED")
         || !action.matches(
-            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)|PUBLICATION_(PUBLISHED|UNPUBLISHED)|PUBLIC_PROFILE_UPDATED|APPOINTMENT_CONFIRMED")) {
+            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)|PUBLICATION_(PUBLISHED|UNPUBLISHED)|PUBLIC_PROFILE_UPDATED|APPOINTMENT_CONFIRMED|APPOINTMENT_RESCHEDULED")) {
       throw new IllegalArgumentException("Ator ou resultado de auditoria inválido");
     }
     if ((actorType.equals("ADMIN") && actorId == null)
@@ -103,10 +103,23 @@ public record AuditEvent(
                           "\\{\\\"changed_fields\\\":\\[\\\"appointment\\\"\\],\\\"version_before\\\":0,\\\"version_after\\\":1,\\\"override_policies\\\":\\[(?:\\\"(?:OUTSIDE_WEEKLY_SCHEDULE|MIN_NOTICE)\\\"(?:,\\\"(?:OUTSIDE_WEEKLY_SCHEDULE|MIN_NOTICE)\\\")?)?\\],\\\"reason_provided\\\":(?:true|false),\\\"client_restriction_status\\\":\\\"(?:NOT_TRACKED|CLEAR|RESTRICTED)\\\"\\}")
                       && (detailsJson.contains("\"override_policies\":[]")
                           == detailsJson.contains("\"reason_provided\":false,"));
+          case "APPOINTMENT_RESCHEDULED" ->
+              actorType.equals("ADMIN")
+                  && actorRef.equals("TENANT_ADMIN")
+                  && validRescheduleDetails(detailsJson);
           default -> false;
         };
     if (!validDetails) {
       throw new IllegalArgumentException("Detalhes fora da allowlist da auditoria");
     }
+  }
+
+  private static boolean validRescheduleDetails(String details) {
+    boolean shape =
+        details.matches(
+            "\\{\\\"changed_fields\\\":\\[\\\"appointment\\\"\\],\\\"version_before\\\":[1-9][0-9]*,\\\"version_after\\\":[1-9][0-9]*,\\\"override_policies\\\":\\[(?:\\\"OUTSIDE_WEEKLY_SCHEDULE\\\"(?:,\\\"MIN_NOTICE\\\")?|\\\"MIN_NOTICE\\\")?\\],\\\"reason_provided\\\":(?:true|false)\\}");
+    return shape
+        && (details.contains("\"override_policies\":[]")
+            == details.contains("\"reason_provided\":false}"));
   }
 }
