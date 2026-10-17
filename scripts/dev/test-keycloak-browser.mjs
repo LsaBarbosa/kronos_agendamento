@@ -497,9 +497,9 @@ try {
     await waitForText('Visitante de demonstração', evaluate);
     await evaluate(`(() => {
       const originalFetch = window.fetch;
+      window.__originalSessionFetch = originalFetch;
       window.fetch = async (...args) => {
         if (String(args[0]).includes('/v1/admin/appointments?')) {
-          window.fetch = originalFetch;
           return new Response('', {status:401});
         }
         return originalFetch(...args);
@@ -507,6 +507,7 @@ try {
     })()`);
     await clickButtonByText('Atualizar', evaluate);
     await waitForText('Sua sessão expirou. Entre novamente para continuar.', evaluate);
+    await evaluate('window.fetch = window.__originalSessionFetch');
     await command('Page.reload');
     await waitForText('Sessão administrativa ativa.', evaluate);
     await waitForText('Agenda', evaluate);
