@@ -393,3 +393,5 @@ Limites mantidos: gates comerciais/legais reais não são fabricados; disponibil
 | CI e PR | PR AGD-022 | Pendentes publicação, App CI/CodeQL em push e PR e E2E observado no workflow do SHA final. |
 
 AGD-022 permanece parcial até CI/browser E2E remotos e revisão de PR. Não existe pipeline persistido de lembretes: `AppointmentRescheduled` é apenas evento versionado; invalidação da intenção anterior e solicitação efetiva da nova dependem de AGD-030/031. Pendências mantidas: prontidão legal/comercial, homologação HTTPS/staging, preflight hospedado, secrets/rotação em staging, scan completo de dependências, retenção aprovada e fornecedores reais; restrições reais de autoagendamento dependem de AGD-032/033. Sem merge ou deploy deste PR.
+
+As evidências locais acima correspondem ao código do commit `23dcb94531af...`; a atualização documental posterior não altera o código exercitado. Os resultados remotos serão associados ao SHA final publicado.

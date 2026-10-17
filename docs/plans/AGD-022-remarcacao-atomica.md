@@ -55,4 +55,5 @@
 ## Encerramento ou retomada
 
 - AGD-022 permanece parcial: suíte completa backend/PostgreSQL (70 + 123), frontend (23 Vitest + format/lint/typecheck/build), migração/grants e corridas de remarcação passaram localmente. Browser E2E e CI push/PR aguardam o head publicado; integração real de lembretes continua dependente de AGD-030/031 e não é comprovada pelo evento outbox. Não será marcada `DONE` por CI isolado.
+- Evidências locais correspondem ao código do commit `23dcb94531af...`; a atualização documental seguinte não altera o código exercitado. Os resultados remotos serão associados ao head final após a publicação.
 - Próximo passo após revisão/integração: AGD-023 — Cancelamento e encerramento.
