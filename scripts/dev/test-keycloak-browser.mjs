@@ -1281,7 +1281,17 @@ try {
     await evaluate(`document.querySelector('[data-appointment-id="${cancelRetryAppointmentId}"] button')?.click()`);
     await waitUntil(() => evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('Encaixe administrativo E2E')`));
     await clickButtonByText('Cancelar reserva', evaluate);
-    await setFieldByLabel('Motivo (opcional)', 'Cancelamento com resposta perdida E2E', evaluate);
+    await evaluate(`(() => {
+      const details = document.querySelector('.admin-agenda__details');
+      const wrapper = [...(details?.querySelectorAll('label') ?? [])].find(item => item.childNodes[0]?.textContent?.trim() === 'Motivo (opcional)');
+      const field = wrapper?.querySelector('input');
+      if (!field) throw new Error('Cancellation reason field not found inside appointment details');
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+      descriptor.set.call(field, 'Cancelamento com resposta perdida E2E');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      field.dispatchEvent(new Event('change', { bubbles: true }));
+      if (field.value !== 'Cancelamento com resposta perdida E2E') throw new Error('Cancellation reason was not rendered in the original appointment details');
+    })()`);
     await evaluate(`(() => {
       const originalFetch = window.fetch;
       window.fetch = async (...args) => {
