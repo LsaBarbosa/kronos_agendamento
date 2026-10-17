@@ -633,11 +633,19 @@ try {
         );
     }
     await evaluate(`document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"] button')?.click()`);
-    await waitUntil(() =>
-        evaluate(
-            `document.querySelector('.admin-agenda__details')?.innerText.includes('Segundo visitante de demonstração') && [...document.querySelectorAll('[role=alert]')].some(alert => alert.innerText.includes('Resolva primeiro a remarcação'))`,
-        ),
-    );
+    const delayedSuccessGuard = await evaluate(`(() => ({
+      detail: document.querySelector('.admin-agenda__details')?.innerText,
+      closeDisabled: [...document.querySelectorAll('button')].find(button => button.innerText === 'Fechar detalhes')?.disabled,
+    }))()`);
+    if (
+        !delayedSuccessGuard.closeDisabled ||
+        !delayedSuccessGuard.detail.includes('Segundo visitante de demonstração') ||
+        delayedSuccessGuard.detail.includes('Visitante de demonstração ·')
+    ) {
+        throw new Error(
+            `A remarcação pendente de B perdeu sua associação visual: ${JSON.stringify(delayedSuccessGuard)}`,
+        );
+    }
     await evaluate('window.__releaseDelayedSuccess?.()');
     await waitForText('Remarcação confirmada e persistida.', evaluate);
     const delayedSuccessVersion = Number(
