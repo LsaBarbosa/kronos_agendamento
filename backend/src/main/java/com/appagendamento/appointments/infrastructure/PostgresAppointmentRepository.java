@@ -71,6 +71,30 @@ public class PostgresAppointmentRepository
   }
 
   @Override
+  public List<AppointmentOccupancy> findOverlappingExcluding(
+      UUID tenantId, Instant startsAt, Instant endsAt, UUID excludedAppointmentId) {
+    try {
+      return jdbc.query(
+          """
+          SELECT starts_at, occupied_until FROM agendamento.appointment
+          WHERE tenant_id = ? AND status = 'CONFIRMED' AND appointment_id <> ?
+            AND starts_at < ? AND occupied_until > ?
+          ORDER BY starts_at, appointment_id
+          """,
+          (row, index) ->
+              new AppointmentOccupancy(
+                  row.getTimestamp("starts_at").toInstant(),
+                  row.getTimestamp("occupied_until").toInstant()),
+          tenantId,
+          excludedAppointmentId,
+          Timestamp.from(endsAt),
+          Timestamp.from(startsAt));
+    } catch (DataAccessException exception) {
+      throw new AppointmentDataUnavailableException(exception);
+    }
+  }
+
+  @Override
   public boolean overlapsConfirmed(UUID tenantId, Instant startsAt, Instant endsAt) {
     return Boolean.TRUE.equals(
         jdbc.queryForObject(
@@ -249,12 +273,108 @@ public class PostgresAppointmentRepository
   }
 
   @Override
+  public Optional<Appointment> findForReschedule(UUID tenantId, UUID appointmentId) {
+    try {
+      return jdbc
+          .query(
+              """
+              SELECT appointment_id, tenant_id, client_id, service_id, starts_at, service_ends_at,
+                     occupied_until, time_zone, client_name_snapshot, service_name_snapshot,
+                     service_duration_minutes, service_buffer_after_minutes,
+                     service_price_minor_snapshot, service_currency_snapshot, status, created_at, version
+              FROM agendamento.appointment
+              WHERE tenant_id = ? AND appointment_id = ?
+              FOR UPDATE
+              """,
+              (row, index) ->
+                  new Appointment(
+                      row.getObject("appointment_id", UUID.class),
+                      row.getObject("tenant_id", UUID.class),
+                      row.getObject("client_id", UUID.class),
+                      row.getObject("service_id", UUID.class),
+                      row.getTimestamp("starts_at").toInstant(),
+                      row.getTimestamp("service_ends_at").toInstant(),
+                      row.getTimestamp("occupied_until").toInstant(),
+                      row.getString("time_zone"),
+                      row.getString("client_name_snapshot"),
+                      row.getString("service_name_snapshot"),
+                      row.getInt("service_duration_minutes"),
+                      row.getInt("service_buffer_after_minutes"),
+                      (Long) row.getObject("service_price_minor_snapshot"),
+                      row.getString("service_currency_snapshot"),
+                      AppointmentStatus.valueOf(row.getString("status")),
+                      row.getTimestamp("created_at").toInstant(),
+                      row.getLong("version")),
+              tenantId,
+              appointmentId)
+          .stream()
+          .findFirst();
+    } catch (DataAccessException exception) {
+      throw new AppointmentDataUnavailableException(exception);
+    }
+  }
+
+  @Override
+  public boolean reschedule(
+      Appointment current,
+      long expectedVersion,
+      com.appagendamento.appointments.api.AdministrativeBookingAssessment assessment,
+      String reason) {
+    try {
+      int updated =
+          jdbc.update(
+              """
+              UPDATE agendamento.appointment
+              SET starts_at = ?, service_ends_at = ?, occupied_until = ?, version = version + 1
+              WHERE tenant_id = ? AND appointment_id = ? AND status = 'CONFIRMED' AND version = ?
+              """,
+              Timestamp.from(assessment.startsAt()),
+              Timestamp.from(assessment.serviceEndsAt()),
+              Timestamp.from(assessment.occupiedUntil()),
+              current.tenantId(),
+              current.appointmentId(),
+              expectedVersion);
+      if (updated != 1) return false;
+      jdbc.update(
+          """
+          INSERT INTO agendamento.appointment_history (
+            history_id, tenant_id, appointment_id, from_status, to_status,
+            actor_type, actor_ref, reason_code, reason, occurred_at,
+            previous_starts_at, previous_occupied_until, new_starts_at, new_occupied_until,
+            version_before, version_after
+          ) VALUES (?, ?, ?, 'CONFIRMED', 'CONFIRMED', 'ADMIN', 'TENANT_ADMIN',
+                    'APPOINTMENT_RESCHEDULED', ?, clock_timestamp(), ?, ?, ?, ?, ?, ?)
+          """,
+          UUID.randomUUID(),
+          current.tenantId(),
+          current.appointmentId(),
+          reason,
+          Timestamp.from(current.startsAt()),
+          Timestamp.from(current.occupiedUntil()),
+          Timestamp.from(assessment.startsAt()),
+          Timestamp.from(assessment.occupiedUntil()),
+          expectedVersion,
+          expectedVersion + 1);
+      return true;
+    } catch (DataIntegrityViolationException exception) {
+      if (isAppointmentExclusionViolation(exception)) {
+        throw new com.appagendamento.appointments.domain.SlotNoLongerAvailableException();
+      }
+      throw exception;
+    } catch (DataAccessException exception) {
+      throw new AppointmentDataUnavailableException(exception);
+    }
+  }
+
+  @Override
   public List<AppointmentHistoryEntry> findAdminAppointmentHistory(
       UUID tenantId, UUID appointmentId) {
     try {
       return jdbc.query(
           """
-          SELECT from_status, to_status, actor_type, actor_ref, reason_code, reason, occurred_at
+          SELECT from_status, to_status, actor_type, actor_ref, reason_code, reason, occurred_at,
+                 previous_starts_at, previous_occupied_until, new_starts_at, new_occupied_until,
+                 version_before, version_after
           FROM agendamento.appointment_history
           WHERE tenant_id = ? AND appointment_id = ?
           ORDER BY occurred_at ASC, history_id ASC
@@ -267,7 +387,21 @@ public class PostgresAppointmentRepository
                   row.getString("actor_ref"),
                   row.getString("reason_code"),
                   row.getString("reason"),
-                  row.getTimestamp("occurred_at").toInstant()),
+                  row.getTimestamp("occurred_at").toInstant(),
+                  row.getTimestamp("previous_starts_at") == null
+                      ? null
+                      : row.getTimestamp("previous_starts_at").toInstant(),
+                  row.getTimestamp("previous_occupied_until") == null
+                      ? null
+                      : row.getTimestamp("previous_occupied_until").toInstant(),
+                  row.getTimestamp("new_starts_at") == null
+                      ? null
+                      : row.getTimestamp("new_starts_at").toInstant(),
+                  row.getTimestamp("new_occupied_until") == null
+                      ? null
+                      : row.getTimestamp("new_occupied_until").toInstant(),
+                  (Long) row.getObject("version_before"),
+                  (Long) row.getObject("version_after")),
           tenantId,
           appointmentId);
     } catch (DataAccessException exception) {

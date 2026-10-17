@@ -29,18 +29,21 @@ public record OutboxEvent(
     }
     boolean appointmentConfirmed =
         aggregateType.equals("APPOINTMENT") && eventType.equals("AppointmentConfirmed");
+    boolean appointmentRescheduled =
+        aggregateType.equals("APPOINTMENT") && eventType.equals("AppointmentRescheduled");
     boolean allowed =
         aggregateType.equals("TENANT") && eventType.equals("TENANT_RENAMED")
             || aggregateType.equals("SERVICE") && eventType.equals("ServiceCreated")
             || aggregateType.equals("SCHEDULE") && eventType.equals("ScheduleChanged")
             || aggregateType.equals("AVAILABILITY_POLICY")
                 && eventType.equals("AvailabilityPolicyChanged")
-            || appointmentConfirmed;
+            || appointmentConfirmed
+            || appointmentRescheduled;
     if (!allowed) {
       throw new IllegalArgumentException("Evento fora da allowlist desta integração");
     }
     String expectedPayloadPattern =
-        appointmentConfirmed
+        appointmentConfirmed || appointmentRescheduled
             ? "\\{\"appointmentId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}"
             : aggregateType.equals("SERVICE")
                 ? "\\{\"serviceId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}"

@@ -12,4 +12,23 @@ public interface AdministrativeBookingPolicyQuery {
       long expectedScheduleRevision,
       boolean allowOutsideWeeklySchedule,
       boolean allowMinimumNotice);
+
+  default AdministrativeBookingAssessment assessReschedule(
+      UUID tenantId,
+      UUID appointmentId,
+      UUID serviceId,
+      int durationMinutes,
+      int bufferAfterMinutes,
+      OffsetDateTime requestedStart,
+      long expectedScheduleRevision,
+      boolean allowOutsideWeeklySchedule,
+      boolean allowMinimumNotice) {
+    return assess(
+        tenantId,
+        serviceId,
+        requestedStart,
+        expectedScheduleRevision,
+        allowOutsideWeeklySchedule,
+        allowMinimumNotice);
+  }
 }

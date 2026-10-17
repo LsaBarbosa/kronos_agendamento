@@ -2,6 +2,7 @@ package com.appagendamento.appointments.api;
 
 import com.appagendamento.appointments.application.CreateAdministrativeAppointment;
 import com.appagendamento.appointments.application.GetAdminAppointments;
+import com.appagendamento.appointments.application.RescheduleAdministrativeAppointment;
 import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Size;
@@ -23,11 +24,29 @@ public class AdminAppointmentController {
 
   private final GetAdminAppointments appointments;
   private final CreateAdministrativeAppointment createAppointment;
+  private final RescheduleAdministrativeAppointment rescheduleAppointment;
 
   public AdminAppointmentController(
-      GetAdminAppointments appointments, CreateAdministrativeAppointment createAppointment) {
+      GetAdminAppointments appointments,
+      CreateAdministrativeAppointment createAppointment,
+      RescheduleAdministrativeAppointment rescheduleAppointment) {
     this.appointments = appointments;
     this.createAppointment = createAppointment;
+    this.rescheduleAppointment = rescheduleAppointment;
+  }
+
+  @PostMapping("/api/v1/admin/appointments/{id}/reschedule")
+  ResponseEntity<AdministrativeRescheduleResponse> reschedule(
+      @AuthenticationPrincipal AuthenticatedAdmin actor,
+      @PathVariable UUID id,
+      @RequestHeader("Idempotency-Key") @Size(min = 16, max = 128) String key,
+      @Valid @RequestBody RescheduleAdministrativeAppointmentRequest request) {
+    var result = rescheduleAppointment.execute(actor, key, request.toCommand(id));
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .header("Idempotency-Replayed", Boolean.toString(result.replayed()))
+        .header("X-Operation-Id", result.operationId().toString())
+        .body(AdministrativeRescheduleResponse.from(result.value()));
   }
 
   @PostMapping("/api/v1/admin/appointments")

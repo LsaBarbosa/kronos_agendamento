@@ -747,6 +747,59 @@ paths:
         "401": { $ref: "#/components/responses/AuthenticationRequired" }
         "403": { $ref: "#/components/responses/ActionNotAllowed" }
         "404": { description: ID inexistente ou pertencente a outro tenant; mesma resposta. }
+  /admin/appointments/{id}/reschedule:
+    post:
+      operationId: rescheduleAdminAppointment
+      summary: Remarcar atomicamente uma reserva confirmada
+      description: >-
+        Deriva tenant e ator da associação administrativa atual. Exige expectedVersion da reserva
+        e expectedScheduleRevision da agenda (controles independentes), Idempotency-Key e CSRF.
+        Em uma nova mutação exige o serviço associado atualmente ACTIVE no tenant, verificando sua
+        elegibilidade separadamente do snapshot e sincronizando com alterações concorrentes do catálogo.
+        O destino e a ocupação continuam usando duração/buffer e snapshots originais da reserva;
+        serviço inativo não é ignorável por override. Replay autorizado de comando concluído retorna
+        o receipt original mesmo se o serviço tiver sido inativado posteriormente. Revalida destino,
+        timezone/offset, grade, exceção, políticas,
+        bloqueios e ocupações no protocolo READ COMMITTED com lock por tenant. O próprio appointment
+        é excluído da consulta de ocupação; a exclusion constraint permanece como proteção final.
+        Apenas OUTSIDE_WEEKLY_SCHEDULE e MIN_NOTICE podem ser solicitadas, sempre com confirmação
+        representada no payload e motivo; CLOSED, SPECIAL, horizonte, bloqueios, overlap, serviço
+        inativo e configuração ausente não são ignorados. Não herda overrides anteriores.
+        Mutação, história antes/depois, auditoria, receipt idempotente e AppointmentRescheduled
+        compartilham uma transação. Não significa que lembrete foi cancelado ou WhatsApp enviado.
+      security:
+        - backendSession: []
+          csrfToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RescheduleAdminAppointment" }
+      responses:
+        "200":
+          description: Novo horário da mesma reserva ou receipt do comando original em replay.
+          headers:
+            Idempotency-Replayed: { schema: { type: boolean } }
+            X-Operation-Id: { schema: { type: string, format: uuid } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminAppointmentRescheduled" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ActionNotAllowed" }
+        "404": { description: Reserva inexistente ou de outro tenant; mesma resposta. }
+        "409":
+          description: Versão de reserva/agenda desatualizada, regra não ignorável, conflito, digest divergente ou operação em andamento.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "503": { description: Fonte de agenda indisponível; nenhuma alteração é confirmada. }
 components:
   securitySchemes:
     backendSession:
@@ -845,6 +898,35 @@ components:
         operationId: { type: string, format: uuid }
         status: { type: string, enum: [CONFIRMED] }
         serviceName: { type: string }
+        startsAt: { type: string, format: date-time }
+        serviceEndsAt: { type: string, format: date-time }
+        occupiedUntil: { type: string, format: date-time }
+        timeZone: { type: string }
+    RescheduleAdminAppointment:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, expectedScheduleRevision, startsAt]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        expectedScheduleRevision: { type: integer, minimum: 0 }
+        startsAt:
+          type: string
+          format: date-time
+          description: Instante com offset válido na zona IANA atual do tenant.
+        overridePolicies:
+          type: array
+          uniqueItems: true
+          maxItems: 2
+          items: { type: string, enum: [OUTSIDE_WEEKLY_SCHEDULE, MIN_NOTICE] }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    AdminAppointmentRescheduled:
+      type: object
+      additionalProperties: false
+      required: [appointmentId, operationId, version, startsAt, serviceEndsAt, occupiedUntil, timeZone]
+      properties:
+        appointmentId: { type: string, format: uuid }
+        operationId: { type: string, format: uuid }
+        version: { type: integer, minimum: 2 }
         startsAt: { type: string, format: date-time }
         serviceEndsAt: { type: string, format: date-time }
         occupiedUntil: { type: string, format: date-time }

@@ -358,6 +358,20 @@ Reserva, história, auditoria, resultado idempotente e `AppointmentConfirmed` co
 
 Encaixe não ignora bloqueios nem conflito com reservas. AGD-032/033 ainda não fornecem fonte persistida de faltas/restrições; `NOT_TRACKED` é estado explícito da fronteira, não prova de cliente sem restrição. O requisito de cliente realmente bloqueado permanece pendente de integração futura.
 
+#### Remarcação administrativa (AGD-022)
+
+`POST /api/v1/admin/appointments/{id}/reschedule` exige sessão OIDC/associação ativa, CSRF, `Idempotency-Key`, `expectedVersion`, `expectedScheduleRevision` e `startsAt` com offset. Somente `CONFIRMED` pode ser remarcada. Tenant e ator são derivados no servidor; ID alheio/inexistente mantém resposta não reveladora. A capability de recuperação pública não autoriza esta operação.
+
+`expectedVersion` é CAS da reserva; `expectedScheduleRevision` é a revisão monotônica da agenda consultada em `GET /api/v1/admin/schedule/weekly-periods`. Não são intercambiáveis nem agregadas. Replay revalida a autorização atual antes de devolver `appointmentId`, `operationId`, versão e instantes do resultado original; não revalida a versão consumida pelo próprio commit nem repete efeitos.
+
+A reserva conserva appointmentId, cliente, serviço e snapshot original; nova ocupação é calculada com duração/buffer do snapshot. **Decisão de produto aprovada em 17/10/2026 (ADR-0017):** para uma nova mutação, o servidor exige que o serviço relacionado esteja atualmente `ACTIVE` no tenant, consultando essa elegibilidade separadamente do snapshot e sincronizando-a com alterações concorrentes do catálogo. Inativar o serviço preserva reserva e ocupação; nenhum override contorna inatividade. Replay de comando concluído revalida autorização e devolve o receipt original sem repetir a avaliação de elegibilidade consumida pelo próprio comando, inclusive se o serviço foi inativado depois. Horário local e offset precisam ser válidos na zona IANA usada pela configuração. Regras de grade, exceção, antecedência, horizonte, bloqueios e ocupações são revalidadas após o lock compartilhado do tenant. O intervalo novo pode sobrepor o antigo da própria reserva, mas não qualquer outra ocupação. A troca usa update em uma transação, CAS e exclusion constraint; conflito preserva integralmente o horário antigo.
+
+Overrides não são herdados. Se houver encaixe explícito, somente `OUTSIDE_WEEKLY_SCHEDULE` e `MIN_NOTICE` são aceitos, com motivo novo. A política aprovada na ADR-0016 continua válida: o primeiro override só ignora grade semanal sem exceção na data; `CLOSED` permanece fechado e `SPECIAL` limita a ocupação completa a um período especial. Nenhum outro limite pode ser ignorado ou alterado como efeito colateral.
+
+Update, revisão da agenda, histórico before/after, auditoria allowlisted, receipt idempotente e `AppointmentRescheduled` compartilham o commit. O evento contém apenas identidade da reserva e versão. Atualmente não há armazenamento/pipeline de lembretes; o evento não prova cancelamento ou envio. Invalidação da intenção anterior e solicitação efetiva de lembrete novo dependem de AGD-030/031 e permanecem pendentes.
+
+O detalhe técnico do protocolo e trade-offs está na ADR-0017.
+
 ### Clientes e restrições
 
 | Método | Endpoint | Uso |

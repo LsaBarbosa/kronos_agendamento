@@ -9,4 +9,10 @@ public record AppointmentHistoryEntry(
     String actorRef,
     String reasonCode,
     String reason,
-    Instant occurredAt) {}
+    Instant occurredAt,
+    Instant previousStartsAt,
+    Instant previousOccupiedUntil,
+    Instant newStartsAt,
+    Instant newOccupiedUntil,
+    Long versionBefore,
+    Long versionAfter) {}

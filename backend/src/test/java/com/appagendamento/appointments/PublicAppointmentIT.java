@@ -1597,6 +1597,690 @@ class PublicAppointmentIT {
         tenantId);
   }
 
+  @Test
+  void reschedulingUpdatesSameAppointmentAtomicallyAndReplayDoesNotDuplicateEffects()
+      throws Exception {
+    submitBooking(
+            "reschedule-source-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Snapshot original", "+5511999991801"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    String destination =
+        bookingDate.plusWeeks(1).atTime(9, 0).atZone(ZONE).toOffsetDateTime().toString();
+    long revisionBefore = currentScheduleRevision();
+    int historyBefore = count("appointment_history", tenantId);
+    int auditBefore = countByAction("APPOINTMENT_RESCHEDULED");
+    int outboxBefore = countByEvent("AppointmentRescheduled");
+    String key = "admin-reschedule-" + UUID.randomUUID();
+    String body = rescheduleBody(1, revisionBefore, destination);
+
+    submitReschedule(appointmentId, key, body)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.appointmentId").value(appointmentId.toString()))
+        .andExpect(jsonPath("$.version").value(2))
+        .andExpect(jsonPath("$.timeZone").value(ZONE.getId()))
+        .andExpect(header().string("Idempotency-Replayed", "false"));
+    submitReschedule(appointmentId, key, body)
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.version").value(2));
+
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+                UUID.class,
+                tenantId))
+        .isEqualTo(appointmentId);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT client_name_snapshot || ':' || service_name_snapshot || ':' || service_duration_minutes || ':' || service_buffer_after_minutes || ':' || version FROM agendamento.appointment WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("Snapshot original:Consulta:30:15:2");
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historyBefore + 1);
+    assertThat(countByAction("APPOINTMENT_RESCHEDULED")).isEqualTo(auditBefore + 1);
+    assertThat(countByEvent("AppointmentRescheduled")).isEqualTo(outboxBefore + 1);
+    assertThat(currentScheduleRevision()).isEqualTo(revisionBefore + 1);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT previous_starts_at = ?::timestamptz AND new_starts_at = ?::timestamptz AND version_before = 1 AND version_after = 2 FROM agendamento.appointment_history WHERE tenant_id = ? AND appointment_id = ? AND reason_code = 'APPOINTMENT_RESCHEDULED'",
+                Boolean.class,
+                java.time.OffsetDateTime.parse(requestedStart),
+                java.time.OffsetDateTime.parse(destination),
+                tenantId,
+                appointmentId))
+        .isTrue();
+
+    var destinationSlots =
+        availability.execute(
+            tenantId, serviceId, bookingDate.plusWeeks(1), bookingDate.plusWeeks(1));
+    assertThat(destinationSlots.days().getFirst().slots())
+        .noneMatch(
+            slot ->
+                slot.startsAt()
+                    .toInstant()
+                    .equals(java.time.OffsetDateTime.parse(destination).toInstant()));
+    var originalSlots = availability.execute(tenantId, serviceId, bookingDate, bookingDate);
+    assertThat(originalSlots.days().getFirst().slots())
+        .anyMatch(
+            slot ->
+                slot.startsAt()
+                    .toInstant()
+                    .equals(java.time.OffsetDateTime.parse(requestedStart).toInstant()));
+  }
+
+  @Test
+  void rescheduleRejectsInactiveCurrentServiceWithoutSuccessEffects() throws Exception {
+    submitBooking(
+            "reschedule-inactive-service-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Snapshot", "+5511999991840"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    setServiceStatus.execute(
+        actor,
+        serviceId,
+        "deactivate-before-reschedule-" + UUID.randomUUID(),
+        0,
+        ServiceStatus.INACTIVE);
+    long revisionBefore = currentScheduleRevision();
+    int historyBefore = count("appointment_history", tenantId);
+    int auditBefore = countByAction("APPOINTMENT_RESCHEDULED");
+    int outboxBefore = countByEvent("AppointmentRescheduled");
+    int receiptsBefore = rescheduleReceiptCount();
+
+    submitReschedule(
+            appointmentId,
+            "reschedule-inactive-rejected-" + UUID.randomUUID(),
+            rescheduleBody(
+                1,
+                revisionBefore,
+                bookingDate.plusWeeks(1).atTime(9, 0).atZone(ZONE).toOffsetDateTime().toString()))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("ADMIN_BOOKING_POLICY_REJECTED"));
+
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT starts_at = ?::timestamptz AND version = 1 FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+                Boolean.class,
+                java.time.OffsetDateTime.parse(requestedStart),
+                tenantId,
+                appointmentId))
+        .isTrue();
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historyBefore);
+    assertThat(countByAction("APPOINTMENT_RESCHEDULED")).isEqualTo(auditBefore);
+    assertThat(countByEvent("AppointmentRescheduled")).isEqualTo(outboxBefore);
+    assertThat(currentScheduleRevision()).isEqualTo(revisionBefore);
+    assertThat(rescheduleReceiptCount()).isEqualTo(receiptsBefore);
+  }
+
+  @Test
+  void rescheduleUsesCurrentServiceEligibilityButKeepsOriginalSnapshotAndReplay() throws Exception {
+    submitBooking(
+            "reschedule-snapshot-service-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Snapshot original", "+5511999991841"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    updateService.execute(
+        actor,
+        serviceId,
+        "catalog-change-before-reschedule-" + UUID.randomUUID(),
+        0,
+        "Catálogo atualizado",
+        null,
+        60,
+        30);
+    long revision = currentScheduleRevision();
+    String destination = bookingDate.atTime(9, 30).atZone(ZONE).toOffsetDateTime().toString();
+    String key = "reschedule-current-active-service-" + UUID.randomUUID();
+    String body = rescheduleBody(1, revision, destination);
+
+    submitReschedule(appointmentId, key, body)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.version").value(2));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT service_name_snapshot || ':' || service_duration_minutes || ':' || service_buffer_after_minutes || ':' || (occupied_until - starts_at) FROM agendamento.appointment WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("Consulta:30:15:00:45:00");
+    int historyAfterSuccess = count("appointment_history", tenantId);
+    int auditAfterSuccess = countByAction("APPOINTMENT_RESCHEDULED");
+    int outboxAfterSuccess = countByEvent("AppointmentRescheduled");
+    int receiptsAfterSuccess = rescheduleReceiptCount();
+    setServiceStatus.execute(
+        actor,
+        serviceId,
+        "deactivate-after-reschedule-" + UUID.randomUUID(),
+        1,
+        ServiceStatus.INACTIVE);
+
+    submitReschedule(appointmentId, key, body)
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.appointmentId").value(appointmentId.toString()))
+        .andExpect(jsonPath("$.version").value(2));
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historyAfterSuccess);
+    assertThat(countByAction("APPOINTMENT_RESCHEDULED")).isEqualTo(auditAfterSuccess);
+    assertThat(countByEvent("AppointmentRescheduled")).isEqualTo(outboxAfterSuccess);
+    assertThat(rescheduleReceiptCount()).isEqualTo(receiptsAfterSuccess);
+  }
+
+  @Test
+  void reschedulingMayOverlapItsOwnOldOccupiedInterval() throws Exception {
+    submitBooking(
+            "reschedule-own-overlap-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Overlap próprio", "+5511999991842"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    var oldInterval =
+        appJdbc.queryForObject(
+            "SELECT starts_at, occupied_until FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+            (rs, row) ->
+                new java.time.OffsetDateTime[] {
+                  rs.getObject(1, java.time.OffsetDateTime.class),
+                  rs.getObject(2, java.time.OffsetDateTime.class)
+                },
+            tenantId,
+            appointmentId);
+    var newStart = bookingDate.atTime(9, 30).atZone(ZONE).toOffsetDateTime();
+    var newOccupiedUntil = newStart.plusMinutes(45);
+    long revision = currentScheduleRevision();
+
+    submitReschedule(
+            appointmentId,
+            "reschedule-real-overlap-" + UUID.randomUUID(),
+            rescheduleBody(1, revision, newStart.toString()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.appointmentId").value(appointmentId.toString()))
+        .andExpect(jsonPath("$.version").value(2));
+
+    assertThat(oldInterval[0].toInstant()).isBefore(newOccupiedUntil.toInstant());
+    assertThat(newStart.toInstant()).isBefore(oldInterval[1].toInstant());
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ? AND starts_at = ? AND occupied_until = ? AND version = 2",
+                UUID.class,
+                tenantId,
+                appointmentId,
+                newStart,
+                newOccupiedUntil))
+        .isEqualTo(appointmentId);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.appointment WHERE tenant_id = ? AND status = 'CONFIRMED' AND appointment_id <> ? AND tstzrange(starts_at, occupied_until, '[)') && tstzrange(?::timestamptz, ?::timestamptz, '[)')",
+                Integer.class,
+                tenantId,
+                appointmentId,
+                newStart,
+                newOccupiedUntil))
+        .isZero();
+  }
+
+  @Test
+  void historyConstraintRejectsUnknownAndInvalidRescheduleCombinations() throws Exception {
+    submitBooking(
+            "reschedule-history-constraint-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "History", "+5511999991843"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.appointment_history WHERE appointment_id = ? AND reason_code = 'APPOINTMENT_CREATED' AND previous_starts_at IS NULL AND previous_occupied_until IS NULL AND new_starts_at IS NULL AND new_occupied_until IS NULL AND version_before IS NULL AND version_after IS NULL",
+                Integer.class,
+                appointmentId))
+        .isEqualTo(1);
+
+    var start = java.time.OffsetDateTime.parse(requestedStart);
+    var end = start.plusMinutes(45);
+    assertInvalidRescheduleHistory(appointmentId, start, null, start, end, 1L, 2L);
+    assertInvalidRescheduleHistory(appointmentId, start, end, start, null, 1L, 2L);
+    assertInvalidRescheduleHistory(appointmentId, start, null, start, null, 1L, 2L);
+    assertInvalidRescheduleHistory(appointmentId, null, end, start, end, 1L, 2L);
+    assertInvalidRescheduleHistory(appointmentId, start, end, null, end, 1L, 2L);
+    assertInvalidRescheduleHistory(appointmentId, start, end, start, end, null, 2L);
+    assertInvalidRescheduleHistory(appointmentId, start, end, start, end, 2L, 2L);
+    assertInvalidRescheduleHistory(appointmentId, start, start, start, end, 1L, 2L);
+    assertInvalidRescheduleHistory(appointmentId, start, end, start, start, 1L, 2L);
+    assertInvalidRescheduleHistory(appointmentId, start, end, start, end, 1L, 3L);
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () ->
+                migrationJdbc.update(
+                    "INSERT INTO agendamento.appointment_history (history_id, tenant_id, appointment_id, from_status, to_status, actor_type, actor_ref, reason_code, occurred_at, previous_starts_at, previous_occupied_until, new_starts_at, new_occupied_until, version_before, version_after) VALUES (?, ?, ?, 'PENDING', 'CONFIRMED', 'ADMIN', 'TENANT_ADMIN', 'APPOINTMENT_RESCHEDULED', clock_timestamp(), ?, ?, ?, ?, 1, 2)",
+                    UUID.randomUUID(),
+                    tenantId,
+                    appointmentId,
+                    start,
+                    end,
+                    start,
+                    end))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () ->
+                migrationJdbc.update(
+                    "INSERT INTO agendamento.appointment_history (history_id, tenant_id, appointment_id, from_status, to_status, actor_type, actor_ref, reason_code, occurred_at, previous_starts_at, previous_occupied_until, new_starts_at, new_occupied_until, version_before, version_after) VALUES (?, ?, ?, 'CONFIRMED', 'CONFIRMED', 'ADMIN', 'TENANT_ADMIN', NULL, clock_timestamp(), ?, ?, ?, ?, 1, 2)",
+                    UUID.randomUUID(),
+                    tenantId,
+                    appointmentId,
+                    start,
+                    end,
+                    start,
+                    end))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(1);
+
+    String destination =
+        bookingDate.plusWeeks(1).atTime(9, 0).atZone(ZONE).toOffsetDateTime().toString();
+    submitReschedule(
+            appointmentId,
+            "reschedule-valid-history-" + UUID.randomUUID(),
+            rescheduleBody(1, currentScheduleRevision(), destination))
+        .andExpect(status().isOk());
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.appointment_history WHERE appointment_id = ? AND reason_code = 'APPOINTMENT_RESCHEDULED' AND previous_starts_at IS NOT NULL AND previous_occupied_until > previous_starts_at AND new_starts_at IS NOT NULL AND new_occupied_until > new_starts_at AND version_before = 1 AND version_after = 2",
+                Integer.class,
+                appointmentId))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void concurrentRescheduleWithStaleVersionLoses() throws Exception {
+    submitBooking(
+            "reschedule-own-overlap-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Overlap próprio", "+5511999991811"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    long revision = currentScheduleRevision();
+    String firstDestination =
+        bookingDate.plusWeeks(1).atTime(9, 30).atZone(ZONE).toOffsetDateTime().toString();
+    installRescheduleUpdatePause(appointmentId);
+    try (ExecutorService requests = Executors.newFixedThreadPool(2)) {
+      var winner =
+          requests.submit(
+              () ->
+                  submitReschedule(
+                          appointmentId,
+                          "reschedule-concurrent-first-" + UUID.randomUUID(),
+                          rescheduleBody(1, revision, firstDestination))
+                      .andReturn()
+                      .getResponse()
+                      .getStatus());
+      awaitUpdateInProgress();
+      var stale =
+          requests.submit(
+              () ->
+                  submitReschedule(
+                          appointmentId,
+                          "reschedule-concurrent-second-" + UUID.randomUUID(),
+                          rescheduleBody(
+                              1,
+                              revision,
+                              bookingDate
+                                  .plusWeeks(1)
+                                  .atTime(10, 0)
+                                  .atZone(ZONE)
+                                  .toOffsetDateTime()
+                                  .toString()))
+                      .andReturn()
+                      .getResponse()
+                      .getStatus());
+      assertThat(winner.get()).isEqualTo(200);
+      assertThat(stale.get()).isEqualTo(409);
+    } finally {
+      removeRescheduleUpdatePause();
+    }
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT starts_at FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+                java.time.OffsetDateTime.class,
+                tenantId,
+                appointmentId))
+        .isEqualTo(java.time.OffsetDateTime.parse(firstDestination));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT version FROM agendamento.appointment WHERE appointment_id = ?",
+                Long.class,
+                appointmentId))
+        .isEqualTo(2L);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(2);
+    assertThat(countByAction("APPOINTMENT_RESCHEDULED")).isEqualTo(1);
+    assertThat(countByEvent("AppointmentRescheduled")).isEqualTo(1);
+    assertThat(currentScheduleRevision()).isEqualTo(revision + 1);
+  }
+
+  @Test
+  void blockedDestinationRejectsRescheduleWithoutChangingOriginal() throws Exception {
+    submitBooking(
+            "reschedule-blocked-source-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Bloqueio", "+5511999991812"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    var destination = bookingDate.plusWeeks(1).atTime(9, 0).atZone(ZONE).toOffsetDateTime();
+    manageBlockedPeriods.create(
+        actor,
+        "reschedule-block-target-" + UUID.randomUUID(),
+        destination.toString(),
+        destination.plusHours(1).toString(),
+        "Bloqueio concorrente de agenda");
+    int historyBefore = count("appointment_history", tenantId);
+    int auditBefore = countByAction("APPOINTMENT_RESCHEDULED");
+    int outboxBefore = countByEvent("AppointmentRescheduled");
+    long revisionBefore = currentScheduleRevision();
+    submitReschedule(
+            appointmentId,
+            "reschedule-blocked-target-" + UUID.randomUUID(),
+            rescheduleBody(1, revisionBefore, destination.toString()))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("SLOT_NO_LONGER_AVAILABLE"));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT starts_at FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+                java.time.OffsetDateTime.class,
+                tenantId,
+                appointmentId))
+        .isEqualTo(java.time.OffsetDateTime.parse(requestedStart));
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historyBefore);
+    assertThat(countByAction("APPOINTMENT_RESCHEDULED")).isEqualTo(auditBefore);
+    assertThat(countByEvent("AppointmentRescheduled")).isEqualTo(outboxBefore);
+    assertThat(currentScheduleRevision()).isEqualTo(revisionBefore);
+  }
+
+  @Test
+  void staleScheduleRevisionIsDistinctFromAppointmentVersionConflict() throws Exception {
+    submitBooking(
+            "reschedule-stale-revision-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Revisão", "+5511999991813"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    long staleRevision = currentScheduleRevision();
+    var unrelatedBlock = bookingDate.plusWeeks(8).atTime(9, 0).atZone(ZONE).toOffsetDateTime();
+    manageBlockedPeriods.create(
+        actor,
+        "reschedule-revision-change-" + UUID.randomUUID(),
+        unrelatedBlock.toString(),
+        unrelatedBlock.plusHours(1).toString(),
+        "Alteração de revisão de agenda");
+    int historyBefore = count("appointment_history", tenantId);
+    int auditBefore = countByAction("APPOINTMENT_RESCHEDULED");
+    int outboxBefore = countByEvent("AppointmentRescheduled");
+    submitReschedule(
+            appointmentId,
+            "reschedule-stale-revision-key-" + UUID.randomUUID(),
+            rescheduleBody(
+                1,
+                staleRevision,
+                bookingDate.plusWeeks(1).atTime(9, 0).atZone(ZONE).toOffsetDateTime().toString()))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("VERSION_CONFLICT"));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT starts_at FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+                java.time.OffsetDateTime.class,
+                tenantId,
+                appointmentId))
+        .isEqualTo(java.time.OffsetDateTime.parse(requestedStart));
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historyBefore);
+    assertThat(countByAction("APPOINTMENT_RESCHEDULED")).isEqualTo(auditBefore);
+    assertThat(countByEvent("AppointmentRescheduled")).isEqualTo(outboxBefore);
+  }
+
+  @Test
+  void rescheduleWinningSharedTenantLockRejectsConcurrentDestinationBlock() throws Exception {
+    submitBooking(
+            "reschedule-lock-first-source-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Lock remarca primeiro", "+5511999991814"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    long revision = currentScheduleRevision();
+    var destination = bookingDate.plusWeeks(1).atTime(9, 0).atZone(ZONE).toOffsetDateTime();
+    installRescheduleUpdatePause(appointmentId);
+    try (ExecutorService commands = Executors.newFixedThreadPool(2)) {
+      var reschedule =
+          commands.submit(
+              () ->
+                  submitReschedule(
+                          appointmentId,
+                          "reschedule-lock-winner-" + UUID.randomUUID(),
+                          rescheduleBody(1, revision, destination.toString()))
+                      .andReturn());
+      awaitUpdateInProgress();
+      var block = commands.submit(() -> createBlockAt(destination));
+      var rescheduleResponse = reschedule.get().getResponse();
+      assertThat(rescheduleResponse.getStatus())
+          .as(rescheduleResponse.getContentAsString())
+          .isEqualTo(200);
+      assertThat(block.get()).isFalse();
+    } finally {
+      removeRescheduleUpdatePause();
+    }
+    assertThat(count("blocked_period", tenantId)).isZero();
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT starts_at FROM agendamento.appointment WHERE appointment_id = ?",
+                java.time.OffsetDateTime.class,
+                appointmentId))
+        .isEqualTo(destination);
+  }
+
+  @Test
+  void destinationBlockWinningSharedTenantLockRejectsConcurrentReschedule() throws Exception {
+    submitBooking(
+            "reschedule-block-lock-source-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Lock bloqueio primeiro", "+5511999991815"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    long revision = currentScheduleRevision();
+    var destination = bookingDate.plusWeeks(1).atTime(9, 0).atZone(ZONE).toOffsetDateTime();
+    installPauseTrigger("blocked_period");
+    try (ExecutorService commands = Executors.newFixedThreadPool(2)) {
+      var block = commands.submit(() -> createBlockAt(destination));
+      awaitInsertInProgress("blocked_period");
+      var reschedule =
+          commands.submit(
+              () ->
+                  submitReschedule(
+                          appointmentId,
+                          "reschedule-block-lock-loser-" + UUID.randomUUID(),
+                          rescheduleBody(1, revision + 1, destination.toString()))
+                      .andReturn()
+                      .getResponse()
+                      .getStatus());
+      assertThat(block.get()).isTrue();
+      assertThat(reschedule.get()).isEqualTo(409);
+    } finally {
+      removePauseTrigger("blocked_period");
+    }
+    assertThat(count("blocked_period", tenantId)).isEqualTo(1);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT starts_at FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+                java.time.OffsetDateTime.class,
+                tenantId,
+                appointmentId))
+        .isEqualTo(java.time.OffsetDateTime.parse(requestedStart));
+    assertThat(countByAction("APPOINTMENT_RESCHEDULED")).isZero();
+    assertThat(countByEvent("AppointmentRescheduled")).isZero();
+  }
+
+  @Test
+  void conflictingReschedulePreservesOriginalIntervalAndCreatesNoSuccessEffects() throws Exception {
+    submitBooking(
+            "reschedule-conflict-source-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Original", "+5511999991802"))
+        .andExpect(status().isCreated());
+    java.time.OffsetDateTime occupiedSlot =
+        bookingDate.atTime(10, 30).atZone(ZONE).toOffsetDateTime();
+    submitBooking(
+            "reschedule-conflict-target-" + UUID.randomUUID(),
+            requestBody(serviceId, occupiedSlot.toString(), "Other", "+5511999991803"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ? AND client_id = (SELECT client_id FROM agendamento.client WHERE tenant_id = ? AND normalized_phone = '+5511999991802')",
+            UUID.class,
+            tenantId,
+            tenantId);
+    long revisionBefore = currentScheduleRevision();
+    int historyBefore = count("appointment_history", tenantId);
+    int auditBefore = countByAction("APPOINTMENT_RESCHEDULED");
+    int outboxBefore = countByEvent("AppointmentRescheduled");
+    submitReschedule(
+            appointmentId,
+            "admin-reschedule-conflict-" + UUID.randomUUID(),
+            rescheduleBody(1, revisionBefore, occupiedSlot.toString()))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("SLOT_NO_LONGER_AVAILABLE"));
+
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT starts_at FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+                java.time.OffsetDateTime.class,
+                tenantId,
+                appointmentId))
+        .isEqualTo(java.time.OffsetDateTime.parse(requestedStart));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT version FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+                Long.class,
+                tenantId,
+                appointmentId))
+        .isEqualTo(1L);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historyBefore);
+    assertThat(countByAction("APPOINTMENT_RESCHEDULED")).isEqualTo(auditBefore);
+    assertThat(countByEvent("AppointmentRescheduled")).isEqualTo(outboxBefore);
+    assertThat(currentScheduleRevision()).isEqualTo(revisionBefore);
+  }
+
+  @Test
+  void auditFailureRollsBackRescheduledIntervalVersionHistoryOutboxAndRevision() throws Exception {
+    submitBooking(
+            "reschedule-rollback-source-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Rollback", "+5511999991804"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    long revisionBefore = currentScheduleRevision();
+    int historyBefore = count("appointment_history", tenantId);
+    int auditBefore = countByAction("APPOINTMENT_RESCHEDULED");
+    int outboxBefore = countByEvent("AppointmentRescheduled");
+    int receiptsBefore =
+        appJdbc.queryForObject(
+            "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope = 'appointments.admin.reschedule.v1'",
+            Integer.class,
+            tenantId);
+    migrationJdbc.execute(
+        "CREATE FUNCTION agendamento.fail_reschedule_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action = 'APPOINTMENT_RESCHEDULED' THEN RAISE EXCEPTION 'test audit failure'; END IF; RETURN NEW; END $$");
+    migrationJdbc.execute(
+        "CREATE TRIGGER fail_reschedule_audit BEFORE INSERT ON agendamento.audit_event FOR EACH ROW EXECUTE FUNCTION agendamento.fail_reschedule_audit()");
+    try {
+      org.assertj.core.api.Assertions.assertThatThrownBy(
+              () ->
+                  submitReschedule(
+                      appointmentId,
+                      "admin-reschedule-rollback-" + UUID.randomUUID(),
+                      rescheduleBody(
+                          1,
+                          revisionBefore,
+                          bookingDate
+                              .plusWeeks(1)
+                              .atTime(9, 0)
+                              .atZone(ZONE)
+                              .toOffsetDateTime()
+                              .toString())))
+          .isInstanceOf(jakarta.servlet.ServletException.class);
+    } finally {
+      migrationJdbc.execute("DROP TRIGGER fail_reschedule_audit ON agendamento.audit_event");
+      migrationJdbc.execute("DROP FUNCTION agendamento.fail_reschedule_audit()");
+    }
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT starts_at FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+                java.time.OffsetDateTime.class,
+                tenantId,
+                appointmentId))
+        .isEqualTo(java.time.OffsetDateTime.parse(requestedStart));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT version FROM agendamento.appointment WHERE appointment_id = ?",
+                Long.class,
+                appointmentId))
+        .isEqualTo(1L);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historyBefore);
+    assertThat(countByAction("APPOINTMENT_RESCHEDULED")).isEqualTo(auditBefore);
+    assertThat(countByEvent("AppointmentRescheduled")).isEqualTo(outboxBefore);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope = 'appointments.admin.reschedule.v1'",
+                Integer.class,
+                tenantId))
+        .isEqualTo(receiptsBefore);
+    assertThat(currentScheduleRevision()).isEqualTo(revisionBefore);
+  }
+
+  private ResultActions submitReschedule(UUID id, String key, String body) throws Exception {
+    return mvc.perform(
+        post("/api/v1/admin/appointments/{id}/reschedule", id)
+            .with(authentication(principalToken(actor)))
+            .with(csrf())
+            .header("Idempotency-Key", key)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(body));
+  }
+
+  private static String rescheduleBody(
+      long expectedVersion, long scheduleRevision, String startsAt) {
+    return "{\"expectedVersion\":"
+        + expectedVersion
+        + ",\"expectedScheduleRevision\":"
+        + scheduleRevision
+        + ",\"startsAt\":\""
+        + startsAt
+        + "\"}";
+  }
+
   private int submitAdministrativeBooking(
       String key,
       String startsAt,
@@ -1738,12 +2422,16 @@ class PublicAppointmentIT {
 
   private boolean createConflictingBlock() {
     var start = java.time.OffsetDateTime.parse(requestedStart);
+    return createBlockAt(start);
+  }
+
+  private boolean createBlockAt(java.time.OffsetDateTime start) {
     try {
       manageBlockedPeriods.create(
           actor,
           "block-race-" + UUID.randomUUID(),
           start.toString(),
-          start.plusMinutes(45).toString(),
+          start.plusHours(1).toString(),
           "Manutenção concorrente");
       return true;
     } catch (ConfirmedAppointmentConflictException conflict) {
@@ -1765,6 +2453,33 @@ class PublicAppointmentIT {
             + " FOR EACH ROW EXECUTE FUNCTION agendamento."
             + function
             + "()");
+  }
+
+  private void installRescheduleUpdatePause(UUID appointmentId) {
+    migrationJdbc.execute(
+        "CREATE FUNCTION agendamento.pause_reschedule_update() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.appointment_id = '"
+            + appointmentId
+            + "'::uuid THEN PERFORM pg_sleep(0.75); END IF; RETURN NEW; END $$");
+    migrationJdbc.execute(
+        "CREATE TRIGGER pause_reschedule_update BEFORE UPDATE ON agendamento.appointment FOR EACH ROW EXECUTE FUNCTION agendamento.pause_reschedule_update()");
+  }
+
+  private void removeRescheduleUpdatePause() {
+    migrationJdbc.execute("DROP TRIGGER pause_reschedule_update ON agendamento.appointment");
+    migrationJdbc.execute("DROP FUNCTION agendamento.pause_reschedule_update()");
+  }
+
+  private void awaitUpdateInProgress() throws InterruptedException {
+    long deadline = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
+    while (System.nanoTime() < deadline) {
+      Integer active =
+          migrationJdbc.queryForObject(
+              "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND wait_event = 'PgSleep' AND query ILIKE '%UPDATE agendamento.appointment%'",
+              Integer.class);
+      if (active != null && active > 0) return;
+      Thread.sleep(20);
+    }
+    throw new IllegalStateException("A remarcação não chegou ao UPDATE sob lock de tenant");
   }
 
   private void removePauseTrigger(String table) {
@@ -1809,6 +2524,37 @@ class PublicAppointmentIT {
         Integer.class,
         tenantId,
         action);
+  }
+
+  private int rescheduleReceiptCount() {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope = 'appointments.admin.reschedule.v1'",
+        Integer.class,
+        tenantId);
+  }
+
+  private void assertInvalidRescheduleHistory(
+      UUID appointmentId,
+      java.time.OffsetDateTime previousStartsAt,
+      java.time.OffsetDateTime previousOccupiedUntil,
+      java.time.OffsetDateTime newStartsAt,
+      java.time.OffsetDateTime newOccupiedUntil,
+      Long versionBefore,
+      Long versionAfter) {
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () ->
+                migrationJdbc.update(
+                    "INSERT INTO agendamento.appointment_history (history_id, tenant_id, appointment_id, from_status, to_status, actor_type, actor_ref, reason_code, occurred_at, previous_starts_at, previous_occupied_until, new_starts_at, new_occupied_until, version_before, version_after) VALUES (?, ?, ?, 'CONFIRMED', 'CONFIRMED', 'ADMIN', 'TENANT_ADMIN', 'APPOINTMENT_RESCHEDULED', clock_timestamp(), ?, ?, ?, ?, ?, ?)",
+                    UUID.randomUUID(),
+                    tenantId,
+                    appointmentId,
+                    previousStartsAt,
+                    previousOccupiedUntil,
+                    newStartsAt,
+                    newOccupiedUntil,
+                    versionBefore,
+                    versionAfter))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
   }
 
   private static String requestBody(
