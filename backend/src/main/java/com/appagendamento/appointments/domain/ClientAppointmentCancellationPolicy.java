@@ -12,6 +12,6 @@ public final class ClientAppointmentCancellationPolicy {
         || cancellationCutoffHours > 24) {
       throw new IllegalArgumentException("Parâmetros da política de cancelamento inválidos");
     }
-    return now.isBefore(startsAt.minus(cancellationCutoffHours, ChronoUnit.HOURS));
+    return !now.isAfter(startsAt.minus(cancellationCutoffHours, ChronoUnit.HOURS));
   }
 }

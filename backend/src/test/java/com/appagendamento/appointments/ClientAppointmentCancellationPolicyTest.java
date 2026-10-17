@@ -13,12 +13,12 @@ class ClientAppointmentCancellationPolicyTest {
       new ClientAppointmentCancellationPolicy();
 
   @Test
-  void allowsCancellationBeforeConfiguredCutoffAndRejectsAtOrAfterIt() {
+  void allowsCancellationImmediatelyBeforeAndAtCutoffButRejectsAfter() {
     Instant startsAt = Instant.parse("2026-10-20T15:00:00Z");
     Instant cutoff = startsAt.minusSeconds(4 * 60 * 60L);
 
     assertThat(policy.allows(startsAt, cutoff.minusNanos(1), 4)).isTrue();
-    assertThat(policy.allows(startsAt, cutoff, 4)).isFalse();
+    assertThat(policy.allows(startsAt, cutoff, 4)).isTrue();
     assertThat(policy.allows(startsAt, cutoff.plusNanos(1), 4)).isFalse();
   }
 

@@ -809,7 +809,8 @@ paths:
         cancelamento autenticado pelo cliente. Exige CAS, Idempotency-Key e CSRF. Reserva, estado,
         versão, história, auditoria, receipt e AppointmentCancelled compartilham o commit. Replays
         autorizados devolvem o receipt original mesmo após estado terminal. Liberação de ocupação
-        ocorre somente após commit. Não exige que o serviço ainda esteja ativo.
+        ocorre somente após commit. Não exige que o serviço ainda esteja ativo. Cancelamento
+        administrativo não usa nem herda o limite temporal de cancelamento do cliente.
       security:
         - backendSession: []
           csrfToken: []
@@ -843,10 +844,10 @@ paths:
       operationId: completeAdminAppointment
       summary: Concluir atendimento
       description: >-
-        Somente CONFIRMED. Até decisão de produto, usa regra conservadora provisória: instante
-        atual deve ser igual ou posterior a service_ends_at. Igualdade é permitida. A regra não
-        substitui futura decisão explícita e não aplica tolerância de dez minutos. Efeitos e replay
-        são atômicos e autorizados como no cancelamento.
+        Somente CONFIRMED. Por decisão de produto aprovada em 17/10/2026 (ADR-0018), exige
+        Clock.instant() igual ou posterior a occupiedUntil, incluindo o buffer. Um atendimento
+        09:00–09:30 ocupado até 09:45 só pode ser concluído a partir de 09:45. Não há tolerância
+        adicional de dez minutos. Efeitos e replay são atômicos e autorizados como no cancelamento.
       security:
         - backendSession: []
           csrfToken: []
@@ -880,10 +881,10 @@ paths:
       operationId: markAdminAppointmentNoShow
       summary: Registrar falta do cliente
       description: >-
-        Somente CONFIRMED. Até decisão de produto, usa regra conservadora provisória: instante
-        atual deve ser igual ou posterior a occupied_until, incluindo buffer. Igualdade é permitida;
-        não há tolerância de dez minutos. O evento é gravado uma única vez, mas não implementa
-        contagem móvel ou bloqueio automático, que dependem de AGD-032/033.
+        Somente CONFIRMED. Por decisão de produto aprovada em 17/10/2026 (ADR-0018), exige
+        Clock.instant() igual ou posterior a occupiedUntil, incluindo buffer; igualdade é permitida.
+        Não há tolerância adicional de dez minutos. O evento é gravado uma única vez, mas não
+        implementa contagem móvel ou bloqueio automático, que dependem de AGD-032/033.
       security:
         - backendSession: []
           csrfToken: []

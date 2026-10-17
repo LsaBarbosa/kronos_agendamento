@@ -195,7 +195,8 @@ export function AdminAgendaPanel({
     const [outcomeSaving, setOutcomeSaving] = useState(false);
     const [outcomeUncertain, setOutcomeUncertain] = useState(false);
     const [outcomeError, setOutcomeError] = useState('');
-    const [outcomeConflict, setOutcomeConflict] = useState(false);
+    const [outcomeConflictAppointmentId, setOutcomeConflictAppointmentId] =
+        useState<string | null>(null);
     const [outcomeNotice, setOutcomeNotice] = useState('');
     const [outcomeAction, setOutcomeAction] = useState<OutcomeAction | null>(
         null,
@@ -224,6 +225,7 @@ export function AdminAgendaPanel({
         rescheduleUncertain ||
         outcomeSaving ||
         outcomeUncertain;
+    const outcomeConflict = outcomeConflictAppointmentId !== null;
     const rescheduleLocked = () =>
         rescheduleRequestGuard.current ||
         rescheduleSaving ||
@@ -512,7 +514,7 @@ export function AdminAgendaPanel({
         setDetails(null);
     }
 
-    async function loadDetails(appointmentId: string) {
+    async function loadDetails(appointmentId: string, resolvedCommand = false) {
         const requestSequence = ++detailSequence.current;
         setSelectedAppointmentId(appointmentId);
         setDetails(null);
@@ -552,8 +554,14 @@ export function AdminAgendaPanel({
                 readJson<Appointment>(appointmentResponse),
                 readJson<{ items: HistoryEntry[] }>(historyResponse),
             ]);
-            if (requestSequence === detailSequence.current)
+            if (requestSequence === detailSequence.current) {
                 setDetails({ ...appointment, history: history.items });
+                if (resolvedCommand) {
+                    setOutcomeConflictAppointmentId((current) =>
+                        current === appointmentId ? null : current,
+                    );
+                }
+            }
         } catch (cause) {
             if (requestSequence === detailSequence.current) {
                 setDetailsError(
@@ -718,7 +726,7 @@ export function AdminAgendaPanel({
             rescheduleRequestGuard.current = false;
             setRescheduleSaving(false);
             await load();
-            await loadDetails(targetAppointmentId);
+            await loadDetails(targetAppointmentId, true);
         } catch {
             setRescheduleUncertain(true);
             setRescheduleError(
@@ -759,7 +767,6 @@ export function AdminAgendaPanel({
         outcomeRequestGuard.current = true;
         setOutcomeSaving(true);
         setOutcomeError('');
-        setOutcomeConflict(false);
         setOutcomeNotice('');
         try {
             const response = await fetch(
@@ -793,10 +800,12 @@ export function AdminAgendaPanel({
                     errorBody?.error?.message ??
                         `Falha HTTP ${response.status}.`,
                 );
-                setOutcomeConflict(
+                if (
                     code === 'VERSION_CONFLICT' ||
-                        code === 'INVALID_STATE_TRANSITION',
-                );
+                    code === 'INVALID_STATE_TRANSITION'
+                ) {
+                    setOutcomeConflictAppointmentId(intention.appointmentId);
+                }
                 setOutcomeUncertain(uncertain);
                 outcomeRequestGuard.current = false;
                 if (!uncertain) {
@@ -814,13 +823,15 @@ export function AdminAgendaPanel({
             const targetAppointmentId = intention.appointmentId;
             setPendingOutcome(null);
             setOutcomeUncertain(false);
-            setOutcomeConflict(false);
+            setOutcomeConflictAppointmentId((current) =>
+                current === intention.appointmentId ? null : current,
+            );
             setOutcomeAction(null);
             setOutcomeReason('');
             setOutcomeNotice('Estado atualizado e persistido.');
             outcomeRequestGuard.current = false;
             await load();
-            await loadDetails(targetAppointmentId);
+            await loadDetails(targetAppointmentId, true);
         } catch {
             setOutcomeUncertain(true);
             outcomeRequestGuard.current = false;
@@ -2309,22 +2320,35 @@ export function AdminAgendaPanel({
                                     {outcomeError && (
                                         <p role="alert">{outcomeError}</p>
                                     )}
-                                    {outcomeConflict && !outcomeUncertain && (
-                                        <button
-                                            type="button"
-                                            disabled={outcomeSaving}
-                                            onClick={() =>
-                                                void loadDetails(
-                                                    details.appointmentId,
-                                                )
-                                            }
-                                        >
-                                            Atualizar detalhes da reserva
-                                        </button>
-                                    )}
                                 </section>
                             )}
                             {outcomeNotice && <output>{outcomeNotice}</output>}
+                            {outcomeConflict &&
+                                outcomeConflictAppointmentId &&
+                                !outcomeUncertain && (
+                                    <section aria-label="Conflito de reserva">
+                                        <p>
+                                            A reserva{' '}
+                                            {outcomeConflictAppointmentId} mudou
+                                            em outra operação. Atualize os
+                                            detalhes antes de decidir novamente.
+                                        </p>
+                                        <button
+                                            type="button"
+                                            disabled={
+                                                commandInFlightOrUncertain
+                                            }
+                                            onClick={() => {
+                                                if (rescheduleLocked()) return;
+                                                void openDetails(
+                                                    outcomeConflictAppointmentId,
+                                                );
+                                            }}
+                                        >
+                                            Atualizar detalhes da reserva
+                                        </button>
+                                    </section>
+                                )}
                         </section>
                     )}
                     {detailsLoading && (

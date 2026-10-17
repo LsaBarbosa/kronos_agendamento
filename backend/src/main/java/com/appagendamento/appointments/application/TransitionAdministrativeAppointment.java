@@ -108,8 +108,7 @@ public class TransitionAdministrativeAppointment {
       throw new AppointmentVersionConflictException();
     }
     var now = clock.instant();
-    if ((outcome == AppointmentOutcome.COMPLETE && now.isBefore(current.serviceEndsAt()))
-        || (outcome == AppointmentOutcome.MARK_NO_SHOW && now.isBefore(current.occupiedUntil()))) {
+    if (outcome != AppointmentOutcome.CANCEL_BY_PROVIDER && now.isBefore(current.occupiedUntil())) {
       throw new AppointmentOutcomeNotYetAllowedException();
     }
     if (!appointments.transitionOutcome(current, command.expectedVersion(), outcome, reason)) {

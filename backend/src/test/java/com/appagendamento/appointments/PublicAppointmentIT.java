@@ -40,6 +40,7 @@ import com.appagendamento.publicpage.application.UpdatePublicContact;
 import com.appagendamento.support.PostgresTestEnvironment;
 import java.security.SecureRandom;
 import java.time.DayOfWeek;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -103,7 +104,7 @@ class PublicAppointmentIT {
   @Autowired private SetServiceStatus setServiceStatus;
   @Autowired private MockMvc mvc;
   @Autowired private ObjectMapper objectMapper;
-  @Autowired private java.time.Clock clock;
+  @MockitoBean private java.time.Clock clock;
   @MockitoBean private PublicationEvidence publicationEvidence;
   @MockitoBean private ClientBookingRestrictionQuery clientRestrictions;
 
@@ -123,6 +124,7 @@ class PublicAppointmentIT {
 
   @BeforeEach
   void preparePublishedTenant() throws Exception {
+    org.mockito.Mockito.when(clock.instant()).thenReturn(Instant.now());
     org.mockito.Mockito.when(
             publicationEvidence.unavailableEvidence(org.mockito.ArgumentMatchers.any()))
         .thenReturn(List.of());
@@ -515,6 +517,105 @@ class PublicAppointmentIT {
   }
 
   @Test
+  void outcomesWaitUntilOccupiedUntilIncludingBufferAndReplayAtTheBoundary() throws Exception {
+    submitBooking(
+            "positive-buffer-outcome-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Buffer positivo", "+5511999994341"))
+        .andExpect(status().isCreated());
+    UUID positiveBufferId = appointmentIdForTenant();
+
+    UUID zeroBufferService =
+        createService
+            .execute(
+                actor,
+                "zero-buffer-outcome-" + UUID.randomUUID(),
+                "Consulta sem buffer",
+                "Atendimento",
+                30,
+                0,
+                ServiceStatus.ACTIVE)
+            .value()
+            .serviceId();
+    String zeroBufferStart = bookingDate.atTime(10, 0).atZone(ZONE).toOffsetDateTime().toString();
+    submitBooking(
+            "zero-buffer-outcome-booking-" + UUID.randomUUID(),
+            requestBody(zeroBufferService, zeroBufferStart, "Buffer zero", "+5511999994342"))
+        .andExpect(status().isCreated());
+    UUID zeroBufferId = appointmentIdForClientName("Buffer zero");
+
+    Instant positiveStart = java.time.OffsetDateTime.parse(requestedStart).toInstant();
+    Instant positiveOccupiedUntil = positiveStart.plusSeconds(45 * 60L);
+    setAppointmentInterval(
+        positiveBufferId,
+        positiveStart,
+        positiveStart.plusSeconds(30 * 60L),
+        positiveOccupiedUntil);
+    String positiveKey = "complete-positive-boundary-" + UUID.randomUUID();
+    int idempotencyRecordsBeforePositiveBoundary = idempotencyRecordCount();
+    org.mockito.Mockito.when(clock.instant()).thenReturn(positiveOccupiedUntil.minusNanos(1));
+    postOutcome(positiveBufferId, "complete", positiveKey, 1)
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("INVALID_STATE_TRANSITION"));
+    assertThat(persistedStatus(positiveBufferId)).isEqualTo("CONFIRMED:1");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ? AND status = 'CONFIRMED' AND occupied_until = ? AND tstzrange(starts_at, occupied_until, '[)') @> ?::timestamptz",
+                Integer.class,
+                tenantId,
+                positiveBufferId,
+                java.sql.Timestamp.from(positiveOccupiedUntil),
+                java.sql.Timestamp.from(positiveStart)))
+        .isEqualTo(1);
+    assertThat(countByAction("APPOINTMENT_COMPLETED")).isZero();
+    assertThat(countByEvent("AppointmentCompleted")).isZero();
+    assertThat(countHistoryReason(positiveBufferId, "APPOINTMENT_COMPLETED")).isZero();
+    assertThat(idempotencyRecordCount()).isEqualTo(idempotencyRecordsBeforePositiveBoundary);
+
+    org.mockito.Mockito.when(clock.instant()).thenReturn(positiveOccupiedUntil);
+    postOutcome(positiveBufferId, "complete", positiveKey, 1)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("COMPLETED"))
+        .andExpect(jsonPath("$.version").value(2));
+    org.mockito.Mockito.when(clock.instant()).thenReturn(positiveOccupiedUntil.plusNanos(1));
+    postOutcome(positiveBufferId, "complete", positiveKey, 1)
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.version").value(2));
+
+    Instant zeroStart = bookingDate.atTime(10, 0).atZone(ZONE).toInstant();
+    Instant zeroOccupiedUntil = zeroStart.plusSeconds(30 * 60L);
+    setAppointmentInterval(zeroBufferId, zeroStart, zeroOccupiedUntil, zeroOccupiedUntil);
+    String zeroKey = "no-show-zero-boundary-" + UUID.randomUUID();
+    int idempotencyRecordsBeforeZeroBoundary = idempotencyRecordCount();
+    org.mockito.Mockito.when(clock.instant()).thenReturn(zeroOccupiedUntil.minusNanos(1));
+    postOutcome(zeroBufferId, "mark-no-show", zeroKey, 1)
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("INVALID_STATE_TRANSITION"));
+    assertThat(persistedStatus(zeroBufferId)).isEqualTo("CONFIRMED:1");
+    assertThat(countByAction("APPOINTMENT_NO_SHOW_RECORDED")).isZero();
+    assertThat(countByEvent("ClientNoShowRecorded")).isZero();
+    assertThat(countHistoryReason(zeroBufferId, "APPOINTMENT_NO_SHOW")).isZero();
+    assertThat(idempotencyRecordCount()).isEqualTo(idempotencyRecordsBeforeZeroBoundary);
+
+    org.mockito.Mockito.when(clock.instant()).thenReturn(zeroOccupiedUntil);
+    postOutcome(zeroBufferId, "mark-no-show", zeroKey, 1)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("NO_SHOW"))
+        .andExpect(jsonPath("$.version").value(2));
+    org.mockito.Mockito.when(clock.instant()).thenReturn(zeroOccupiedUntil.plusNanos(1));
+    postOutcome(zeroBufferId, "mark-no-show", zeroKey, 1)
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.version").value(2));
+    assertThat(countByAction("APPOINTMENT_COMPLETED")).isEqualTo(1);
+    assertThat(countByEvent("AppointmentCompleted")).isEqualTo(1);
+    assertThat(countByAction("APPOINTMENT_NO_SHOW_RECORDED")).isEqualTo(1);
+    assertThat(countByEvent("ClientNoShowRecorded")).isEqualTo(1);
+    assertThat(countHistoryReason(positiveBufferId, "APPOINTMENT_COMPLETED")).isEqualTo(1);
+    assertThat(countHistoryReason(zeroBufferId, "APPOINTMENT_NO_SHOW")).isEqualTo(1);
+  }
+
+  @Test
   void auditFailureRollsBackCancellationAndDoesNotReleaseTheSlot() throws Exception {
     submitBooking(
             "rollback-outcome-" + UUID.randomUUID(),
@@ -769,6 +870,60 @@ class PublicAppointmentIT {
         "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ? AND status = 'CONFIRMED' ORDER BY created_at DESC LIMIT 1",
         UUID.class,
         tenantId);
+  }
+
+  private UUID appointmentIdForClientName(String name) {
+    return appJdbc.queryForObject(
+        "SELECT appointment.appointment_id FROM agendamento.appointment appointment JOIN agendamento.client client USING (tenant_id, client_id) WHERE appointment.tenant_id = ? AND client.display_name = ? ORDER BY appointment.created_at DESC LIMIT 1",
+        UUID.class,
+        tenantId,
+        name);
+  }
+
+  private void setAppointmentInterval(
+      UUID appointmentId, Instant startsAt, Instant serviceEndsAt, Instant occupiedUntil) {
+    migrationJdbc.update(
+        "UPDATE agendamento.appointment SET starts_at = ?, service_ends_at = ?, occupied_until = ? WHERE tenant_id = ? AND appointment_id = ?",
+        java.sql.Timestamp.from(startsAt),
+        java.sql.Timestamp.from(serviceEndsAt),
+        java.sql.Timestamp.from(occupiedUntil),
+        tenantId,
+        appointmentId);
+  }
+
+  private String persistedStatus(UUID appointmentId) {
+    return appJdbc.queryForObject(
+        "SELECT status || ':' || version FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+        String.class,
+        tenantId,
+        appointmentId);
+  }
+
+  private int idempotencyRecordCount() {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ?",
+        Integer.class,
+        tenantId);
+  }
+
+  private int countHistoryReason(UUID appointmentId, String reasonCode) {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.appointment_history WHERE tenant_id = ? AND appointment_id = ? AND reason_code = ?",
+        Integer.class,
+        tenantId,
+        appointmentId,
+        reasonCode);
+  }
+
+  private ResultActions postOutcome(UUID appointmentId, String action, String key, long version)
+      throws Exception {
+    return mvc.perform(
+        post("/api/v1/admin/appointments/{id}/" + action, appointmentId)
+            .with(authentication(principalToken(actor)))
+            .with(csrf())
+            .header("Idempotency-Key", key)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"expectedVersion\":" + version + "}"));
   }
 
   private void setAppointmentInPast(UUID appointmentId) {

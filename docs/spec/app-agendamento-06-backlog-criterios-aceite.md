@@ -242,7 +242,7 @@ Critérios de aceite:
 - Retry do mesmo comando é idempotente.
 - Cancelamento libera ocupação apenas após commit.
 
-**Limite sem decisão de produto (17/10/2026):** a elegibilidade temporal de conclusão/falta e a igualdade nos limites não são definidos. A regra conservadora temporária está descrita no contrato de API e em `OPEN-QUESTIONS.md`; manter esse critério parcial até aprovação explícita. O domínio calcula a política de cancelamento pelo cutoff configurado, mas a igualdade também aguarda decisão e não há rota pública mutável. Cancelamento administrativo não exige serviço ativo. A rota de cancelamento pelo cliente depende de identidade verificada AGD-024/025.
+**Decisão de produto aprovada pelo usuário em 17/10/2026 e registrada na ADR-0018:** `COMPLETED` e `NO_SHOW` exigem instante atual igual ou posterior a `occupiedUntil`, incluindo buffer; cancelamento do cliente aceita igualdade em `startsAt - cancellationCutoffHours`; cancelamento administrativo não herda o cutoff do cliente. Sem tolerância de dez minutos. O domínio calcula a política do cliente, mas a rota mutável depende de identidade verificada AGD-024/025. Cancelamento administrativo não exige serviço ativo.
 
 ### AGD-024 — Código de acesso por WhatsApp
 

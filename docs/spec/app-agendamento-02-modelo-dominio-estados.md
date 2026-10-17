@@ -167,6 +167,8 @@ stateDiagram-v2
 
 ### Correções
 
+Para AGD-023, decisão de produto aprovada pelo usuário em 17/10/2026 (ADR-0018): `COMPLETED` e `NO_SHOW` somente quando o instante confiável é igual ou posterior a `occupied_until`, incluindo buffer; buffer zero significa `occupied_until = service_ends_at`. O cancelamento do cliente aceita `now` igual ao cutoff configurado. Cancelamento administrativo não usa o cutoff de cliente. Não há tolerância adicional de dez minutos.
+
 Uma correção de estado terminal não deve fingir que a transição original nunca ocorreu. Use um comando específico, por exemplo `CorrectAppointmentOutcome`, que:
 
 1. valida a autoridade do ator;
