@@ -540,6 +540,38 @@ try {
             `Remarcação não persistiu com história/versionamento: ${JSON.stringify({ rescheduled, rescheduleHistory })}`,
         );
     }
+    await waitUntil(() =>
+        evaluate(`(() => {
+          const text = document.querySelector('.admin-agenda__details')?.innerText ?? '';
+          return text.includes('Visitante de demonstração') &&
+            text.includes('10:00') &&
+            text.includes('versão 2') &&
+            text.includes('APPOINTMENT_RESCHEDULED') &&
+            text.includes('versão 1 → 2');
+        })()`),
+    );
+    const renderedRescheduleDetails = await evaluate(`(() => {
+      const details = document.querySelector('.admin-agenda__details');
+      const closeButton = [...document.querySelectorAll('button')].find(button => button.innerText === 'Fechar detalhes');
+      const retryButton = [...document.querySelectorAll('button')].find(button => button.innerText.includes('Recuperar / repetir'));
+      const pendingAlerts = [...document.querySelectorAll('[role=alert]')].map(alert => alert.innerText).filter(text => text.includes('Resolva primeiro a remarcação') || text.includes('A resposta não chegou'));
+      return { text: details?.innerText, closeDisabled: closeButton?.disabled, retryVisible: Boolean(retryButton), pendingAlerts };
+    })()`);
+    if (
+        !renderedRescheduleDetails.text.includes('Visitante de demonstração') ||
+        !renderedRescheduleDetails.text.includes('10:00') ||
+        !renderedRescheduleDetails.text.includes('versão 2') ||
+        !renderedRescheduleDetails.text.includes('APPOINTMENT_RESCHEDULED') ||
+        !renderedRescheduleDetails.text.includes('versão 1 → 2') ||
+        renderedRescheduleDetails.text.includes('Segundo visitante de demonstração') ||
+        renderedRescheduleDetails.closeDisabled !== false ||
+        renderedRescheduleDetails.retryVisible ||
+        renderedRescheduleDetails.pendingAlerts.length !== 0
+    ) {
+        throw new Error(
+            `Painel não atualizou os detalhes de A após replay bem-sucedido: ${JSON.stringify(renderedRescheduleDetails)}`,
+        );
+    }
     const rescheduleEffects = Number(
         queryPostgres(
             `SELECT CASE WHEN (SELECT count(*) FROM agendamento.appointment_history WHERE appointment_id = '${appointmentIdInEachTab[0]}' AND reason_code = 'APPOINTMENT_RESCHEDULED') = 1 AND (SELECT count(*) FROM agendamento.audit_event WHERE target_id = '${appointmentIdInEachTab[0]}' AND action = 'APPOINTMENT_RESCHEDULED') = 1 AND (SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = '${appointmentIdInEachTab[0]}' AND event_type = 'AppointmentRescheduled') = 1 AND (SELECT version FROM agendamento.appointment WHERE appointment_id = '${appointmentIdInEachTab[0]}') = 2 THEN 1 ELSE 0 END`,

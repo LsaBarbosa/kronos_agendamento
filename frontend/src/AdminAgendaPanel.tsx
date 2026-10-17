@@ -483,13 +483,7 @@ export function AdminAgendaPanel({
         setDetails(null);
     }
 
-    async function openDetails(appointmentId: string) {
-        if (rescheduleLocked()) {
-            setDetailsError(
-                `Resolva primeiro a remarcação de ${reschedulePending?.appointmentId ?? details?.appointmentId ?? 'reserva original'} antes de navegar.`,
-            );
-            return;
-        }
+    async function loadDetails(appointmentId: string) {
         const requestSequence = ++detailSequence.current;
         setSelectedAppointmentId(appointmentId);
         setDetails(null);
@@ -543,6 +537,16 @@ export function AdminAgendaPanel({
             if (requestSequence === detailSequence.current)
                 setDetailsLoading(false);
         }
+    }
+
+    async function openDetails(appointmentId: string) {
+        if (rescheduleLocked()) {
+            setDetailsError(
+                `Resolva primeiro a remarcação de ${reschedulePending?.appointmentId ?? details?.appointmentId ?? 'reserva original'} antes de navegar.`,
+            );
+            return;
+        }
+        await loadDetails(appointmentId);
     }
 
     function beginReschedule(appointment: Appointment) {
@@ -685,7 +689,7 @@ export function AdminAgendaPanel({
             rescheduleRequestGuard.current = false;
             setRescheduleSaving(false);
             await load();
-            await openDetails(targetAppointmentId);
+            await loadDetails(targetAppointmentId);
         } catch {
             setRescheduleUncertain(true);
             setRescheduleError(
