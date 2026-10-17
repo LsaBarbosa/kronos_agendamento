@@ -44,10 +44,10 @@
 - [x] Implementar POST administrativo, busca tenant-scoped de cliente, regras explícitas de override, revisão/CAS, snapshot, histórico, auditoria, idempotência, outbox e UI na agenda.
 - [x] Criar V15 funcional, preservando V1–V14; validar PostgreSQL/Testcontainers em banco limpo e upgrades.
 - [x] 17/10/2026 — backend local: `spotless:check verify` passou com 70 testes unitários/arquiteturais e 111 integrações PostgreSQL 16.13/Testcontainers; frontend Prettier, Oxlint, 23 Vitest, TypeScript e Vite build passaram. `node --check` e `git diff --check` passaram.
-- [x] Diagnóstico do primeiro App CI: o E2E recebeu conflito de revisão porque a UI reutilizava `scheduleRevision` carregada antes de mudanças posteriores de grade/exceção/bloqueio. A abertura do formulário agora atualiza grade e política e mantém o envio desabilitado até essa leitura terminar; revisão local do frontend passou. Reexecução remota ainda pendente.
-- [ ] Browser E2E real do incremento, App CI e CodeQL push/PR: dependem da publicação do SHA final; o Compose local compartilhado não foi reconstruído para evitar interferir em serviços/volumes de desenvolvimento.
-- [ ] Confirmação do produto sobre `OUTSIDE_WEEKLY_SCHEDULE` em datas `CLOSED`/`SPECIAL`; implementação conservadora está isolada e explicitada.
-- [ ] Revisão final, publicação do PR e acompanhamento dos checks.
+- [x] Diagnóstico do primeiro App CI: o E2E recebeu conflito de revisão porque a UI reutilizava `scheduleRevision` carregada antes de mudanças posteriores de grade/exceção/bloqueio. A abertura do formulário agora atualiza grade e política e mantém o envio desabilitado até essa leitura terminar.
+- [x] 17/10/2026 — head `33cf966dd0398ba323d855cb2a5daeed94ea17b2`: App CI push/PR, incluindo Keycloak/PostgreSQL/Chrome E2E, e CodeQL push/PR passaram. Runs em `docs/development/VALIDATION.md`.
+- [ ] Resposta de produto para a relação de `OUTSIDE_WEEKLY_SCHEDULE` com datas `CLOSED`/`SPECIAL`; PR permanece draft até a decisão.
+- [x] Revisão sequencial do diff e dos testes, commit/push e criação do PR #13; revisão independente não ocorreu por limite de threads. CI final passou no SHA registrado acima.
 
 ## Validação
 
@@ -57,8 +57,8 @@
 | Reserva administrativa normal/encaixe | `./mvnw -B -ntp spotless:check verify` com PostgreSQL/Testcontainers | Passou localmente: 70 unitários/arquiteturais + 111 integrações; inclui cliente existente/novo, snapshot, motivo/allowlist, rollback, histórico/auditoria/outbox, replay e corridas reserva–bloqueio nos dois sentidos. |
 | Isolamento, CAS, atomicidade e conflitos | MockMvc + Testcontainers/transações independentes | Passou localmente: CSRF/revisão atual, tenant próprio/alheio, associação revogada, replay, conflitos, reserva–bloqueio nos dois sentidos e migrations V15. |
 | Frontend | `npm run format:check && npm run lint && npm test -- --run && npm run check` | Passou localmente: 23 Vitest, Prettier/Oxlint, TypeScript e Vite build. |
-| Browser E2E real | App CI `oidc-browser-e2e` com Keycloak/PostgreSQL/Chrome | Pendente até execução remota do novo head. Sintaxe do script passou; E2E local não foi executado para preservar Compose/volumes compartilhados. |
-| Gate remoto AGD-021 | App CI e CodeQL em push e PR do SHA final | Pendente de publicação e execução. |
+| Browser E2E real | App CI `oidc-browser-e2e` com Keycloak/PostgreSQL/Chrome | Passou no SHA `33cf966dd0398ba323d855cb2a5daeed94ea17b2`, push e PR. E2E local não foi executado para preservar Compose/volumes compartilhados. |
+| Gate remoto AGD-021 | App CI e CodeQL em push e PR | Passou no SHA `33cf966dd0398ba323d855cb2a5daeed94ea17b2`; links e registro da falha inicial/correção em `docs/development/VALIDATION.md`. |
 
 ## Pendências e limites
 
