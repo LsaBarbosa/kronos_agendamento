@@ -308,7 +308,7 @@ try {
     })()`);
     if (!unresolvedIntentLocked) throw new Error('A interface permitiu alterar uma intenção de reserva ainda não resolvida.');
     await evaluate('window.__releaseRecoveryResponse?.()');
-    await waitForText('Reserva original recuperada.', evaluate);
+    await waitForText('Reserva confirmada recuperada.', evaluate);
     let appointmentIdInEachTab = [null, null];
     try {
         await waitUntil(async () => {
