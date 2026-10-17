@@ -27,23 +27,25 @@ public record OutboxEvent(
         || schemaVersion < 1) {
       throw new IllegalArgumentException("Campos obrigatórios do evento outbox ausentes");
     }
-    boolean tenantRename = aggregateType.equals("TENANT") && eventType.equals("TENANT_RENAMED");
-    boolean serviceCreated = aggregateType.equals("SERVICE") && eventType.equals("ServiceCreated");
-    boolean scheduleChanged =
-        aggregateType.equals("SCHEDULE") && eventType.equals("ScheduleChanged");
-    boolean policyChanged =
-        aggregateType.equals("AVAILABILITY_POLICY")
-            && eventType.equals("AvailabilityPolicyChanged");
-    if (!tenantRename && !serviceCreated && !scheduleChanged && !policyChanged) {
+    boolean appointmentConfirmed =
+        aggregateType.equals("APPOINTMENT") && eventType.equals("AppointmentConfirmed");
+    boolean allowed =
+        aggregateType.equals("TENANT") && eventType.equals("TENANT_RENAMED")
+            || aggregateType.equals("SERVICE") && eventType.equals("ServiceCreated")
+            || aggregateType.equals("SCHEDULE") && eventType.equals("ScheduleChanged")
+            || aggregateType.equals("AVAILABILITY_POLICY")
+                && eventType.equals("AvailabilityPolicyChanged")
+            || appointmentConfirmed;
+    if (!allowed) {
       throw new IllegalArgumentException("Evento fora da allowlist desta integração");
     }
-    boolean validPayload =
-        tenantRename
-            ? payloadJson.matches("\\{\"tenantId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}")
-            : serviceCreated
-                ? payloadJson.matches("\\{\"serviceId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}")
-                : payloadJson.matches("\\{\"tenantId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}");
-    if (!validPayload) {
+    String expectedPayloadPattern =
+        appointmentConfirmed
+            ? "\\{\"appointmentId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}"
+            : aggregateType.equals("SERVICE")
+                ? "\\{\"serviceId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}"
+                : "\\{\"tenantId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}";
+    if (!payloadJson.matches(expectedPayloadPattern)) {
       throw new IllegalArgumentException("Payload fora da allowlist do evento");
     }
   }

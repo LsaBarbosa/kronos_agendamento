@@ -1,5 +1,9 @@
 package com.appagendamento.publicpage.api;
 
+import com.appagendamento.appointments.domain.AppointmentDataUnavailableException;
+import com.appagendamento.appointments.domain.InvalidAppointmentTimeException;
+import com.appagendamento.appointments.domain.PublicAppointmentUnavailableException;
+import com.appagendamento.appointments.domain.SlotNoLongerAvailableException;
 import com.appagendamento.audit.api.AuditCorrelationId;
 import com.appagendamento.availability.application.AppointmentOccupancyUnavailableException;
 import com.appagendamento.availability.application.AvailabilityServiceNotFoundException;
@@ -19,7 +23,8 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-@RestControllerAdvice(assignableTypes = PublicPublicationController.class)
+@RestControllerAdvice(
+    assignableTypes = {PublicPublicationController.class, PublicAppointmentController.class})
 public class PublicPageExceptionHandler {
 
   private final AuditCorrelationId correlationId;
@@ -31,7 +36,8 @@ public class PublicPageExceptionHandler {
   @ExceptionHandler({
     PublicPageUnavailableException.class,
     PublicationNotFoundException.class,
-    AvailabilityServiceNotFoundException.class
+    AvailabilityServiceNotFoundException.class,
+    PublicAppointmentUnavailableException.class
   })
   ResponseEntity<ApiErrorResponse> notFound(Exception exception, HttpServletRequest request) {
     return error(
@@ -39,6 +45,42 @@ public class PublicPageExceptionHandler {
         HttpStatus.NOT_FOUND,
         "PUBLIC_RESOURCE_NOT_FOUND",
         "Recurso não encontrado.",
+        Map.of(),
+        false);
+  }
+
+  @ExceptionHandler(AppointmentDataUnavailableException.class)
+  ResponseEntity<ApiErrorResponse> appointmentDataUnavailable(
+      AppointmentDataUnavailableException exception, HttpServletRequest request) {
+    return error(
+        request,
+        HttpStatus.SERVICE_UNAVAILABLE,
+        "AVAILABILITY_TEMPORARILY_UNAVAILABLE",
+        "Não foi possível verificar a agenda agora. Tente novamente.",
+        Map.of(),
+        true);
+  }
+
+  @ExceptionHandler(SlotNoLongerAvailableException.class)
+  ResponseEntity<ApiErrorResponse> slotConflict(
+      SlotNoLongerAvailableException exception, HttpServletRequest request) {
+    return error(
+        request,
+        HttpStatus.CONFLICT,
+        "SLOT_NO_LONGER_AVAILABLE",
+        "Este horário não está mais disponível. Escolha outro horário.",
+        Map.of(),
+        true);
+  }
+
+  @ExceptionHandler(InvalidAppointmentTimeException.class)
+  ResponseEntity<ApiErrorResponse> invalidAppointmentTime(
+      InvalidAppointmentTimeException exception, HttpServletRequest request) {
+    return error(
+        request,
+        HttpStatus.BAD_REQUEST,
+        "INVALID_APPOINTMENT_TIME",
+        "O horário precisa usar o offset vigente no fuso do negócio.",
         Map.of(),
         false);
   }

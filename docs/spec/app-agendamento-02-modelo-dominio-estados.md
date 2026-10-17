@@ -67,6 +67,8 @@ Os relacionamentos com provedores externos usam referências opacas. Payload bru
 - `buffer_after_minutes >= 0` e múltiplo de 15.
 - Serviço inativo não participa de nova disponibilidade.
 - Snapshot da reserva não é alterado por mudança posterior no catálogo.
+- A criação inicial persiste `CONFIRMED` com versão `1`, snapshot de nome/duração/buffer do serviço, zona IANA usada, instantes `starts_at`, `service_ends_at` e `occupied_until`, e snapshot do nome informado pelo cliente. Preço/moeda só entram no snapshot se o produto/catalog os definir; ausência não significa zero ou moeda implícita.
+- A primeira história registra a confirmação de origem pública sem usar telefone como ator autenticado. Telefone e nome não entram em auditoria ou outbox.
 
 ### 4.3 Intervalos
 
@@ -85,7 +87,7 @@ Os relacionamentos com provedores externos usam referências opacas. Payload bru
 - Cada limite local de horário especial precisa resolver para exatamente um instante na zona IANA do tenant. Horário inexistente é rejeitado; horário ambíguo exige offset explícito que pertença aos offsets válidos da zona para aquela data/hora. Os offsets selecionados são persistidos junto dos horários locais da exceção; a migração não altera períodos já existentes.
 - Bloqueio tem `starts_at < ends_at` em `timestamptz`, sem limite de mesma data; persiste `time_zone` usada na interpretação e os dois instantes UTC. Limites na representação local são alinhados a 15 minutos.
 - Motivo da criação é obrigatório. Cancelamento lógico exige novo motivo, mantém motivo original, `block_id`, instante de cancelamento e incrementa a versão CAS. Não há exclusão física nem restrição de não sobreposição entre bloqueios.
-- Criação de bloqueio deve consultar a porta de conflitos com reservas confirmadas. Enquanto appointments não tiver persistência, um adapter explicitamente limitado pode indicar que não há fonte de reservas; essa evidência não comprova integração nem concorrência futura. AGD-015 deverá integrar o armazenamento de reservas à proteção transacional compartilhada.
+- Criação de bloqueio consulta reservas confirmadas após adquirir o mesmo lock transacional de tenant usado pelo commit de reserva. AGD-015 implementa a fonte PostgreSQL de ocupações e o protocolo compartilhado; adapters de teste não substituem a integração persistida.
 - Mudança de exceção/bloqueio grava auditoria e `ScheduleChanged` na mesma transação. Payloads e detalhes de auditoria usam allowlist e não incluem motivos livres. A invalidação de cache real depende da implementação de disponibilidade em AGD-013.
 
 ### 4.5 Reserva
@@ -319,6 +321,10 @@ Transação curta:
 5. inserir história, auditoria e outbox;
 6. concluir idempotency record;
 7. commit.
+
+Para criação pública, slug resolve tenant exclusivamente no servidor; replay revalida publicação/readiness e serviço ativo antes de revelar o resultado mínimo. A validação inicial de disponibilidade não reserva o slot. No commit, horário/offset são comparados ao cálculo corrente; ausência de slot é `SLOT_NO_LONGER_AVAILABLE`.
+
+Criação de reserva e criação de bloqueio compartilham lock transacional por tenant antes de consultar conflitos. A reserva também usa exclusion constraint GiST sobre `[starts_at, occupied_until)` para impedir sobreposição entre reservas mesmo sob concorrência. Em `READ COMMITTED`, consultas de conflito feitas após a espera do lock observam o commit precedente; a instrução que espera não reutiliza snapshot anterior à espera. Ver ADR-0014.
 
 Qualquer violação de sobreposição aborta toda a transação.
 

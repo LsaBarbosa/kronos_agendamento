@@ -1,0 +1,670 @@
+package com.appagendamento.appointments;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.appagendamento.appointments.application.AppointmentRepository;
+import com.appagendamento.appointments.application.CreatePublicAppointment;
+import com.appagendamento.appointments.domain.Appointment;
+import com.appagendamento.appointments.domain.AppointmentStatus;
+import com.appagendamento.appointments.domain.SlotNoLongerAvailableException;
+import com.appagendamento.availability.application.CalculateAvailabilityForDateRange;
+import com.appagendamento.availability.application.ManageBlockedPeriods;
+import com.appagendamento.availability.application.ReplaceAvailabilityPolicy;
+import com.appagendamento.availability.application.ReplaceWeeklySchedule;
+import com.appagendamento.availability.domain.ConfirmedAppointmentConflictException;
+import com.appagendamento.availability.domain.WeeklyPeriod;
+import com.appagendamento.catalog.application.CreateService;
+import com.appagendamento.catalog.application.UpdateService;
+import com.appagendamento.catalog.domain.ServiceStatus;
+import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
+import com.appagendamento.publicpage.application.ChangePublicationStatus;
+import com.appagendamento.publicpage.application.PublicationEvidence;
+import com.appagendamento.publicpage.application.UpdatePublicContact;
+import com.appagendamento.support.PostgresTestEnvironment;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.temporal.TemporalAdjusters;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+
+@SpringBootTest(
+    properties = {
+      "identity.oidc.enabled=true",
+      "identity.oidc.issuer-uri=https://identity.test/realms/agendamento",
+      "identity.oidc.authorization-uri=https://identity.test/realms/agendamento/protocol/openid-connect/auth",
+      "identity.oidc.token-uri=https://identity.test/realms/agendamento/protocol/openid-connect/token",
+      "identity.oidc.jwk-set-uri=https://identity.test/realms/agendamento/protocol/openid-connect/certs",
+      "identity.oidc.user-info-uri=https://identity.test/realms/agendamento/protocol/openid-connect/userinfo",
+      "identity.oidc.client-id=integration-test",
+      "identity.oidc.client-secret=not-a-real-secret",
+      "identity.oidc.redirect-uri={baseUrl}/login/oauth2/code/keycloak"
+    })
+@AutoConfigureMockMvc
+class PublicAppointmentIT {
+
+  private static final String ISSUER = "https://identity.test/realms/agendamento";
+  private static final ZoneId ZONE = ZoneId.of("America/Sao_Paulo");
+
+  @Autowired private JdbcTemplate appJdbc;
+  @Autowired private CreateService createService;
+  @Autowired private ReplaceWeeklySchedule replaceWeeklySchedule;
+  @Autowired private ReplaceAvailabilityPolicy replaceAvailabilityPolicy;
+  @Autowired private UpdatePublicContact updatePublicContact;
+  @Autowired private ChangePublicationStatus changePublicationStatus;
+  @Autowired private CalculateAvailabilityForDateRange availability;
+  @Autowired private ManageBlockedPeriods manageBlockedPeriods;
+  @Autowired private CreatePublicAppointment createAppointment;
+  @Autowired private AppointmentRepository appointmentRepository;
+  @Autowired private UpdateService updateService;
+  @Autowired private MockMvc mvc;
+  @MockitoBean private PublicationEvidence publicationEvidence;
+
+  private JdbcTemplate migrationJdbc;
+  private UUID tenantId;
+  private UUID serviceId;
+  private AuthenticatedAdmin actor;
+  private String slug;
+  private LocalDate bookingDate;
+  private String requestedStart;
+
+  @DynamicPropertySource
+  static void database(DynamicPropertyRegistry registry) {
+    PostgresTestEnvironment.configure(registry);
+  }
+
+  @BeforeEach
+  void preparePublishedTenant() throws Exception {
+    org.mockito.Mockito.when(
+            publicationEvidence.unavailableEvidence(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(List.of());
+    migrationJdbc = new JdbcTemplate(PostgresTestEnvironment.migrationDataSource());
+    tenantId = UUID.randomUUID();
+    UUID adminId = UUID.randomUUID();
+    String subject = UUID.randomUUID().toString();
+    slug = "book-" + UUID.randomUUID().toString().substring(0, 8);
+    migrationJdbc.update(
+        "INSERT INTO agendamento.tenant (tenant_id, name, slug, timezone, status) VALUES (?, 'Booking fixture', ?, ?, 'ACTIVE')",
+        tenantId,
+        slug,
+        ZONE.getId());
+    migrationJdbc.update(
+        "INSERT INTO agendamento.admin_user (user_id, identity_issuer, identity_subject) VALUES (?, ?, ?)",
+        adminId,
+        ISSUER,
+        subject);
+    migrationJdbc.update(
+        "INSERT INTO agendamento.admin_tenant_membership (user_id, tenant_id, role) VALUES (?, ?, 'TENANT_ADMIN')",
+        adminId,
+        tenantId);
+    actor = new TestAdmin(adminId, subject, tenantId);
+    serviceId =
+        createService
+            .execute(
+                actor,
+                "booking-service-" + UUID.randomUUID(),
+                "Consulta",
+                "Atendimento",
+                30,
+                15,
+                ServiceStatus.ACTIVE)
+            .value()
+            .serviceId();
+    replaceWeeklySchedule.execute(
+        actor,
+        "booking-schedule-" + UUID.randomUUID(),
+        0,
+        List.of(new WeeklyPeriod(DayOfWeek.MONDAY, LocalTime.of(9, 0), LocalTime.NOON)));
+    replaceAvailabilityPolicy.execute(
+        actor, "booking-policy-" + UUID.randomUUID(), 0, 30, 1, 30, 2, 2);
+    updatePublicContact.execute(actor, "booking-contact-" + UUID.randomUUID(), "+5511999990000", 0);
+    changePublicationStatus.execute(actor, "booking-publish-" + UUID.randomUUID(), true, 1);
+    bookingDate = LocalDate.now(ZONE).with(TemporalAdjusters.next(DayOfWeek.MONDAY));
+    requestedStart =
+        availability
+            .execute(tenantId, serviceId, bookingDate, bookingDate)
+            .days()
+            .getFirst()
+            .slots()
+            .getFirst()
+            .startsAt()
+            .toString();
+  }
+
+  @Test
+  void confirmsPersistsSnapshotAndReplayDoesNotRepeatEffects() throws Exception {
+    String key = "book-intent-" + UUID.randomUUID();
+    String body = requestBody(serviceId, requestedStart, "  José Silva  ", "+55 (11) 99999-1234");
+    int auditEventsBeforeBooking = count("audit_event", tenantId);
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/appointments")
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.status").value("CONFIRMED"))
+        .andExpect(jsonPath("$.startsAt").value(org.hamcrest.Matchers.endsWith("-03:00")))
+        .andExpect(jsonPath("$.serviceName").value("Consulta"))
+        .andExpect(jsonPath("$.timeZone").value(ZONE.getId()))
+        .andExpect(jsonPath("$.client").doesNotExist())
+        .andExpect(header().exists("X-Operation-Id"));
+
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT normalized_phone FROM agendamento.client WHERE tenant_id = ?",
+                String.class,
+                tenantId))
+        .isEqualTo("+5511999991234");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT client_name_snapshot FROM agendamento.appointment WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("José Silva");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT service_name_snapshot || ':' || service_duration_minutes || ':' || service_buffer_after_minutes || ':' || version FROM agendamento.appointment WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("Consulta:30:15:1");
+    assertThat(count("appointment_history", tenantId)).isEqualTo(1);
+    assertThat(count("audit_event", tenantId)).isEqualTo(auditEventsBeforeBooking + 1);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
+
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/appointments")
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isCreated())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.appointmentId").value(appointmentId.toString()));
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(1);
+    assertThat(count("audit_event", tenantId)).isEqualTo(auditEventsBeforeBooking + 1);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
+    assertThat(countByAction("APPOINTMENT_CONFIRMED")).isEqualTo(1);
+
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/appointments")
+                .with(csrf())
+                .header("Idempotency-Key", "lost-slot-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("SLOT_NO_LONGER_AVAILABLE"));
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
+
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/appointments")
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(requestBody(serviceId, requestedStart, "Outro nome", "+5511999991234")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_KEY_REUSED"));
+
+    long version =
+        appJdbc.queryForObject(
+            "SELECT version FROM agendamento.service WHERE tenant_id = ? AND service_id = ?",
+            Long.class,
+            tenantId,
+            serviceId);
+    updateService.execute(
+        actor,
+        serviceId,
+        "change-service-after-booking-" + UUID.randomUUID(),
+        version,
+        "Nova consulta",
+        null,
+        null,
+        null);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT service_name_snapshot FROM agendamento.appointment WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("Consulta");
+
+    mvc.perform(
+            get("/api/v1/public/" + slug + "/availability")
+                .param("serviceId", serviceId.toString())
+                .param("from", bookingDate.toString())
+                .param("to", bookingDate.toString()))
+        .andExpect(status().isOk())
+        .andExpect(
+            org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath(
+                    "$.days[0].slots[*].startsAt")
+                .value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasItem(requestedStart))));
+
+    changePublicationStatus.execute(actor, "revoke-before-replay-" + UUID.randomUUID(), false, 2);
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/appointments")
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isNotFound());
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
+  }
+
+  @Test
+  void rejectsMissingCsrfForeignServiceAndMissingPublication() throws Exception {
+    String body = requestBody(serviceId, requestedStart, "Cliente", "+5511999991234");
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/appointments")
+                .header("Idempotency-Key", "missing-csrf-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isForbidden());
+
+    UUID otherTenant = UUID.randomUUID();
+    UUID otherService = UUID.randomUUID();
+    migrationJdbc.update(
+        "INSERT INTO agendamento.tenant (tenant_id, name, slug, timezone, status) VALUES (?, 'Private', ?, 'UTC', 'ACTIVE')",
+        otherTenant,
+        "private-" + UUID.randomUUID().toString().substring(0, 8));
+    migrationJdbc.update(
+        "INSERT INTO agendamento.service (service_id, tenant_id, name, normalized_name, duration_minutes, buffer_after_minutes, status) VALUES (?, ?, 'Private', 'private', 30, 0, 'ACTIVE')",
+        otherService,
+        otherTenant);
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/appointments")
+                .with(csrf())
+                .header("Idempotency-Key", "foreign-service-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(requestBody(otherService, requestedStart, "Cliente", "+5511999991234")))
+        .andExpect(status().isNotFound());
+    changePublicationStatus.execute(actor, "unpublish-booking-" + UUID.randomUUID(), false, 2);
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/appointments")
+                .with(csrf())
+                .header("Idempotency-Key", "unpublished-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isNotFound());
+    assertThat(count("appointment", tenantId)).isZero();
+  }
+
+  @Test
+  void concurrentDifferentIntentsForOneSlotConfirmOnlyOne() throws Exception {
+    CyclicBarrier barrier = new CyclicBarrier(2);
+    try (ExecutorService requests = Executors.newFixedThreadPool(2)) {
+      var first =
+          requests.submit(
+              () -> concurrentCreate(barrier, "race-a-" + UUID.randomUUID(), "+5511999991001"));
+      var second =
+          requests.submit(
+              () -> concurrentCreate(barrier, "race-b-" + UUID.randomUUID(), "+5511999991002"));
+      assertThat(first.get()).isNotEqualTo(second.get());
+    }
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(1);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
+  }
+
+  @Test
+  void postgresExclusionConstraintMapsToSlotConflict() {
+    createAppointment.execute(
+        slug,
+        "constraint-first-" + UUID.randomUUID(),
+        serviceId,
+        java.time.OffsetDateTime.parse(requestedStart),
+        "Cliente inicial",
+        "+5511999991221");
+    UUID clientId =
+        appJdbc.queryForObject(
+            "SELECT client_id FROM agendamento.client WHERE tenant_id = ?", UUID.class, tenantId);
+    var start = java.time.OffsetDateTime.parse(requestedStart).toInstant();
+    var serviceEnd = start.plusSeconds(30 * 60L);
+    var occupiedUntil = serviceEnd.plusSeconds(15 * 60L);
+    Appointment duplicate =
+        new Appointment(
+            UUID.randomUUID(),
+            tenantId,
+            clientId,
+            serviceId,
+            start,
+            serviceEnd,
+            occupiedUntil,
+            ZONE.getId(),
+            "Cliente concorrente",
+            "Consulta",
+            30,
+            15,
+            null,
+            null,
+            AppointmentStatus.CONFIRMED,
+            java.time.Instant.now(),
+            1);
+
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () ->
+                appointmentRepository.insertConfirmed(
+                    duplicate,
+                    UUID.randomUUID().toString(),
+                    "00000000-0000-0000-0000-000000000001"))
+        .isInstanceOf(SlotNoLongerAvailableException.class);
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+  }
+
+  @Test
+  void equivalentPhoneFormatsReuseOneTenantClientWhileSeparateSlotsConfirm() throws Exception {
+    var slots =
+        availability
+            .execute(tenantId, serviceId, bookingDate, bookingDate)
+            .days()
+            .getFirst()
+            .slots();
+    var firstStart = java.time.OffsetDateTime.parse(requestedStart);
+    var secondStart =
+        slots.stream()
+            .map(slot -> slot.startsAt())
+            .filter(
+                start -> start.toInstant().isAfter(firstStart.toInstant().plusSeconds(45 * 60L)))
+            .findFirst()
+            .orElseThrow();
+    CyclicBarrier barrier = new CyclicBarrier(2);
+    try (ExecutorService requests = Executors.newFixedThreadPool(2)) {
+      var first =
+          requests.submit(
+              () ->
+                  createAt(
+                      barrier,
+                      "same-phone-a-" + UUID.randomUUID(),
+                      firstStart,
+                      "Visitante A",
+                      "+55 (11) 99999-1234"));
+      var second =
+          requests.submit(
+              () ->
+                  createAt(
+                      barrier,
+                      "same-phone-b-" + UUID.randomUUID(),
+                      secondStart,
+                      "Visitante B",
+                      "+5511999991234"));
+      assertThat(first.get()).isNotEqualTo(second.get());
+    }
+    assertThat(count("client", tenantId)).isEqualTo(1);
+    assertThat(count("appointment", tenantId)).isEqualTo(2);
+  }
+
+  @Test
+  void auditOrOutboxFailureRollsBackClientAppointmentHistoryAndIdempotency() {
+    for (String table : List.of("audit_event", "outbox_event")) {
+      String trigger = "reject_booking_" + table;
+      String key = "rollback-" + table + "-" + UUID.randomUUID();
+      migrationJdbc.execute(
+          "CREATE FUNCTION agendamento."
+              + trigger
+              + "() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF "
+              + (table.equals("audit_event")
+                  ? "NEW.action = 'APPOINTMENT_CONFIRMED'"
+                  : "NEW.event_type = 'AppointmentConfirmed'")
+              + " THEN RAISE EXCEPTION 'injected booking write failure' USING ERRCODE = '23514'; END IF; RETURN NEW; END $$");
+      migrationJdbc.execute(
+          "CREATE TRIGGER "
+              + trigger
+              + " BEFORE INSERT ON agendamento."
+              + table
+              + " FOR EACH ROW EXECUTE FUNCTION agendamento."
+              + trigger
+              + "()");
+      try {
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () ->
+                    createAppointment.execute(
+                        slug,
+                        key,
+                        serviceId,
+                        java.time.OffsetDateTime.parse(requestedStart),
+                        "Rollback client",
+                        "+5511999991200"))
+            .isInstanceOf(RuntimeException.class);
+      } finally {
+        migrationJdbc.execute("DROP TRIGGER " + trigger + " ON agendamento." + table);
+        migrationJdbc.execute("DROP FUNCTION agendamento." + trigger + "()");
+      }
+      assertThat(count("client", tenantId)).isZero();
+      assertThat(count("appointment", tenantId)).isZero();
+      assertThat(count("appointment_history", tenantId)).isZero();
+      assertThat(countByEvent("AppointmentConfirmed")).isZero();
+      assertThat(countByAction("APPOINTMENT_CONFIRMED")).isZero();
+      assertThat(
+              appJdbc.queryForObject(
+                  "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope = 'appointments.public.create.v1'",
+                  Integer.class,
+                  tenantId))
+          .isZero();
+    }
+  }
+
+  @Test
+  void reservationWinningSharedLockMakesConcurrentBlockFail() throws Exception {
+    installPauseTrigger("appointment");
+    try (ExecutorService commands = Executors.newFixedThreadPool(2)) {
+      var reservation = commands.submit(() -> reserve("reserve-wins-" + UUID.randomUUID()));
+      awaitInsertInProgress("appointment");
+      var block = commands.submit(() -> createConflictingBlock());
+      assertThat(reservation.get()).isTrue();
+      assertThat(block.get()).isFalse();
+    } finally {
+      removePauseTrigger("appointment");
+    }
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+    assertThat(count("blocked_period", tenantId)).isZero();
+  }
+
+  @Test
+  void blockingWinningSharedLockMakesConcurrentReservationFail() throws Exception {
+    installPauseTrigger("blocked_period");
+    try (ExecutorService commands = Executors.newFixedThreadPool(2)) {
+      var block = commands.submit(this::createConflictingBlock);
+      awaitInsertInProgress("blocked_period");
+      var reservation = commands.submit(() -> reserve("block-wins-" + UUID.randomUUID()));
+      assertThat(block.get()).isTrue();
+      assertThat(reservation.get()).isFalse();
+    } finally {
+      removePauseTrigger("blocked_period");
+    }
+    assertThat(count("appointment", tenantId)).isZero();
+    assertThat(count("blocked_period", tenantId)).isEqualTo(1);
+  }
+
+  private boolean concurrentCreate(CyclicBarrier barrier, String key, String phone) {
+    try {
+      barrier.await();
+      createAppointment.execute(
+          slug,
+          key,
+          serviceId,
+          java.time.OffsetDateTime.parse(requestedStart),
+          "Cliente concorrente",
+          phone);
+      return true;
+    } catch (SlotNoLongerAvailableException conflict) {
+      return false;
+    } catch (Exception exception) {
+      throw new IllegalStateException(exception);
+    }
+  }
+
+  private boolean reserve(String key) {
+    try {
+      createAppointment.execute(
+          slug,
+          key,
+          serviceId,
+          java.time.OffsetDateTime.parse(requestedStart),
+          "Cliente concorrente",
+          "+5511999991201");
+      return true;
+    } catch (SlotNoLongerAvailableException conflict) {
+      return false;
+    }
+  }
+
+  private UUID createAt(
+      CyclicBarrier barrier,
+      String key,
+      java.time.OffsetDateTime startsAt,
+      String name,
+      String phone) {
+    try {
+      barrier.await();
+      return createAppointment
+          .execute(slug, key, serviceId, startsAt, name, phone)
+          .value()
+          .appointmentId();
+    } catch (Exception exception) {
+      throw new IllegalStateException(exception);
+    }
+  }
+
+  private boolean createConflictingBlock() {
+    var start = java.time.OffsetDateTime.parse(requestedStart);
+    try {
+      manageBlockedPeriods.create(
+          actor,
+          "block-race-" + UUID.randomUUID(),
+          start.toString(),
+          start.plusMinutes(45).toString(),
+          "Manutenção concorrente");
+      return true;
+    } catch (ConfirmedAppointmentConflictException conflict) {
+      return false;
+    }
+  }
+
+  private void installPauseTrigger(String table) {
+    String function = "pause_agenda_insert_" + table;
+    migrationJdbc.execute(
+        "CREATE FUNCTION agendamento."
+            + function
+            + "() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.75); RETURN NEW; END $$");
+    migrationJdbc.execute(
+        "CREATE TRIGGER "
+            + function
+            + " BEFORE INSERT ON agendamento."
+            + table
+            + " FOR EACH ROW EXECUTE FUNCTION agendamento."
+            + function
+            + "()");
+  }
+
+  private void removePauseTrigger(String table) {
+    String function = "pause_agenda_insert_" + table;
+    migrationJdbc.execute("DROP TRIGGER " + function + " ON agendamento." + table);
+    migrationJdbc.execute("DROP FUNCTION agendamento." + function + "()");
+  }
+
+  private void awaitInsertInProgress(String table) throws InterruptedException {
+    String query = "INSERT INTO agendamento." + table;
+    long deadline = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
+    while (System.nanoTime() < deadline) {
+      Integer active =
+          migrationJdbc.queryForObject(
+              "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND query ILIKE ?",
+              Integer.class,
+              "%" + query + "%");
+      if (active != null && active > 0) return;
+      Thread.sleep(20);
+    }
+    throw new IllegalStateException("A operação não chegou à escrita sob lock de tenant");
+  }
+
+  private int count(String table, UUID tenant) {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento." + table + " WHERE tenant_id = ?",
+        Integer.class,
+        tenant);
+  }
+
+  private int countByEvent(String event) {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.outbox_event WHERE tenant_id = ? AND event_type = ?",
+        Integer.class,
+        tenantId,
+        event);
+  }
+
+  private int countByAction(String action) {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.audit_event WHERE tenant_id = ? AND action = ?",
+        Integer.class,
+        tenantId,
+        action);
+  }
+
+  private static String requestBody(
+      UUID requestedService, String start, String name, String phone) {
+    return "{\"serviceId\":\""
+        + requestedService
+        + "\",\"startsAt\":\""
+        + start
+        + "\",\"client\":{\"name\":\""
+        + name
+        + "\",\"phone\":\""
+        + phone
+        + "\"}}";
+  }
+
+  private static UsernamePasswordAuthenticationToken principalToken(AuthenticatedAdmin admin) {
+    return UsernamePasswordAuthenticationToken.authenticated(
+        admin, "N/A", List.of(new SimpleGrantedAuthority("ROLE_TENANT_ADMIN")));
+  }
+
+  private record TestAdmin(UUID adminUserId, String subject, UUID tenantId)
+      implements AuthenticatedAdmin,
+          org.springframework.security.core.AuthenticatedPrincipal,
+          java.io.Serializable {
+
+    @Override
+    public String getName() {
+      return subject;
+    }
+
+    @Override
+    public String issuer() {
+      return ISSUER;
+    }
+
+    @Override
+    public String role() {
+      return "TENANT_ADMIN";
+    }
+  }
+}

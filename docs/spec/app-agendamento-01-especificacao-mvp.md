@@ -184,6 +184,14 @@ A disponibilidade de um serviço é a interseção de:
 - Repetir uma requisição após timeout com a mesma chave de idempotência devolve o mesmo resultado conhecido.
 - A confirmação não depende de o WhatsApp estar disponível.
 
+### 6.5 Contrato mínimo de criação pública
+
+- `POST /api/v1/public/{slug}/appointments` recebe somente `serviceId`, `startsAt` ISO 8601 com offset e `client{name,phone}`. O servidor resolve tenant pelo slug e obtém timezone, serviço, duração, buffer, grade, política, publicação, bloqueios e ocupações das fontes confiáveis.
+- O telefone precisa identificar explicitamente o código de país em formato E.164; separadores de apresentação permitidos podem ser removidos antes da validação. Não inferir país da UI, navegador, idioma ou timezone. Telefone informado não é identidade verificada nem autoriza leitura de reservas.
+- `startsAt` inclui offset; o servidor confirma que esse offset representa um slot oferecido na zona IANA do tenant. Horário final, duração, buffer, preço e tenant não são aceitos como autoridade do navegador.
+- A resposta de sucesso só é emitida depois do commit e contém referência da reserva, serviço, início/fim e timezone. Não inclui telefone nem concede acesso ao histórico.
+- A chamada exige `Idempotency-Key` e CSRF. Uma resposta perdida pode ser repetida com a mesma chave e conteúdo para recuperar os identificadores originais; chave reutilizada com outro conteúdo retorna conflito. Conflito de agenda retorna `SLOT_NO_LONGER_AVAILABLE` e não descarta os dados digitados.
+
 ### 6.4 Cliente bloqueado por faltas
 
 - Antes do commit, o sistema avalia a restrição ativa do cliente naquele tenant.

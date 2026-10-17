@@ -82,7 +82,7 @@ public class PostgresServiceRepository implements ServiceRepository, ServiceAvai
     return jdbc
         .query(
             """
-            SELECT service_id, tenant_id, status, duration_minutes, buffer_after_minutes
+            SELECT service_id, tenant_id, name, status, duration_minutes, buffer_after_minutes
             FROM agendamento.service
             WHERE tenant_id = ? AND service_id = ?
             """,
@@ -90,6 +90,31 @@ public class PostgresServiceRepository implements ServiceRepository, ServiceAvai
                 new ServiceAvailabilityView(
                     result.getObject("service_id", UUID.class),
                     result.getObject("tenant_id", UUID.class),
+                    result.getString("name"),
+                    ServiceStatus.valueOf(result.getString("status")) == ServiceStatus.ACTIVE,
+                    result.getInt("duration_minutes"),
+                    result.getInt("buffer_after_minutes")),
+            tenantId,
+            serviceId)
+        .stream()
+        .findFirst();
+  }
+
+  @Override
+  public Optional<ServiceAvailabilityView> findForBooking(UUID tenantId, UUID serviceId) {
+    return jdbc
+        .query(
+            """
+            SELECT service_id, tenant_id, name, status, duration_minutes, buffer_after_minutes
+            FROM agendamento.service
+            WHERE tenant_id = ? AND service_id = ?
+            FOR SHARE
+            """,
+            (result, row) ->
+                new ServiceAvailabilityView(
+                    result.getObject("service_id", UUID.class),
+                    result.getObject("tenant_id", UUID.class),
+                    result.getString("name"),
                     ServiceStatus.valueOf(result.getString("status")) == ServiceStatus.ACTIVE,
                     result.getInt("duration_minutes"),
                     result.getInt("buffer_after_minutes")),

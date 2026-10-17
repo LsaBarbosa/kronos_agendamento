@@ -11,7 +11,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.appagendamento.availability.application.AppointmentOccupancyQuery;
+import com.appagendamento.appointments.api.AppointmentOccupancyQuery;
 import com.appagendamento.availability.application.CalculateAvailabilityForDateRange;
 import com.appagendamento.availability.application.ReplaceAvailabilityPolicy;
 import com.appagendamento.availability.application.ReplaceWeeklySchedule;
@@ -44,6 +44,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -66,6 +69,7 @@ import org.springframework.test.web.servlet.MockMvc;
       "identity.oidc.redirect-uri={baseUrl}/login/oauth2/code/keycloak"
     })
 @AutoConfigureMockMvc
+@Import(PublicPageIT.OccupancyTestConfiguration.class)
 class PublicPageIT {
 
   private static final String ISSUER = "https://identity.test/realms/agendamento";
@@ -82,7 +86,10 @@ class PublicPageIT {
   @Autowired private GetPublicBusiness getPublicBusiness;
   @Autowired private MockMvc mvc;
   @MockitoBean private PublicationEvidence publicationEvidence;
-  @MockitoBean private AppointmentOccupancyQuery appointmentOccupancyQuery;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  @org.springframework.beans.factory.annotation.Qualifier("testAppointmentOccupancyQuery")
+  private AppointmentOccupancyQuery appointmentOccupancyQuery;
 
   private JdbcTemplate migrationJdbc;
   private UUID tenantId;
@@ -97,6 +104,7 @@ class PublicPageIT {
 
   @BeforeEach
   void preparePublicTenant() {
+    org.mockito.Mockito.reset(appointmentOccupancyQuery);
     when(publicationEvidence.unavailableEvidence(any())).thenReturn(List.of());
     when(appointmentOccupancyQuery.findOverlapping(any(), any(), any())).thenReturn(List.of());
     migrationJdbc = new JdbcTemplate(PostgresTestEnvironment.migrationDataSource());
@@ -140,6 +148,15 @@ class PublicPageIT {
     replaceAvailabilityPolicy.execute(
         actor, "public-policy-" + UUID.randomUUID(), 0, 30, 12, 30, 4, 6);
     updatePublicContact.execute(actor, "public-contact-" + UUID.randomUUID(), "+5511999990000", 0);
+  }
+
+  @org.springframework.boot.test.context.TestConfiguration
+  static class OccupancyTestConfiguration {
+    @Bean
+    @Primary
+    AppointmentOccupancyQuery testAppointmentOccupancyQuery() {
+      return org.mockito.Mockito.mock(AppointmentOccupancyQuery.class);
+    }
   }
 
   @Test
@@ -209,7 +226,10 @@ class PublicPageIT {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.timeZone").value(TENANT_ZONE.getId()))
         .andExpect(jsonPath("$.days[0].date").value(nextMonday.toString()))
-        .andExpect(jsonPath("$.days[0].slots[0].startsAt").exists());
+        .andExpect(jsonPath("$.days[0].slots[0].startsAt").exists())
+        .andExpect(
+            jsonPath("$.days[0].slots[0].startsAt")
+                .value(org.hamcrest.Matchers.endsWith("-03:00")));
   }
 
   @Test
