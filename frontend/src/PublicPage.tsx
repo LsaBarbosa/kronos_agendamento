@@ -424,14 +424,20 @@ function PublicPageContent({
     }
 
     useEffect(() => {
-        bookingIntent.current = null;
         const stored = recoveryLookupIntent;
-        if (!stored) return;
+        if (!stored) {
+            bookingIntent.current = null;
+            return;
+        }
+        const previousIntent = bookingIntent.current;
         bookingIntent.current = {
             fingerprint: null,
             key: stored.idempotencyKey,
             recoveryCapability: stored.recoveryCapability,
-            body: null,
+            body:
+                previousIntent?.key === stored.idempotencyKey
+                    ? previousIntent.body
+                    : null,
         };
         void getPublicBookingIntent(slug, stored.recoveryCapability, apiBaseUrl)
             .then((result: PublicBookingRecovery) => {
@@ -442,7 +448,7 @@ function PublicPageContent({
                     setBookingMessage('Reserva original recuperada.');
                     setAnnouncement('Reserva confirmada recuperada.');
                 } else {
-                    setRecoveryNeedsDetails(true);
+                    setRecoveryNeedsDetails(!bookingIntent.current?.body);
                     setBookingState('uncertain');
                     setBookingMessage(
                         'A operação ainda pode estar em andamento. Consultando novamente sem criar outra reserva; se continuar incerta, reintroduza os mesmos dados para repetir a mesma intenção.',
@@ -961,6 +967,8 @@ function PublicPageContent({
                     setBookingMessage(
                         'Não foi possível confirmar o resultado do envio. Seus dados e a chave da operação foram preservados. Tente novamente para consultar a mesma operação.',
                     );
+                    recoveryPollAttempts.current = 0;
+                    setRecoveryLookupIntent(persistedIntent);
                 } else {
                     setBookingState('error');
                     setBookingMessage(error.message);
@@ -971,6 +979,8 @@ function PublicPageContent({
                 setBookingMessage(
                     'Não foi possível confirmar o resultado do envio. Seus dados e a chave da operação foram preservados. Tente novamente para consultar a mesma operação.',
                 );
+                recoveryPollAttempts.current = 0;
+                setRecoveryLookupIntent(persistedIntent);
             }
         } finally {
             bookingInFlight.current = false;
