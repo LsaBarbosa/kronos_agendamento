@@ -44,6 +44,7 @@
 - [x] Implementar POST administrativo, busca tenant-scoped de cliente, regras explícitas de override, revisão/CAS, snapshot, histórico, auditoria, idempotência, outbox e UI na agenda.
 - [x] Criar V15 funcional, preservando V1–V14; validar PostgreSQL/Testcontainers em banco limpo e upgrades.
 - [x] 17/10/2026 — backend local: `spotless:check verify` passou com 70 testes unitários/arquiteturais e 111 integrações PostgreSQL 16.13/Testcontainers; frontend Prettier, Oxlint, 23 Vitest, TypeScript e Vite build passaram. `node --check` e `git diff --check` passaram.
+- [x] Diagnóstico do primeiro App CI: o E2E recebeu conflito de revisão porque a UI reutilizava `scheduleRevision` carregada antes de mudanças posteriores de grade/exceção/bloqueio. A abertura do formulário agora atualiza grade e política e mantém o envio desabilitado até essa leitura terminar; revisão local do frontend passou. Reexecução remota ainda pendente.
 - [ ] Browser E2E real do incremento, App CI e CodeQL push/PR: dependem da publicação do SHA final; o Compose local compartilhado não foi reconstruído para evitar interferir em serviços/volumes de desenvolvimento.
 - [ ] Confirmação do produto sobre `OUTSIDE_WEEKLY_SCHEDULE` em datas `CLOSED`/`SPECIAL`; implementação conservadora está isolada e explicitada.
 - [ ] Revisão final, publicação do PR e acompanhamento dos checks.

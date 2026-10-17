@@ -181,6 +181,7 @@ export function AdminAgendaPanel({
     const [createNotice, setCreateNotice] = useState('');
     const [createUncertain, setCreateUncertain] = useState(false);
     const [scheduleConflict, setScheduleConflict] = useState(false);
+    const [scheduleRefreshing, setScheduleRefreshing] = useState(false);
     const [createServiceId, setCreateServiceId] = useState('');
     const [clientMode, setClientMode] = useState<'existing' | 'new'>(
         'existing',
@@ -616,6 +617,12 @@ export function AdminAgendaPanel({
     );
 
     async function submitAdministrativeAppointment() {
+        if (scheduleRefreshing) {
+            setCreateError(
+                'Aguarde a atualização da agenda antes de confirmar.',
+            );
+            return;
+        }
         if (
             !csrf ||
             !schedule ||
@@ -749,29 +756,53 @@ export function AdminAgendaPanel({
         }
     }
 
-    async function refreshScheduleRevision() {
+    async function refreshScheduleRevision(notify = true) {
+        setScheduleRefreshing(true);
         try {
-            const response = await fetch(
-                apiBaseUrl + '/v1/admin/schedule/weekly-periods',
-                {
+            const [scheduleResponse, policyResponse] = await Promise.all([
+                fetch(apiBaseUrl + '/v1/admin/schedule/weekly-periods', {
                     credentials: 'same-origin',
                     cache: 'no-store',
-                },
-            );
-            if (response.status === 401 || response.status === 403) {
-                sessionInvalidRef.current(response.status);
+                }),
+                fetch(apiBaseUrl + '/v1/admin/availability-policy', {
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                }),
+            ]);
+            if (
+                [scheduleResponse.status, policyResponse.status].some(
+                    (status) => status === 401 || status === 403,
+                )
+            ) {
+                sessionInvalidRef.current(
+                    scheduleResponse.status === 401 ||
+                        scheduleResponse.status === 403
+                        ? scheduleResponse.status
+                        : policyResponse.status,
+                );
                 return;
             }
-            const updated = await readJson<WeeklySchedule>(response);
+            const [updated, policy] = await Promise.all([
+                readJson<WeeklySchedule>(scheduleResponse),
+                readJson<AvailabilityPolicy>(policyResponse),
+            ]);
             setSchedule(updated);
+            setAvailabilityPolicy(policy);
+            setTimeZone(updated.timeZone);
             setScheduleConflict(false);
-            setCreateNotice(
-                'Revisão atualizada. Revise as regras e confirme novamente.',
-            );
+            if (notify) {
+                setCreateNotice(
+                    'Revisão atualizada. Revise as regras e confirme novamente.',
+                );
+            }
             setOverrideSchedule(false);
             setOverrideNotice(false);
         } catch {
-            setCreateError('Não foi possível atualizar a revisão da agenda.');
+            setCreateError(
+                'Não foi possível atualizar a configuração e a revisão da agenda.',
+            );
+        } finally {
+            setScheduleRefreshing(false);
         }
     }
 
@@ -789,7 +820,10 @@ export function AdminAgendaPanel({
                             type="button"
                             aria-expanded={createOpen}
                             onClick={() => {
-                                setCreateOpen((open) => !open);
+                                const opening = !createOpen;
+                                setCreateOpen(opening);
+                                if (opening)
+                                    void refreshScheduleRevision(false);
                                 if (!bookingDate) setBookingDate(anchorDate);
                                 if (!createServiceId && activeServices[0]) {
                                     setCreateServiceId(
@@ -812,7 +846,11 @@ export function AdminAgendaPanel({
                                 }}
                             >
                                 <fieldset
-                                    disabled={createSaving || createUncertain}
+                                    disabled={
+                                        createSaving ||
+                                        createUncertain ||
+                                        scheduleRefreshing
+                                    }
                                 >
                                     <legend>Reserva administrativa</legend>
                                     <p>
