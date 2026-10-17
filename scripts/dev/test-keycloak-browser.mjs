@@ -447,7 +447,7 @@ try {
     await clickButtonByText('Remarcar', evaluate);
     const rescheduleDate = await evaluate(`(() => {
       const date = new Date(${JSON.stringify(publicDate)} + 'T12:00:00Z');
-      date.setUTCDate(date.getUTCDate() + 7);
+      date.setUTCDate(date.getUTCDate() + 1);
       return date.toISOString().slice(0, 10);
     })()`);
     await setFieldByLabel('Nova data local', rescheduleDate, evaluate);
