@@ -491,6 +491,9 @@ try {
         return originalFetch(...args);
       };
     })()`);
+    await waitUntil(async () => (await evaluate(
+        "[...document.querySelectorAll('.admin-agenda button')].some(button => button.innerText.trim() === 'Atualizar' && !button.disabled)",
+    )));
     await clickButtonByText('Atualizar', evaluate);
     await waitForText('Falha simulada de rede da agenda', evaluate);
     await clickButtonByText('Tentar novamente', evaluate);
@@ -505,6 +508,9 @@ try {
         return originalFetch(...args);
       };
     })()`);
+    await waitUntil(async () => (await evaluate(
+        "[...document.querySelectorAll('.admin-agenda button')].some(button => button.innerText.trim() === 'Atualizar' && !button.disabled)",
+    )));
     await clickButtonByText('Atualizar', evaluate);
     await waitForText('Sua sessão expirou. Entre novamente para continuar.', evaluate);
     await evaluate('window.fetch = window.__originalSessionFetch');
