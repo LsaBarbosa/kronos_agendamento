@@ -280,17 +280,35 @@ try {
           window.__bookingE2eError = {status: response.status, code: payload?.error?.code};
         }
         if (String(args[0]).endsWith('/appointments') && args[1]?.method === 'POST' && response.ok) {
-          window.fetch = originalFetch;
           window.__bookingResponseLost = true;
           throw new TypeError('Simulated lost appointment response after commit');
+        }
+        if (String(args[0]).endsWith('/booking-intents/current') && !args[1]?.method && !window.__recoveryResponseHeld) {
+          window.fetch = originalFetch;
+          window.__recoveryResponseHeld = true;
+          window.__recoveryResponseReady = true;
+          await new Promise(resolve => { window.__releaseRecoveryResponse = resolve; });
         }
         return response;
       };
     })()`);
     await clickButtonByText('Confirmar reserva', evaluate);
-    await waitUntil(() => evaluate('window.__bookingResponseLost === true'));
+    await waitUntil(() => evaluate('window.__bookingResponseLost === true && window.__recoveryResponseReady === true'));
+    await waitForText('Não foi possível confirmar o resultado do envio.', evaluate);
     await waitForText('Recuperação da reserva', secondTab.evaluate);
     await waitForText('Reserva original recuperada.', secondTab.evaluate);
+    const unresolvedIntentLocked = await evaluate(`(() => {
+      const slotButtons = [...document.querySelectorAll('.public-page__slot')];
+      return document.getElementById('public-service').disabled
+        && document.getElementById('public-date').disabled
+        && document.getElementById('public-client-name').disabled
+        && document.getElementById('public-client-phone').disabled
+        && slotButtons.length > 0 && slotButtons.every(button => button.disabled)
+        && !document.querySelector('.public-page__booking-form button[type="submit"]').disabled;
+    })()`);
+    if (!unresolvedIntentLocked) throw new Error('A interface permitiu alterar uma intenção de reserva ainda não resolvida.');
+    await evaluate('window.__releaseRecoveryResponse?.()');
+    await waitForText('Reserva original recuperada.', evaluate);
     let appointmentIdInEachTab = [null, null];
     try {
         await waitUntil(async () => {
@@ -327,16 +345,6 @@ try {
     if (!storedIntent?.hasKey || !storedIntent?.hasCapability || storedIntent.containsName || storedIntent.containsPhone) {
         throw new Error(`Recovery storage contém formato inválido ou PII: ${JSON.stringify(storedIntent)}`);
     }
-    const unresolvedIntentLocked = await evaluate(`(() => {
-      const slotButtons = [...document.querySelectorAll('.public-page__slot')];
-      return document.getElementById('public-service').disabled
-        && document.getElementById('public-date').disabled
-        && document.getElementById('public-client-name').disabled
-        && document.getElementById('public-client-phone').disabled
-        && slotButtons.length > 0 && slotButtons.every(button => button.disabled)
-        && !document.querySelector('.public-page__booking-form button[type="submit"]').disabled;
-    })()`);
-    if (!unresolvedIntentLocked) throw new Error('A interface permitiu alterar uma intenção de reserva ainda não resolvida.');
     await command('Page.reload');
     await waitForText('Reserva original recuperada.', evaluate);
     await waitForText('Reserva confirmada', evaluate);
