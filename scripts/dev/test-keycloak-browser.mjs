@@ -1074,7 +1074,7 @@ try {
         appEnvironment,
     );
     queryPostgres(
-        `WITH moment AS (SELECT clock_timestamp() AS now) UPDATE agendamento.appointment a SET starts_at = moment.now - interval '2 days', service_ends_at = moment.now - interval '2 days' + make_interval(mins => a.service_duration_minutes), occupied_until = moment.now - interval '2 days' + make_interval(mins => a.service_duration_minutes + a.service_buffer_after_minutes) FROM moment WHERE a.appointment_id = '${secondAppointmentId}'::uuid; WITH moment AS (SELECT clock_timestamp() AS now) UPDATE agendamento.appointment a SET starts_at = moment.now - interval '1 day', service_ends_at = moment.now - interval '1 day' + make_interval(mins => a.service_duration_minutes), occupied_until = moment.now - interval '1 day' + make_interval(mins => a.service_duration_minutes + a.service_buffer_after_minutes) FROM moment WHERE a.appointment_id = '${administrativeAppointmentId}'::uuid`,
+        `WITH moment AS (SELECT clock_timestamp() AS now) UPDATE agendamento.appointment a SET starts_at = moment.now - interval '1 day', service_ends_at = moment.now - interval '1 day' + make_interval(mins => a.service_duration_minutes), occupied_until = moment.now - interval '1 day' + make_interval(mins => a.service_duration_minutes + a.service_buffer_after_minutes) FROM moment WHERE a.appointment_id = '${administrativeAppointmentId}'::uuid`,
         appEnvironment,
     );
 
@@ -1143,6 +1143,10 @@ try {
         appEnvironment,
     ));
     if (cancelEffects !== 1) throw new Error('Retry de cancelamento duplicou ou omitiu efeitos transacionais.');
+    queryPostgres(
+        `WITH moment AS (SELECT clock_timestamp() AS now) UPDATE agendamento.appointment a SET starts_at = moment.now - interval '2 days', service_ends_at = moment.now - interval '2 days' + make_interval(mins => a.service_duration_minutes), occupied_until = moment.now - interval '2 days' + make_interval(mins => a.service_duration_minutes + a.service_buffer_after_minutes) FROM moment WHERE a.appointment_id = '${secondAppointmentId}'::uuid`,
+        appEnvironment,
+    );
     const completionAppointment = await evaluate(
         `fetch('/api/v1/admin/appointments/${secondAppointmentId}', {credentials:'same-origin'}).then(response => response.json())`,
     );
