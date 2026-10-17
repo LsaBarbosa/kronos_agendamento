@@ -557,6 +557,13 @@ try {
     );
     await clickButtonByText('Remarcar', evaluate);
     await setFieldByLabel('Novo horário local', '10:00', evaluate);
+    await clickButtonByText('Confirmar remarcação', evaluate);
+    await waitForText(
+        'A reserva ou agenda mudou. Atualize as versões e revise o destino antes de enviar uma nova intenção.',
+        evaluate,
+    );
+    await clickButtonByText('Atualizar versões sem alterar o destino', evaluate);
+    await waitForText('Versões atualizadas. Revise a data e confirme uma nova intenção.', evaluate);
     await evaluate(`(() => {
       const originalFetch = window.fetch;
       window.fetch = async (...args) => {
