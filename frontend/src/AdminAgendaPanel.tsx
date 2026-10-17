@@ -805,6 +805,8 @@ export function AdminAgendaPanel({
                     code === 'INVALID_STATE_TRANSITION'
                 ) {
                     setOutcomeConflictAppointmentId(intention.appointmentId);
+                    setOutcomeAction(null);
+                    setOutcomeReason('');
                 }
                 setOutcomeUncertain(uncertain);
                 outcomeRequestGuard.current = false;

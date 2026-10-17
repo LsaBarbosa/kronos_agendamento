@@ -1108,6 +1108,17 @@ try {
     await clickButtonByText('Cancelar reserva', evaluate);
     await clickButtonByText('Confirmar ação', evaluate);
     await waitForText('mudou em outra operação', evaluate);
+    const rejectedOutcomeContext = await evaluate(`(() => {
+      const details = document.querySelector('.admin-agenda__details');
+      const labels = [...(details?.querySelectorAll('button') ?? [])].map(button => button.innerText.trim());
+      return {
+        conflict: details?.innerText.includes('mudou em outra operação'),
+        terminalActionsAvailable: ['Cancelar reserva', 'Concluir atendimento', 'Marcar falta'].every(label => labels.includes(label)),
+      };
+    })()`);
+    if (!rejectedOutcomeContext.conflict || !rejectedOutcomeContext.terminalActionsAvailable) {
+        throw new Error(`Conflito definitivo manteve uma ação antiga ou perdeu a recuperação: ${JSON.stringify(rejectedOutcomeContext)}`);
+    }
     await clickButtonByText('Atualizar detalhes da reserva', evaluate);
     await waitUntil(() => evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('versão ${initialOutcomeAppointment.version + 1}')`));
     await waitForText('mudou em outra operação', evaluate);
