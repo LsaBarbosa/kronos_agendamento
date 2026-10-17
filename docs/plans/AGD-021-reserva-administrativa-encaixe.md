@@ -50,7 +50,8 @@
 - [x] 17/10/2026 — decisão aplicada no backend/API, UI e contratos; `spotless:check verify` passou com 70 unitários/arquiteturais e 114 integrações PostgreSQL 16.13/Testcontainers; frontend format/lint/23 Vitest/TS/build passou.
 - [x] Primeiro head `40bcd32004f1d7e529f50952c67d2c662f9b00cd`: CodeQL push/PR passou; App CI push/PR falhou no E2E por seletor de rótulo obsoleto após atualização de texto na UI. Falha diagnosticada e registrada, não de infraestrutura.
 - [x] Correção e assertions adicionais publicadas no SHA `656d038a655669ff0600d63a77c4157d90f23579`; App CI/CodeQL push/PR passaram, incluindo browser E2E. Runs registrados em `docs/development/VALIDATION.md`.
-- [ ] Publicar os registros de evidência, validar os checks do commit documental e retirar o draft quando o head atual estiver todo aprovado.
+- [x] Publicar registros de evidência; App CI/CodeQL em push/PR passaram no commit documental `0fc6020266031801863a518a061039971be57ece`.
+- [ ] Retirar o draft após validar o head resultante desta atualização documental.
 - [x] Revisão sequencial do diff original, commits e PR #13; revisores independentes indisponíveis por limite de threads. O CI do head anterior `2bd45cd` passou, mas não valida o delta desta decisão.
 
 ## Validação
