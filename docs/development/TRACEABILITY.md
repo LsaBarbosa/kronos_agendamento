@@ -1,5 +1,7 @@
 # Rastreabilidade inicial
 
+**AGD-023 final no head `6e48fae708a7d4e7fbe4efc43cdc51f86b87d7bf`:** App CI push [39066763599](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39066763599)/PR [39066766363](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39066766363) e CodeQL push [39066763591](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39066763591)/PR [39066766349](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39066766349) passaram. E2E DOM confirmou recuperação idempotente, estado atual após cancelamento em outra aba, conflito persistido até reconciliação e ações disponíveis após rejeição CAS. Revisão foi sequencial; não houve revisão independente nem aprovação humana presumida.
+
 | Referência/critério | Implementação ou preparação | Evidência/estado |
 |---|---|---|
 | AGD-001: backend modular | `backend/pom.xml`, aplicação e pacotes por módulo/camada | base presente; resultados em VALIDATION.md |

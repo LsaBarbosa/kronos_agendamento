@@ -2,6 +2,10 @@
 
 **Data:** 14/10/2026.
 
+### AGD-023 — confirmação final do PR #15
+
+No head `6e48fae708a7d4e7fbe4efc43cdc51f86b87d7bf`, App CI push [39066763599](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39066763599) e PR [39066766363](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39066766363) passaram integralmente (`verify`, frontend, security, secrets e `oidc-browser-e2e`); CodeQL push [39066763591](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39066763591) e PR [39066766349](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39066766349) passaram. O E2E confirmou o CAS, três ações disponíveis no DOM após rejeição definitiva, conflito preservado, envio pendente com navegação/refresh bloqueados, perda de resposta pós-commit, cancelamento concorrente em outra aba, retry com alvo/body/chave idênticos, efeitos únicos, estado terminal atual e liberação da navegação. Localmente, frontend format/lint, 23 Vitest, TypeScript/build, `node --check` e `git diff --check` passaram. Compose E2E não executado localmente por bloqueio ao Docker socket. O PR permanece aberto, sem merge/deploy.
+
 Esta revalidação substitui os resultados do snapshot anterior: baseline Spring Boot 4.1.1, Java 21.0.11, Maven Wrapper 3.9.11, Node 24.14.1/npm 11.12.1, Docker 28.5.2 e Trivy 0.75.0. O `.env` local é ignorado e não foi incluído nos scans nem no Git.
 
 **Commits publicados em `main`:** `38efcc8977bf0ca7d45f935aab3b1ad31d676e5c` e `3a4653442762abc5b0a64f32c633394b733715de` (HEAD; `docs: record GitHub CI results and retry blocker`). O push fast-forward foi concluído sem force. App CI e CodeQL passaram no HEAD; links e escopos estão na tabela abaixo.

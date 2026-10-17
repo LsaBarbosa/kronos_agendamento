@@ -29,6 +29,8 @@
 
 ## Progresso e validação
 
+**Fechamento do PR #15 no head `6e48fae708a7d4e7fbe4efc43cdc51f86b87d7bf`:** App CI push [39066763599](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39066763599)/PR [39066766363](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39066766363) e CodeQL push [39066763591](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39066763591)/PR [39066766349](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39066766349) passaram. O navegador comprovou o ciclo DOM do conflito CAS e comandos reabilitados, intenção de remarcação recuperada após resposta perdida e cancelamento concorrente, retry idêntico e reconciliação final. PR aberto; sem merge/deploy.
+
 | Critério | Procedimento | Resultado esperado | Resultado observado |
 |---|---|---|---|
 | Comandos, CAS, replay e efeitos | `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp -Dtest=PublicAppointmentIT test` em `backend/` | uma transição terminal e um conjunto de efeitos | Passou: 49 integrações PostgreSQL 16.13/Testcontainers, incluindo os três comandos, replay autorizado, rejeição de estado terminal, CSRF, isolamento, snapshots e limites temporais controlados por `Clock`. |
