@@ -48,8 +48,9 @@
 - [x] 17/10/2026 — head `33cf966dd0398ba323d855cb2a5daeed94ea17b2`: App CI push/PR, incluindo Keycloak/PostgreSQL/Chrome E2E, e CodeQL push/PR passaram. Runs em `docs/development/VALIDATION.md`.
 - [x] 17/10/2026 — decisão aprovada para CLOSED/SPECIAL/MIN_NOTICE registrada em ADR-0016, requisitos, contrato OpenAPI, plano e `OPEN-QUESTIONS.md`.
 - [x] 17/10/2026 — decisão aplicada no backend/API, UI e contratos; `spotless:check verify` passou com 70 unitários/arquiteturais e 114 integrações PostgreSQL 16.13/Testcontainers; frontend format/lint/23 Vitest/TS/build passou.
-- [x] Publicado o head `40bcd32004f1d7e529f50952c67d2c662f9b00cd`; CodeQL push/PR passou. App CI push/PR falhou no E2E por seletor de rótulo obsoleto após atualização de texto na UI; seletor corrigido em seguida.
-- [ ] Publicar a correção do seletor, acompanhar App CI/CodeQL em push e PR no head final e retirar o draft depois dos checks aprovados.
+- [x] Primeiro head `40bcd32004f1d7e529f50952c67d2c662f9b00cd`: CodeQL push/PR passou; App CI push/PR falhou no E2E por seletor de rótulo obsoleto após atualização de texto na UI. Falha diagnosticada e registrada, não de infraestrutura.
+- [x] Correção e assertions adicionais publicadas no SHA `656d038a655669ff0600d63a77c4157d90f23579`; App CI/CodeQL push/PR passaram, incluindo browser E2E. Runs registrados em `docs/development/VALIDATION.md`.
+- [ ] Publicar os registros de evidência, validar os checks do commit documental e retirar o draft quando o head atual estiver todo aprovado.
 - [x] Revisão sequencial do diff original, commits e PR #13; revisores independentes indisponíveis por limite de threads. O CI do head anterior `2bd45cd` passou, mas não valida o delta desta decisão.
 
 ## Validação
