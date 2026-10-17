@@ -67,6 +67,10 @@ logging:
     level: "%5p [traceId=%X{traceId:-}]"
 
 app:
+  public-booking:
+    digest:
+      active-key-id: ${PUBLIC_BOOKING_HMAC_ACTIVE_KEY_ID:}
+      keys: ${PUBLIC_BOOKING_HMAC_KEYS:}
   outbox:
     worker:
       enabled: ${OUTBOX_WORKER_ENABLED:false}

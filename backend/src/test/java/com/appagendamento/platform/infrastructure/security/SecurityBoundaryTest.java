@@ -7,6 +7,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.appagendamento.appointments.application.CreatePublicAppointment;
+import com.appagendamento.appointments.application.GetPublicBookingIntent;
+import com.appagendamento.appointments.application.PreparePublicBookingIntent;
 import com.appagendamento.audit.api.AuditCorrelationId;
 import com.appagendamento.availability.application.CalculateAvailabilityForDateRange;
 import com.appagendamento.availability.application.GetBlockedPeriods;
@@ -53,6 +55,8 @@ class SecurityBoundaryTest {
   @Autowired private MockMvc mvc;
 
   @MockitoBean private CreatePublicAppointment createPublicAppointment;
+  @MockitoBean private PreparePublicBookingIntent preparePublicBookingIntent;
+  @MockitoBean private GetPublicBookingIntent getPublicBookingIntent;
   @MockitoBean private GetTenant getTenant;
   @MockitoBean private CreateService createService;
   @MockitoBean private UpdateService updateService;

@@ -47,6 +47,9 @@ const browser = spawn(
 );
 
 let socket;
+let browserCdp;
+let secondTab;
+let secondTargetId;
 try {
     await waitUntil(async () => {
         const response = await fetch('http://127.0.0.1:9222/json/version');
@@ -57,56 +60,8 @@ try {
         { method: 'PUT' },
     );
     const target = await targetResponse.json();
-    socket = new WebSocket(target.webSocketDebuggerUrl);
-    await new Promise((resolve, reject) => {
-        socket.addEventListener('open', resolve, { once: true });
-        socket.addEventListener('error', reject, { once: true });
-    });
-
-    let commandId = 0;
-    const pending = new Map();
-    socket.addEventListener('message', ({ data }) => {
-        const message = JSON.parse(data);
-        if (message.method === 'Network.responseReceived') {
-            try {
-                const responseUrl = new URL(message.params.response.url);
-                if (responseUrl.hostname === 'localhost') {
-                    recentHttpResponses.push({
-                        path: responseUrl.pathname,
-                        status: message.params.response.status,
-                        type: message.params.type,
-                    });
-                    if (recentHttpResponses.length > 20) recentHttpResponses.shift();
-                }
-            } catch {}
-        }
-        if (!message.id || !pending.has(message.id)) return;
-        const { resolve, reject } = pending.get(message.id);
-        pending.delete(message.id);
-        if (message.error) reject(new Error(message.error.message));
-        else resolve(message.result);
-    });
-    const command = (method, params = {}) =>
-        new Promise((resolve, reject) => {
-            const id = ++commandId;
-            pending.set(id, { resolve, reject });
-            socket.send(JSON.stringify({ id, method, params }));
-        });
-    const evaluate = async (expression) => {
-        const result = await command('Runtime.evaluate', {
-            expression,
-            returnByValue: true,
-            awaitPromise: true,
-        });
-        if (result.exceptionDetails) {
-            const description = result.exceptionDetails.exception?.description
-                ?.split('\n', 1)[0];
-            throw new Error(
-                `Execução do navegador falhou: ${result.exceptionDetails.text}${description ? ` (${description})` : ''}`,
-            );
-        }
-        return result.result.value;
-    };
+    socket = await connectToCdp(target.webSocketDebuggerUrl, recentHttpResponses);
+    const { command, evaluate } = socket;
 
     await command('Page.enable');
     await command('Runtime.enable');
@@ -306,6 +261,16 @@ try {
     if (bookingInputState.nameLength === 0 || !bookingInputState.phoneValid) {
         throw new Error(`Browser booking inputs invalid: ${JSON.stringify(bookingInputState)}`);
     }
+    const browserVersion = await fetch('http://127.0.0.1:9222/json/version').then(response => response.json());
+    browserCdp = await connectToCdp(browserVersion.webSocketDebuggerUrl);
+    const secondTarget = await browserCdp.command('Target.createTarget', {url:'about:blank'});
+    secondTargetId = secondTarget.targetId;
+    const secondTargetInfo = await waitForTarget(secondTargetId);
+    secondTab = await connectToCdp(secondTargetInfo.webSocketDebuggerUrl);
+    await secondTab.command('Page.enable');
+    await secondTab.command('Runtime.enable');
+    await navigate(`http://localhost:5173/public/${encodeURIComponent(publication.slug)}`, secondTab.command, secondTab.evaluate);
+    await waitForText(catalogName + ' Editado', secondTab.evaluate);
     await evaluate(`(() => {
       const originalFetch = window.fetch;
       window.fetch = async (...args) => {
@@ -315,14 +280,23 @@ try {
           window.__bookingE2eError = {status: response.status, code: payload?.error?.code};
         }
         if (String(args[0]).endsWith('/appointments') && args[1]?.method === 'POST' && response.ok) {
-          window.fetch = originalFetch;
+          window.__bookingResponseLost = true;
           throw new TypeError('Simulated lost appointment response after commit');
+        }
+        if (String(args[0]).endsWith('/booking-intents/current') && !args[1]?.method && !window.__recoveryResponseHeld) {
+          window.fetch = originalFetch;
+          window.__recoveryResponseHeld = true;
+          window.__recoveryResponseReady = true;
+          await new Promise(resolve => { window.__releaseRecoveryResponse = resolve; });
         }
         return response;
       };
     })()`);
     await clickButtonByText('Confirmar reserva', evaluate);
+    await waitUntil(() => evaluate('window.__bookingResponseLost === true && window.__recoveryResponseReady === true'));
     await waitForText('Não foi possível confirmar o resultado do envio.', evaluate);
+    await waitForText('Recuperação da reserva', secondTab.evaluate);
+    await waitForText('Reserva original recuperada.', secondTab.evaluate);
     const unresolvedIntentLocked = await evaluate(`(() => {
       const slotButtons = [...document.querySelectorAll('.public-page__slot')];
       return document.getElementById('public-service').disabled
@@ -333,8 +307,53 @@ try {
         && !document.querySelector('.public-page__booking-form button[type="submit"]').disabled;
     })()`);
     if (!unresolvedIntentLocked) throw new Error('A interface permitiu alterar uma intenção de reserva ainda não resolvida.');
-    await clickButtonByText('Tentar novamente com segurança', evaluate);
+    await evaluate('window.__releaseRecoveryResponse?.()');
+    await waitForText('Reserva confirmada recuperada.', evaluate);
+    let appointmentIdInEachTab = [null, null];
+    try {
+        await waitUntil(async () => {
+            appointmentIdInEachTab = await Promise.all([
+                evaluate("document.querySelector('.public-page__confirmation strong')?.textContent"),
+                secondTab.evaluate("document.querySelector('.public-page__confirmation strong')?.textContent"),
+            ]);
+            return Boolean(
+                appointmentIdInEachTab[0] &&
+                    appointmentIdInEachTab[0] === appointmentIdInEachTab[1],
+            );
+        }, 10000);
+    } catch (error) {
+        const tabStates = await Promise.all([
+            evaluate("JSON.stringify({heading:document.querySelector('h2')?.innerText, alerts:[...document.querySelectorAll('[role=alert]')].map(item=>item.innerText).slice(0,3)})"),
+            secondTab.evaluate("JSON.stringify({heading:document.querySelector('h2')?.innerText, alerts:[...document.querySelectorAll('[role=alert]')].map(item=>item.innerText).slice(0,3)})"),
+        ]);
+        throw new Error(
+            `Duas abas não recuperaram a mesma reserva original: ${JSON.stringify({appointmentIdInEachTab, tabStates})}`,
+            { cause: error },
+        );
+    }
+    const storedIntent = await evaluate(`(() => {
+      const value = localStorage.getItem('kronos.public-booking.intent.' + ${JSON.stringify(publication.slug)});
+      if (!value) return null;
+      const parsed = JSON.parse(value);
+      return {
+        hasKey: typeof parsed.idempotencyKey === 'string',
+        hasCapability: typeof parsed.recoveryCapability === 'string',
+        containsName: value.includes('Visitante de demonstração'),
+        containsPhone: value.includes('+5511999991234'),
+      };
+    })()`);
+    if (!storedIntent?.hasKey || !storedIntent?.hasCapability || storedIntent.containsName || storedIntent.containsPhone) {
+        throw new Error(`Recovery storage contém formato inválido ou PII: ${JSON.stringify(storedIntent)}`);
+    }
+    await command('Page.reload');
+    await waitForText('Reserva original recuperada.', evaluate);
     await waitForText('Reserva confirmada', evaluate);
+    const restoredDate = await evaluate(
+        "document.getElementById('public-date')?.value",
+    );
+    if (restoredDate !== publicDate) {
+        throw new Error('Reload não restaurou a data da intenção original.');
+    }
     if (!(await evaluate(`document.body.innerText.includes(${JSON.stringify(publicService.name)}) && document.body.innerText.includes(${JSON.stringify(publication.timeZone)})`))) {
         throw new Error('Confirmação não exibiu serviço e timezone esperados.');
     }
@@ -347,7 +366,20 @@ try {
     if (slotsAfterConfirmation.some(slot => slot.startsAt === selectedStart)) {
         throw new Error('Disponibilidade continuou oferecendo o horário já confirmado.');
     }
-    console.log('Browser: visitante confirmou reserva persistida; retry da resposta perdida preservou uma reserva e retirou o horário da oferta.');
+    console.log('Browser: visitante perdeu a resposta após commit, recarregou e recuperou a reserva persistida; storage não contém PII e permaneceu uma única reserva.');
+    await clickButtonByText('Fazer outra reserva', evaluate);
+    await waitUntil(async () => (await evaluate(
+        `localStorage.getItem('kronos.public-booking.intent.' + ${JSON.stringify(publication.slug)}) === null && !document.getElementById('public-service').disabled`,
+    )));
+    await waitUntil(async () => (await evaluate(
+        "[...document.querySelectorAll('.public-page__slot')].some(button => !button.disabled)",
+    )));
+    const anotherSlotCanBeSelected = await evaluate(
+        "[...document.querySelectorAll('.public-page__slot')].some(button => !button.disabled)",
+    );
+    if (!anotherSlotCanBeSelected) {
+        throw new Error('Receipt recuperado bloqueou permanentemente uma nova intenção explícita.');
+    }
     await command('Emulation.setDeviceMetricsOverride', {width:390,height:844,deviceScaleFactor:1,mobile:true});
     if (!(await evaluate('document.documentElement.scrollWidth <= window.innerWidth'))) {
         throw new Error('A página pública excedeu a largura do viewport móvel.');
@@ -649,8 +681,76 @@ try {
     assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, credentials);
     console.log('Browser E2E passed: OIDC login, tenant, 30-minute idle expiry, SSO reauthentication, revocation, CSRF logout, unlinked denial, no test credentials in backend logs.');
 } finally {
+    if (browserCdp && secondTargetId) {
+        await browserCdp.command('Target.closeTarget', {targetId:secondTargetId}).catch(() => {});
+    }
+    secondTab?.close();
+    browserCdp?.close();
     socket?.close();
     browser.kill('SIGTERM');
+}
+
+async function connectToCdp(webSocketDebuggerUrl, responseHistory = null) {
+    const cdpSocket = new WebSocket(webSocketDebuggerUrl);
+    await new Promise((resolve, reject) => {
+        cdpSocket.addEventListener('open', resolve, { once: true });
+        cdpSocket.addEventListener('error', reject, { once: true });
+    });
+    let commandId = 0;
+    const pending = new Map();
+    cdpSocket.addEventListener('message', ({ data }) => {
+        const message = JSON.parse(data);
+        if (responseHistory && message.method === 'Network.responseReceived') {
+            try {
+                const responseUrl = new URL(message.params.response.url);
+                if (responseUrl.hostname === 'localhost') {
+                    responseHistory.push({
+                        path: responseUrl.pathname,
+                        status: message.params.response.status,
+                        type: message.params.type,
+                    });
+                    if (responseHistory.length > 20) responseHistory.shift();
+                }
+            } catch {}
+        }
+        if (!message.id || !pending.has(message.id)) return;
+        const { resolve, reject } = pending.get(message.id);
+        pending.delete(message.id);
+        if (message.error) reject(new Error(message.error.message));
+        else resolve(message.result);
+    });
+    const command = (method, params = {}) =>
+        new Promise((resolve, reject) => {
+            const id = ++commandId;
+            pending.set(id, { resolve, reject });
+            cdpSocket.send(JSON.stringify({ id, method, params }));
+        });
+    const evaluate = async (expression) => {
+        const result = await command('Runtime.evaluate', {
+            expression,
+            returnByValue: true,
+            awaitPromise: true,
+        });
+        if (result.exceptionDetails) {
+            const description = result.exceptionDetails.exception?.description
+                ?.split('\n', 1)[0];
+            throw new Error(
+                `Execução do navegador falhou: ${result.exceptionDetails.text}${description ? ` (${description})` : ''}`,
+            );
+        }
+        return result.result.value;
+    };
+    return { socket: cdpSocket, command, evaluate, close: () => cdpSocket.close() };
+}
+
+async function waitForTarget(targetId) {
+    let targetInfo;
+    await waitUntil(async () => {
+        const targets = await fetch('http://127.0.0.1:9222/json/list').then(response => response.json());
+        targetInfo = targets.find(target => target.id === targetId);
+        return Boolean(targetInfo?.webSocketDebuggerUrl);
+    });
+    return targetInfo;
 }
 
 async function navigate(url, command, evaluate) {

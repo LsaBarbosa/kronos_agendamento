@@ -7,6 +7,7 @@ import com.appagendamento.appointments.api.ValidatedAppointmentSlot;
 import com.appagendamento.appointments.domain.Appointment;
 import com.appagendamento.appointments.domain.AppointmentStatus;
 import com.appagendamento.appointments.domain.PublicAppointmentUnavailableException;
+import com.appagendamento.appointments.domain.PublicBookingRecoveryUnavailableException;
 import com.appagendamento.appointments.domain.SlotNoLongerAvailableException;
 import com.appagendamento.audit.api.AuditCorrelationId;
 import com.appagendamento.audit.api.AuditEvent;
@@ -14,8 +15,10 @@ import com.appagendamento.audit.api.AuditEventRecorder;
 import com.appagendamento.catalog.api.ServiceAvailabilityQuery;
 import com.appagendamento.catalog.api.ServiceAvailabilityView;
 import com.appagendamento.clients.api.PublicClientRegistry;
+import com.appagendamento.idempotency.api.CommandDigest;
 import com.appagendamento.idempotency.api.IdempotencyCoordinator;
 import com.appagendamento.idempotency.api.IdempotentCommandResult;
+import com.appagendamento.idempotency.application.IdempotencyKey;
 import com.appagendamento.outbox.api.OutboxEvent;
 import com.appagendamento.outbox.api.OutboxEventRecorder;
 import java.time.Clock;
@@ -34,6 +37,8 @@ public class CreatePublicAppointment {
   private final TenantAgendaLock agendaLock;
   private final AppointmentRepository appointments;
   private final IdempotencyCoordinator idempotency;
+  private final PublicBookingIntentRegistry intents;
+  private final PublicAppointmentCommandDigest digests;
   private final PublicAppointmentReceiptCodec receiptCodec;
   private final AuditEventRecorder audit;
   private final AuditCorrelationId correlation;
@@ -48,6 +53,8 @@ public class CreatePublicAppointment {
       TenantAgendaLock agendaLock,
       AppointmentRepository appointments,
       IdempotencyCoordinator idempotency,
+      PublicBookingIntentRegistry intents,
+      PublicAppointmentCommandDigest digests,
       PublicAppointmentReceiptCodec receiptCodec,
       AuditEventRecorder audit,
       AuditCorrelationId correlation,
@@ -60,6 +67,8 @@ public class CreatePublicAppointment {
     this.agendaLock = agendaLock;
     this.appointments = appointments;
     this.idempotency = idempotency;
+    this.intents = intents;
+    this.digests = digests;
     this.receiptCodec = receiptCodec;
     this.audit = audit;
     this.correlation = correlation;
@@ -73,24 +82,63 @@ public class CreatePublicAppointment {
       UUID serviceId,
       OffsetDateTime requestedStart,
       String rawName,
-      String rawPhone) {
+      String rawPhone,
+      String recoveryCapability) {
     UUID tenantId = gate.resolveVisibleTenant(slug);
     String name = clients.canonicalizeName(rawName);
     String phone = clients.normalizePhone(rawPhone);
-    String digest =
-        PublicAppointmentCommandDigest.create(
-            tenantId, slug, serviceId, requestedStart, name, phone);
+    CommandDigest digest = digests.create(tenantId, slug, serviceId, requestedStart, name, phone);
+    PublicBookingIntent binding =
+        intents
+            .findByKey(
+                tenantId, PreparePublicBookingIntent.COMMAND_SCOPE, IdempotencyKey.digest(key))
+            .filter(intent -> intent.expiresAt().isAfter(clock.instant()))
+            .orElseThrow(PublicBookingRecoveryUnavailableException::new);
+    if (recoveryCapability == null
+        || !binding.recoveryDigest().equals(IdempotencyKey.digest(recoveryCapability))) {
+      throw new PublicBookingRecoveryUnavailableException();
+    }
+    if (!digest.matches(binding.requestDigest())) {
+      throw new com.appagendamento.idempotency.application.IdempotencyKeyReusedException();
+    }
+    CommandDigest boundDigest = new BoundCommandDigest(binding.requestDigest(), digest);
     return idempotency.execute(
         tenantId,
-        "appointments.public.create.v1",
+        PreparePublicBookingIntent.COMMAND_SCOPE,
         key,
-        digest,
+        boundDigest,
         () -> {
           gate.requireVisibleTenant(slug, tenantId);
           requireActiveService(tenantId, serviceId);
+          requireCurrentBinding(tenantId, key, recoveryCapability, digest);
         },
         operationId -> create(tenantId, slug, serviceId, requestedStart, name, phone, operationId),
         receiptCodec);
+  }
+
+  private void requireCurrentBinding(
+      UUID tenantId, String key, String recoveryCapability, CommandDigest digest) {
+    PublicBookingIntent current =
+        intents
+            .findByKey(
+                tenantId, PreparePublicBookingIntent.COMMAND_SCOPE, IdempotencyKey.digest(key))
+            .filter(intent -> intent.expiresAt().isAfter(clock.instant()))
+            .orElseThrow(PublicBookingRecoveryUnavailableException::new);
+    if (!current.recoveryDigest().equals(IdempotencyKey.digest(recoveryCapability))) {
+      throw new PublicBookingRecoveryUnavailableException();
+    }
+    if (!digest.matches(current.requestDigest())) {
+      throw new com.appagendamento.idempotency.application.IdempotencyKeyReusedException();
+    }
+  }
+
+  private record BoundCommandDigest(String persistedValue, CommandDigest delegate)
+      implements CommandDigest {
+
+    @Override
+    public boolean matches(String storedValue) {
+      return delegate.matches(storedValue);
+    }
   }
 
   private PublicAppointmentReceipt create(

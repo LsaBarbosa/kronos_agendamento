@@ -3,6 +3,9 @@ package com.appagendamento.publicpage.api;
 import com.appagendamento.appointments.domain.AppointmentDataUnavailableException;
 import com.appagendamento.appointments.domain.InvalidAppointmentTimeException;
 import com.appagendamento.appointments.domain.PublicAppointmentUnavailableException;
+import com.appagendamento.appointments.domain.PublicBookingDigestKeyUnavailableException;
+import com.appagendamento.appointments.domain.PublicBookingRecoveryTemporarilyUnavailableException;
+import com.appagendamento.appointments.domain.PublicBookingRecoveryUnavailableException;
 import com.appagendamento.appointments.domain.SlotNoLongerAvailableException;
 import com.appagendamento.audit.api.AuditCorrelationId;
 import com.appagendamento.availability.application.AppointmentOccupancyUnavailableException;
@@ -37,7 +40,8 @@ public class PublicPageExceptionHandler {
     PublicPageUnavailableException.class,
     PublicationNotFoundException.class,
     AvailabilityServiceNotFoundException.class,
-    PublicAppointmentUnavailableException.class
+    PublicAppointmentUnavailableException.class,
+    PublicBookingRecoveryUnavailableException.class
   })
   ResponseEntity<ApiErrorResponse> notFound(Exception exception, HttpServletRequest request) {
     return error(
@@ -47,6 +51,30 @@ public class PublicPageExceptionHandler {
         "Recurso não encontrado.",
         Map.of(),
         false);
+  }
+
+  @ExceptionHandler(PublicBookingDigestKeyUnavailableException.class)
+  ResponseEntity<ApiErrorResponse> digestKeyUnavailable(
+      PublicBookingDigestKeyUnavailableException exception, HttpServletRequest request) {
+    return error(
+        request,
+        HttpStatus.SERVICE_UNAVAILABLE,
+        "PUBLIC_BOOKING_DIGEST_KEY_UNAVAILABLE",
+        "A recuperação está temporariamente indisponível. Tente novamente mais tarde.",
+        Map.of(),
+        true);
+  }
+
+  @ExceptionHandler(PublicBookingRecoveryTemporarilyUnavailableException.class)
+  ResponseEntity<ApiErrorResponse> recoveryUnavailable(
+      PublicBookingRecoveryTemporarilyUnavailableException exception, HttpServletRequest request) {
+    return error(
+        request,
+        HttpStatus.SERVICE_UNAVAILABLE,
+        "PUBLIC_BOOKING_RECOVERY_UNAVAILABLE",
+        "A recuperação está temporariamente indisponível. O resultado continua incerto.",
+        Map.of(),
+        true);
   }
 
   @ExceptionHandler(AppointmentDataUnavailableException.class)
