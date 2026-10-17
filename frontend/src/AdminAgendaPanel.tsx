@@ -54,6 +54,13 @@ type HistoryEntry = {
     versionAfter: number | null;
 };
 type Details = Appointment & { history: HistoryEntry[] };
+type OutcomeAction = 'cancel' | 'complete' | 'mark-no-show';
+type PendingOutcome = {
+    appointmentId: string;
+    action: OutcomeAction;
+    body: { expectedVersion: number; reason?: string };
+    key: string;
+};
 type Csrf = { headerName: string; token: string };
 type WeeklySchedule = {
     configured: boolean;
@@ -185,6 +192,18 @@ export function AdminAgendaPanel({
     const [rescheduleNotice, setRescheduleNotice] = useState('');
     const [rescheduleSaving, setRescheduleSaving] = useState(false);
     const [rescheduleUncertain, setRescheduleUncertain] = useState(false);
+    const [outcomeSaving, setOutcomeSaving] = useState(false);
+    const [outcomeUncertain, setOutcomeUncertain] = useState(false);
+    const [outcomeError, setOutcomeError] = useState('');
+    const [outcomeConflict, setOutcomeConflict] = useState(false);
+    const [outcomeNotice, setOutcomeNotice] = useState('');
+    const [outcomeAction, setOutcomeAction] = useState<OutcomeAction | null>(
+        null,
+    );
+    const [outcomeReason, setOutcomeReason] = useState('');
+    const [pendingOutcome, setPendingOutcome] = useState<PendingOutcome | null>(
+        null,
+    );
     const [rescheduleOpen, setRescheduleOpen] = useState(false);
     const [reschedulePending, setReschedulePending] = useState<{
         appointmentId: string;
@@ -196,12 +215,22 @@ export function AdminAgendaPanel({
         key: string;
     } | null>(null);
     const rescheduleKeys = useRef(new Map<string, string>());
+    const outcomeKeys = useRef(new Map<string, string>());
     const rescheduleRequestGuard = useRef(false);
     const rescheduleSubmissionInFlight = useRef(false);
+    const outcomeRequestGuard = useRef(false);
+    const commandInFlightOrUncertain =
+        rescheduleSaving ||
+        rescheduleUncertain ||
+        outcomeSaving ||
+        outcomeUncertain;
     const rescheduleLocked = () =>
         rescheduleRequestGuard.current ||
         rescheduleSaving ||
-        rescheduleUncertain;
+        rescheduleUncertain ||
+        outcomeRequestGuard.current ||
+        outcomeSaving ||
+        outcomeUncertain;
     const [schedule, setSchedule] = useState<WeeklySchedule | null>(null);
     const [availabilityPolicy, setAvailabilityPolicy] =
         useState<AvailabilityPolicy | null>(null);
@@ -698,6 +727,108 @@ export function AdminAgendaPanel({
         } finally {
             rescheduleSubmissionInFlight.current = false;
             setRescheduleSaving(false);
+        }
+    }
+
+    async function submitOutcome(retry = false) {
+        if (!csrf || outcomeRequestGuard.current || outcomeSaving) return;
+        let intention = pendingOutcome;
+        if (retry) {
+            if (!intention || !outcomeUncertain) return;
+        } else {
+            if (!details || details.status !== 'CONFIRMED' || !outcomeAction)
+                return;
+            const reason = outcomeReason.trim();
+            const body: PendingOutcome['body'] = {
+                expectedVersion: details.version,
+                ...(reason ? { reason } : {}),
+            };
+            const key = commandKey(
+                outcomeKeys.current,
+                `admin-appointment-${outcomeAction}-v1`,
+                [details.appointmentId, body],
+            );
+            intention = {
+                appointmentId: details.appointmentId,
+                action: outcomeAction,
+                body,
+                key,
+            };
+            setPendingOutcome(intention);
+        }
+        outcomeRequestGuard.current = true;
+        setOutcomeSaving(true);
+        setOutcomeError('');
+        setOutcomeConflict(false);
+        setOutcomeNotice('');
+        try {
+            const response = await fetch(
+                `${apiBaseUrl}/v1/admin/appointments/${intention.appointmentId}/${intention.action}`,
+                {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        [csrf.headerName]: csrf.token,
+                        'Idempotency-Key': intention.key,
+                    },
+                    body: JSON.stringify(intention.body),
+                },
+            );
+            if (response.status === 401 || response.status === 403) {
+                setPendingOutcome(null);
+                setOutcomeUncertain(false);
+                outcomeRequestGuard.current = false;
+                sessionInvalidRef.current(response.status);
+                return;
+            }
+            if (!response.ok) {
+                const errorBody = (await response.json().catch(() => null)) as {
+                    error?: { code?: string; message?: string };
+                } | null;
+                const code = errorBody?.error?.code ?? 'HTTP_ERROR';
+                const uncertain =
+                    code === 'OPERATION_IN_PROGRESS' || response.status >= 500;
+                setOutcomeError(
+                    errorBody?.error?.message ??
+                        `Falha HTTP ${response.status}.`,
+                );
+                setOutcomeConflict(
+                    code === 'VERSION_CONFLICT' ||
+                        code === 'INVALID_STATE_TRANSITION',
+                );
+                setOutcomeUncertain(uncertain);
+                outcomeRequestGuard.current = false;
+                if (!uncertain) {
+                    setPendingOutcome(null);
+                }
+                return;
+            }
+            const scope = `admin-appointment-${intention.action}-v1`;
+            outcomeKeys.current.delete(
+                JSON.stringify([
+                    scope,
+                    [intention.appointmentId, intention.body],
+                ]),
+            );
+            const targetAppointmentId = intention.appointmentId;
+            setPendingOutcome(null);
+            setOutcomeUncertain(false);
+            setOutcomeConflict(false);
+            setOutcomeAction(null);
+            setOutcomeReason('');
+            setOutcomeNotice('Estado atualizado e persistido.');
+            outcomeRequestGuard.current = false;
+            await load();
+            await loadDetails(targetAppointmentId);
+        } catch {
+            setOutcomeUncertain(true);
+            outcomeRequestGuard.current = false;
+            setOutcomeError(
+                'A resposta não chegou; o comando pode ter sido confirmado. Repita a mesma ação sem alterar reserva, motivo ou versão.',
+            );
+        } finally {
+            setOutcomeSaving(false);
         }
     }
 
@@ -1432,9 +1563,7 @@ export function AdminAgendaPanel({
                             <button
                                 type="button"
                                 aria-pressed={view === 'day'}
-                                disabled={
-                                    rescheduleSaving || rescheduleUncertain
-                                }
+                                disabled={commandInFlightOrUncertain}
                                 onClick={() => {
                                     if (rescheduleLocked()) return;
                                     setView('day');
@@ -1446,9 +1575,7 @@ export function AdminAgendaPanel({
                             <button
                                 type="button"
                                 aria-pressed={view === 'week'}
-                                disabled={
-                                    rescheduleSaving || rescheduleUncertain
-                                }
+                                disabled={commandInFlightOrUncertain}
                                 onClick={() => {
                                     if (rescheduleLocked()) return;
                                     setView('week');
@@ -1460,14 +1587,14 @@ export function AdminAgendaPanel({
                         </fieldset>
                         <button
                             type="button"
-                            disabled={rescheduleSaving || rescheduleUncertain}
+                            disabled={commandInFlightOrUncertain}
                             onClick={() => movePeriod(-1)}
                         >
                             Período anterior
                         </button>
                         <button
                             type="button"
-                            disabled={rescheduleSaving || rescheduleUncertain}
+                            disabled={commandInFlightOrUncertain}
                             onClick={() => {
                                 if (rescheduleLocked()) return;
                                 setSelectedDate(today);
@@ -1478,7 +1605,7 @@ export function AdminAgendaPanel({
                         </button>
                         <button
                             type="button"
-                            disabled={rescheduleSaving || rescheduleUncertain}
+                            disabled={commandInFlightOrUncertain}
                             onClick={() => movePeriod(1)}
                         >
                             Próximo período
@@ -1499,9 +1626,7 @@ export function AdminAgendaPanel({
                             Serviço
                             <select
                                 value={serviceFilter}
-                                disabled={
-                                    rescheduleSaving || rescheduleUncertain
-                                }
+                                disabled={commandInFlightOrUncertain}
                                 onChange={(event) =>
                                     changeFilter(
                                         setServiceFilter,
@@ -1527,9 +1652,7 @@ export function AdminAgendaPanel({
                             Status
                             <select
                                 value={statusFilter}
-                                disabled={
-                                    rescheduleSaving || rescheduleUncertain
-                                }
+                                disabled={commandInFlightOrUncertain}
                                 onChange={(event) =>
                                     changeFilter(
                                         setStatusFilter,
@@ -1539,6 +1662,13 @@ export function AdminAgendaPanel({
                             >
                                 <option value="">Todos os status</option>
                                 <option value="CONFIRMED">Confirmada</option>
+                                <option value="CANCELLED_BY_PROVIDER">
+                                    Cancelada pelo estabelecimento
+                                </option>
+                                <option value="COMPLETED">Concluída</option>
+                                <option value="NO_SHOW">
+                                    Falta registrada
+                                </option>
                             </select>
                         </label>
                         <button
@@ -1658,6 +1788,9 @@ export function AdminAgendaPanel({
                                                             </p>
                                                             <button
                                                                 type="button"
+                                                                disabled={
+                                                                    commandInFlightOrUncertain
+                                                                }
                                                                 onClick={() =>
                                                                     void openDetails(
                                                                         appointment.appointmentId,
@@ -1713,8 +1846,7 @@ export function AdminAgendaPanel({
                             disabled={
                                 pageIndex === 0 ||
                                 loading ||
-                                rescheduleSaving ||
-                                rescheduleUncertain
+                                commandInFlightOrUncertain
                             }
                             onClick={() =>
                                 !rescheduleLocked() &&
@@ -1733,8 +1865,7 @@ export function AdminAgendaPanel({
                                 !hasMore ||
                                 !nextCursor ||
                                 loading ||
-                                rescheduleSaving ||
-                                rescheduleUncertain
+                                commandInFlightOrUncertain
                             }
                             onClick={() => {
                                 if (rescheduleLocked()) return;
@@ -1756,9 +1887,7 @@ export function AdminAgendaPanel({
                         >
                             <button
                                 type="button"
-                                disabled={
-                                    rescheduleSaving || rescheduleUncertain
-                                }
+                                disabled={commandInFlightOrUncertain}
                                 onClick={() => {
                                     if (rescheduleLocked()) return;
                                     setDetails(null);
@@ -1853,8 +1982,7 @@ export function AdminAgendaPanel({
                                         <button
                                             type="button"
                                             disabled={
-                                                rescheduleSaving ||
-                                                rescheduleUncertain
+                                                commandInFlightOrUncertain
                                             }
                                             onClick={() =>
                                                 beginReschedule(details)
@@ -1887,8 +2015,7 @@ export function AdminAgendaPanel({
                                                     type="date"
                                                     value={rescheduleDate}
                                                     disabled={
-                                                        rescheduleSaving ||
-                                                        rescheduleUncertain
+                                                        commandInFlightOrUncertain
                                                     }
                                                     onChange={(event) => {
                                                         if (rescheduleLocked())
@@ -1906,8 +2033,7 @@ export function AdminAgendaPanel({
                                                     step="900"
                                                     value={rescheduleTime}
                                                     disabled={
-                                                        rescheduleSaving ||
-                                                        rescheduleUncertain
+                                                        commandInFlightOrUncertain
                                                     }
                                                     onChange={(event) => {
                                                         if (rescheduleLocked())
@@ -1924,8 +2050,7 @@ export function AdminAgendaPanel({
                                                     <select
                                                         value={rescheduleOffset}
                                                         disabled={
-                                                            rescheduleSaving ||
-                                                            rescheduleUncertain
+                                                            commandInFlightOrUncertain
                                                         }
                                                         onChange={(event) => {
                                                             if (
@@ -1985,7 +2110,7 @@ export function AdminAgendaPanel({
                                                 <button
                                                     type="button"
                                                     disabled={
-                                                        rescheduleSaving ||
+                                                        commandInFlightOrUncertain ||
                                                         !csrf ||
                                                         !schedule
                                                     }
@@ -2038,6 +2163,158 @@ export function AdminAgendaPanel({
                                     )}
                                 </section>
                             )}
+                            {details.status === 'CONFIRMED' && (
+                                <section aria-labelledby="appointment-outcome-title">
+                                    <h4 id="appointment-outcome-title">
+                                        Encerrar reserva
+                                    </h4>
+                                    {!outcomeAction && !outcomeUncertain && (
+                                        <div>
+                                            <button
+                                                type="button"
+                                                disabled={
+                                                    commandInFlightOrUncertain
+                                                }
+                                                onClick={() => {
+                                                    setOutcomeAction('cancel');
+                                                    setOutcomeReason('');
+                                                    setOutcomeError('');
+                                                }}
+                                            >
+                                                Cancelar reserva
+                                            </button>
+                                            <button
+                                                type="button"
+                                                disabled={
+                                                    commandInFlightOrUncertain
+                                                }
+                                                onClick={() => {
+                                                    setOutcomeAction(
+                                                        'complete',
+                                                    );
+                                                    setOutcomeReason('');
+                                                    setOutcomeError('');
+                                                }}
+                                            >
+                                                Concluir atendimento
+                                            </button>
+                                            <button
+                                                type="button"
+                                                disabled={
+                                                    commandInFlightOrUncertain
+                                                }
+                                                onClick={() => {
+                                                    setOutcomeAction(
+                                                        'mark-no-show',
+                                                    );
+                                                    setOutcomeReason('');
+                                                    setOutcomeError('');
+                                                }}
+                                            >
+                                                Marcar falta
+                                            </button>
+                                        </div>
+                                    )}
+                                    {outcomeAction && !outcomeUncertain && (
+                                        <div>
+                                            <p>
+                                                Confirme{' '}
+                                                {outcomeAction === 'cancel'
+                                                    ? 'o cancelamento'
+                                                    : outcomeAction ===
+                                                        'complete'
+                                                      ? 'a conclusão'
+                                                      : 'o registro de falta'}{' '}
+                                                para {details.appointmentId}{' '}
+                                                (versão {details.version}). Esta
+                                                ação é administrativa e não
+                                                representa uma sessão verificada
+                                                do cliente.
+                                            </p>
+                                            <label>
+                                                Motivo (opcional)
+                                                <input
+                                                    value={outcomeReason}
+                                                    maxLength={500}
+                                                    disabled={outcomeSaving}
+                                                    onChange={(event) =>
+                                                        setOutcomeReason(
+                                                            event.target.value,
+                                                        )
+                                                    }
+                                                />
+                                            </label>
+                                            <button
+                                                type="button"
+                                                disabled={
+                                                    !csrf ||
+                                                    commandInFlightOrUncertain
+                                                }
+                                                onClick={() =>
+                                                    void submitOutcome()
+                                                }
+                                            >
+                                                {outcomeSaving
+                                                    ? 'Salvando…'
+                                                    : 'Confirmar ação'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                disabled={outcomeSaving}
+                                                onClick={() =>
+                                                    setOutcomeAction(null)
+                                                }
+                                            >
+                                                Voltar
+                                            </button>
+                                        </div>
+                                    )}
+                                    {outcomeUncertain && pendingOutcome && (
+                                        <output>
+                                            <p>
+                                                Resultado incerto para{' '}
+                                                {pendingOutcome.action} da
+                                                reserva{' '}
+                                                {pendingOutcome.appointmentId}.
+                                                Não altere a intenção até
+                                                reconciliar.
+                                            </p>
+                                            <button
+                                                type="button"
+                                                disabled={
+                                                    outcomeSaving || !csrf
+                                                }
+                                                onClick={() =>
+                                                    void submitOutcome(true)
+                                                }
+                                            >
+                                                {outcomeSaving
+                                                    ? 'Recuperando…'
+                                                    : 'Repetir exatamente a mesma ação'}
+                                            </button>
+                                        </output>
+                                    )}
+                                    {outcomeError && (
+                                        <p role="alert">{outcomeError}</p>
+                                    )}
+                                    {outcomeConflict && !outcomeUncertain && (
+                                        <button
+                                            type="button"
+                                            disabled={outcomeSaving}
+                                            onClick={() =>
+                                                void loadDetails(
+                                                    details.appointmentId,
+                                                )
+                                            }
+                                        >
+                                            Atualizar detalhes da reserva
+                                        </button>
+                                    )}
+                                    {outcomeNotice && (
+                                        <output>{outcomeNotice}</output>
+                                    )}
+                                </section>
+                            )}
                         </section>
                     )}
                     {detailsLoading && (
@@ -2050,9 +2327,7 @@ export function AdminAgendaPanel({
                             {detailsError}{' '}
                             <button
                                 type="button"
-                                disabled={
-                                    rescheduleSaving || rescheduleUncertain
-                                }
+                                disabled={commandInFlightOrUncertain}
                                 onClick={() =>
                                     void openDetails(selectedAppointmentId)
                                 }

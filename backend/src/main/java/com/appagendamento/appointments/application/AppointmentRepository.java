@@ -40,5 +40,11 @@ public interface AppointmentRepository {
       com.appagendamento.appointments.api.AdministrativeBookingAssessment assessment,
       String reason);
 
+  boolean transitionOutcome(
+      Appointment current,
+      long expectedVersion,
+      com.appagendamento.appointments.domain.AppointmentOutcome outcome,
+      String reason);
+
   List<AppointmentHistoryEntry> findAdminAppointmentHistory(UUID tenantId, UUID appointmentId);
 }

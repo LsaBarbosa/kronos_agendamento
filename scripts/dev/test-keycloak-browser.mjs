@@ -1048,6 +1048,127 @@ try {
         throw new Error('Recuperação explícita do conflito não carregou a versão atual.');
     }
     console.log('Browser: conflito CAS preservou rascunho e recuperação explícita carregou a versão vigente.');
+
+    const administrativeAppointmentId = queryPostgres(
+        `SELECT a.appointment_id FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.client_name_snapshot = 'Reserva administrativa E2E' AND a.status = 'CONFIRMED'`,
+        appEnvironment,
+    );
+    queryPostgres(
+        `WITH moment AS (SELECT clock_timestamp() AS now) UPDATE agendamento.appointment a SET starts_at = moment.now - interval '2 days', service_ends_at = moment.now - interval '2 days' + make_interval(mins => a.service_duration_minutes), occupied_until = moment.now - interval '2 days' + make_interval(mins => a.service_duration_minutes + a.service_buffer_after_minutes) FROM moment WHERE a.appointment_id = '${secondAppointmentId}'::uuid; WITH moment AS (SELECT clock_timestamp() AS now) UPDATE agendamento.appointment a SET starts_at = moment.now - interval '1 day', service_ends_at = moment.now - interval '1 day' + make_interval(mins => a.service_duration_minutes), occupied_until = moment.now - interval '1 day' + make_interval(mins => a.service_duration_minutes + a.service_buffer_after_minutes) FROM moment WHERE a.appointment_id = '${administrativeAppointmentId}'::uuid`,
+        appEnvironment,
+    );
+
+    await setFieldByLabel('Data de referência', publicDate, evaluate);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"]'))`));
+    await evaluate(`document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"] button')?.click()`);
+    await waitUntil(() => evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('Visitante de demonstração')`));
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        if (String(args[0]).includes('/cancel') && args[1]?.method === 'POST' && response.ok) {
+          window.__firstOutcomeRequest = { url: String(args[0]), body: args[1].body, key: args[1].headers['Idempotency-Key'] };
+          window.__firstOutcomeRequestReady = true;
+          await new Promise(resolve => { window.__releaseOutcomeResponse = resolve; });
+          window.fetch = originalFetch;
+          throw new TypeError('Simulated lost outcome response after commit');
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Cancelar reserva', evaluate);
+    await clickButtonByText('Confirmar ação', evaluate);
+    await waitUntil(() => evaluate(`window.__firstOutcomeRequestReady === true`));
+    const firstOutcomeRequest = await evaluate('window.__firstOutcomeRequest');
+    if (!firstOutcomeRequest.url.includes(appointmentIdInEachTab[0])) {
+        throw new Error(`Comando de cancelamento não ficou associado ao alvo A: ${JSON.stringify(firstOutcomeRequest)}`);
+    }
+    const outcomeNavigationLocked = await evaluate(`(() => {
+      const close = [...document.querySelectorAll('.admin-agenda__details button')].find(button => button.innerText.trim() === 'Fechar detalhes');
+      const otherAppointment = document.querySelector('[data-appointment-id="${secondAppointmentId}"] button');
+      return close?.disabled === true && otherAppointment?.disabled === true;
+    })()`);
+    if (!outcomeNavigationLocked) throw new Error('A agenda permitiu desvincular a reserva enquanto o encerramento aguardava resposta.');
+    await evaluate('window.__releaseOutcomeResponse?.()');
+    await waitForText('A resposta não chegou; o comando pode ter sido confirmado.', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (...args) => {
+        if (String(args[0]).includes('/cancel') && args[1]?.method === 'POST') {
+          window.__retryOutcomeRequest = { url: String(args[0]), body: args[1].body, key: args[1].headers['Idempotency-Key'] };
+          window.fetch = originalFetch;
+        }
+        return originalFetch(...args);
+      };
+    })()`);
+    await clickButtonByText('Repetir exatamente a mesma ação', evaluate);
+    await waitForText('Estado atualizado e persistido.', evaluate);
+    const retryOutcomeRequest = await evaluate('window.__retryOutcomeRequest');
+    if (JSON.stringify(firstOutcomeRequest) !== JSON.stringify(retryOutcomeRequest)) {
+        throw new Error(`Retry do encerramento alterou alvo/body/chave: ${JSON.stringify({ firstOutcomeRequest, retryOutcomeRequest })}`);
+    }
+    await waitUntil(() => evaluate(`(() => {
+      const text = document.querySelector('.admin-agenda__details')?.innerText ?? '';
+      return text.includes('CANCELLED_BY_PROVIDER') && text.includes('versão 3') && text.includes('APPOINTMENT_CANCELLED_BY_PROVIDER');
+    })()`));
+    const outcomeDetailsReleased = await evaluate(`(() => {
+      const text = document.querySelector('.admin-agenda__details')?.innerText ?? '';
+      const close = [...document.querySelectorAll('.admin-agenda__details button')].find(button => button.innerText.trim() === 'Fechar detalhes');
+      const otherAppointment = document.querySelector('[data-appointment-id="${secondAppointmentId}"] button');
+      return !text.includes('Resultado incerto') && !text.includes('Repetir exatamente a mesma ação') && close?.disabled === false && otherAppointment?.disabled === false;
+    })()`);
+    if (!outcomeDetailsReleased) throw new Error('O retry concluído não liberou os controles nem removeu o estado incerto.');
+    const cancelEffects = Number(queryPostgres(
+        `SELECT CASE WHEN (SELECT count(*) FROM agendamento.appointment_history WHERE appointment_id = '${appointmentIdInEachTab[0]}' AND reason_code = 'APPOINTMENT_CANCELLED_BY_PROVIDER') = 1 AND (SELECT count(*) FROM agendamento.audit_event WHERE target_id = '${appointmentIdInEachTab[0]}' AND action = 'APPOINTMENT_CANCELLED_BY_PROVIDER') = 1 AND (SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = '${appointmentIdInEachTab[0]}' AND event_type = 'AppointmentCancelled') = 1 AND (SELECT version FROM agendamento.appointment WHERE appointment_id = '${appointmentIdInEachTab[0]}') = 3 THEN 1 ELSE 0 END`,
+        appEnvironment,
+    ));
+    if (cancelEffects !== 1) throw new Error('Retry de cancelamento duplicou ou omitiu efeitos transacionais.');
+    const completionAppointment = await evaluate(
+        `fetch('/api/v1/admin/appointments/${secondAppointmentId}', {credentials:'same-origin'}).then(response => response.json())`,
+    );
+    const completionDate = await evaluate(`(() => {
+      const parts = new Intl.DateTimeFormat('en-CA', {timeZone:${JSON.stringify(publication.timeZone)},year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(${JSON.stringify(completionAppointment.startsAt)}));
+      const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+      return values.year + '-' + values.month + '-' + values.day;
+    })()`);
+    await setFieldByLabel('Data de referência', completionDate, evaluate);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-appointment-id="${secondAppointmentId}"]'))`));
+    await evaluate(`document.querySelector('[data-appointment-id="${secondAppointmentId}"] button')?.click()`);
+    await waitUntil(() => evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('Segundo visitante de demonstração')`));
+    await clickButtonByText('Concluir atendimento', evaluate);
+    await clickButtonByText('Confirmar ação', evaluate);
+    await waitForText('Estado atualizado e persistido.', evaluate);
+    await waitUntil(() => evaluate(`(() => {
+      const text = document.querySelector('.admin-agenda__details')?.innerText ?? '';
+      return text.includes('COMPLETED') && text.includes('versão 2') && text.includes('APPOINTMENT_COMPLETED');
+    })()`));
+
+    const noShowAppointment = await evaluate(
+        `fetch('/api/v1/admin/appointments/${administrativeAppointmentId}', {credentials:'same-origin'}).then(response => response.json())`,
+    );
+    const noShowDate = await evaluate(`(() => {
+      const parts = new Intl.DateTimeFormat('en-CA', {timeZone:${JSON.stringify(publication.timeZone)},year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(${JSON.stringify(noShowAppointment.startsAt)}));
+      const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+      return values.year + '-' + values.month + '-' + values.day;
+    })()`);
+    await setFieldByLabel('Data de referência', noShowDate, evaluate);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-appointment-id="${administrativeAppointmentId}"]'))`));
+    await evaluate(`document.querySelector('[data-appointment-id="${administrativeAppointmentId}"] button')?.click()`);
+    await waitUntil(() => evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('Reserva administrativa E2E')`));
+    await clickButtonByText('Marcar falta', evaluate);
+    await clickButtonByText('Confirmar ação', evaluate);
+    await waitForText('Estado atualizado e persistido.', evaluate);
+    await waitUntil(() => evaluate(`(() => {
+      const text = document.querySelector('.admin-agenda__details')?.innerText ?? '';
+      return text.includes('NO_SHOW') && text.includes('versão 2') && text.includes('APPOINTMENT_NO_SHOW');
+    })()`));
+    const allOutcomeEffects = Number(queryPostgres(
+        `SELECT CASE WHEN (SELECT count(*) FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.status IN ('CANCELLED_BY_PROVIDER','COMPLETED','NO_SHOW')) = 3 AND (SELECT count(*) FROM agendamento.outbox_event WHERE event_type IN ('AppointmentCancelled','AppointmentCompleted','ClientNoShowRecorded') AND tenant_id = (SELECT tenant_id FROM agendamento.tenant WHERE slug = '${publication.slug}')) = 3 THEN 1 ELSE 0 END`,
+        appEnvironment,
+    ));
+    if (allOutcomeEffects !== 1) throw new Error('Os três estados terminais não têm evento persistido único por reserva.');
+    console.log('Browser: cancelamento com resposta perdida/replay, conclusão e falta persistidos; detalhes e história renderizam estados terminais.');
+
     const foreignTenantQuery = await evaluate(
         `fetch('/api/v1/admin/tenant?tenantId=00000000-0000-0000-0000-000000000001', {credentials:'same-origin'}).then(response => response.json())`,
     );

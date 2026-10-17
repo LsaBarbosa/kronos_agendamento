@@ -628,7 +628,7 @@ paths:
           schema: { type: string, format: date }
         - name: status
           in: query
-          schema: { type: string, enum: [CONFIRMED] }
+          schema: { type: string, enum: [CONFIRMED, COMPLETED, NO_SHOW, CANCELLED_BY_CLIENT, CANCELLED_BY_PROVIDER] }
         - name: serviceId
           in: query
           schema: { type: string, format: uuid }
@@ -800,6 +800,118 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiError" }
         "503": { description: Fonte de agenda indisponível; nenhuma alteração é confirmada. }
+  /admin/appointments/{id}/cancel:
+    post:
+      operationId: cancelAdminAppointment
+      summary: Cancelar uma reserva pelo administrador
+      description: >-
+        Somente CONFIRMED. Deriva ator e tenant da sessão OIDC e associação atual; não representa
+        cancelamento autenticado pelo cliente. Exige CAS, Idempotency-Key e CSRF. Reserva, estado,
+        versão, história, auditoria, receipt e AppointmentCancelled compartilham o commit. Replays
+        autorizados devolvem o receipt original mesmo após estado terminal. Liberação de ocupação
+        ocorre somente após commit. Não exige que o serviço ainda esteja ativo.
+      security:
+        - backendSession: []
+          csrfToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdminAppointmentOutcomeCommand" }
+      responses:
+        "200":
+          description: Estado confirmado ou receipt original em replay.
+          headers:
+            Idempotency-Replayed: { schema: { type: boolean } }
+            X-Operation-Id: { schema: { type: string, format: uuid } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminAppointmentOutcome" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ActionNotAllowed" }
+        "404": { description: Reserva inexistente ou de outro tenant; mesma resposta. }
+        "409": { description: Versão conflitante, transição inválida, chave reutilizada ou operação em andamento. }
+  /admin/appointments/{id}/complete:
+    post:
+      operationId: completeAdminAppointment
+      summary: Concluir atendimento
+      description: >-
+        Somente CONFIRMED. Até decisão de produto, usa regra conservadora provisória: instante
+        atual deve ser igual ou posterior a service_ends_at. Igualdade é permitida. A regra não
+        substitui futura decisão explícita e não aplica tolerância de dez minutos. Efeitos e replay
+        são atômicos e autorizados como no cancelamento.
+      security:
+        - backendSession: []
+          csrfToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdminAppointmentOutcomeCommand" }
+      responses:
+        "200":
+          description: Resultado confirmado ou receipt original em replay.
+          headers:
+            Idempotency-Replayed: { schema: { type: boolean } }
+            X-Operation-Id: { schema: { type: string, format: uuid } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminAppointmentOutcome" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ActionNotAllowed" }
+        "404": { description: Reserva inexistente ou de outro tenant; mesma resposta. }
+        "409": { description: Versão conflitante, limite temporal, transição inválida, chave reutilizada ou operação em andamento. }
+  /admin/appointments/{id}/mark-no-show:
+    post:
+      operationId: markAdminAppointmentNoShow
+      summary: Registrar falta do cliente
+      description: >-
+        Somente CONFIRMED. Até decisão de produto, usa regra conservadora provisória: instante
+        atual deve ser igual ou posterior a occupied_until, incluindo buffer. Igualdade é permitida;
+        não há tolerância de dez minutos. O evento é gravado uma única vez, mas não implementa
+        contagem móvel ou bloqueio automático, que dependem de AGD-032/033.
+      security:
+        - backendSession: []
+          csrfToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdminAppointmentOutcomeCommand" }
+      responses:
+        "200":
+          description: Resultado confirmado ou receipt original em replay.
+          headers:
+            Idempotency-Replayed: { schema: { type: boolean } }
+            X-Operation-Id: { schema: { type: string, format: uuid } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminAppointmentOutcome" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ActionNotAllowed" }
+        "404": { description: Reserva inexistente ou de outro tenant; mesma resposta. }
+        "409": { description: Versão conflitante, limite temporal, transição inválida, chave reutilizada ou operação em andamento. }
 components:
   securitySchemes:
     backendSession:
@@ -817,8 +929,8 @@ components:
       required: true
       schema:
         type: string
-        minLength: 1
-        maxLength: 255
+        minLength: 16
+        maxLength: 128
   schemas:
     AdminAppointmentPage:
       type: object
@@ -847,7 +959,7 @@ components:
         timeZone: { type: string, description: Fuso IANA usado na confirmação. }
         durationMinutes: { type: integer }
         bufferAfterMinutes: { type: integer, minimum: 0 }
-        status: { type: string, enum: [CONFIRMED] }
+        status: { type: string, enum: [CONFIRMED, COMPLETED, NO_SHOW, CANCELLED_BY_CLIENT, CANCELLED_BY_PROVIDER] }
         createdAt: { type: string, format: date-time }
         version: { type: integer, minimum: 1 }
     CreateAdminAppointment:
@@ -931,6 +1043,22 @@ components:
         serviceEndsAt: { type: string, format: date-time }
         occupiedUntil: { type: string, format: date-time }
         timeZone: { type: string }
+    AdminAppointmentOutcomeCommand:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        reason: { type: string, maxLength: 500, description: Motivo administrativo opcional, visível apenas na história autorizada. }
+    AdminAppointmentOutcome:
+      type: object
+      additionalProperties: false
+      required: [appointmentId, operationId, status, version]
+      properties:
+        appointmentId: { type: string, format: uuid }
+        operationId: { type: string, format: uuid }
+        status: { type: string, enum: [CANCELLED_BY_PROVIDER, COMPLETED, NO_SHOW] }
+        version: { type: integer, minimum: 2 }
     AdminAppointmentHistory:
       type: object
       additionalProperties: false

@@ -367,6 +367,49 @@ public class PostgresAppointmentRepository
   }
 
   @Override
+  public boolean transitionOutcome(
+      Appointment current,
+      long expectedVersion,
+      com.appagendamento.appointments.domain.AppointmentOutcome outcome,
+      String reason) {
+    try {
+      int updated =
+          jdbc.update(
+              """
+              UPDATE agendamento.appointment
+              SET status = ?, version = version + 1
+              WHERE tenant_id = ? AND appointment_id = ? AND status = 'CONFIRMED' AND version = ?
+              """,
+              outcome.status().name(),
+              current.tenantId(),
+              current.appointmentId(),
+              expectedVersion);
+      if (updated != 1) return false;
+      jdbc.update(
+          """
+          INSERT INTO agendamento.appointment_history (
+            history_id, tenant_id, appointment_id, from_status, to_status,
+            actor_type, actor_ref, reason_code, reason, occurred_at,
+            previous_starts_at, previous_occupied_until, new_starts_at, new_occupied_until,
+            version_before, version_after
+          ) VALUES (?, ?, ?, 'CONFIRMED', ?, 'ADMIN', 'TENANT_ADMIN', ?, ?, clock_timestamp(),
+                    NULL, NULL, NULL, NULL, ?, ?)
+          """,
+          UUID.randomUUID(),
+          current.tenantId(),
+          current.appointmentId(),
+          outcome.status().name(),
+          outcome.historyReason(),
+          reason,
+          expectedVersion,
+          expectedVersion + 1);
+      return true;
+    } catch (DataAccessException exception) {
+      throw new AppointmentDataUnavailableException(exception);
+    }
+  }
+
+  @Override
   public List<AppointmentHistoryEntry> findAdminAppointmentHistory(
       UUID tenantId, UUID appointmentId) {
     try {

@@ -31,6 +31,11 @@ public record OutboxEvent(
         aggregateType.equals("APPOINTMENT") && eventType.equals("AppointmentConfirmed");
     boolean appointmentRescheduled =
         aggregateType.equals("APPOINTMENT") && eventType.equals("AppointmentRescheduled");
+    boolean appointmentOutcome =
+        aggregateType.equals("APPOINTMENT")
+            && java.util.Set.of(
+                    "AppointmentCancelled", "AppointmentCompleted", "ClientNoShowRecorded")
+                .contains(eventType);
     boolean allowed =
         aggregateType.equals("TENANT") && eventType.equals("TENANT_RENAMED")
             || aggregateType.equals("SERVICE") && eventType.equals("ServiceCreated")
@@ -38,12 +43,13 @@ public record OutboxEvent(
             || aggregateType.equals("AVAILABILITY_POLICY")
                 && eventType.equals("AvailabilityPolicyChanged")
             || appointmentConfirmed
-            || appointmentRescheduled;
+            || appointmentRescheduled
+            || appointmentOutcome;
     if (!allowed) {
       throw new IllegalArgumentException("Evento fora da allowlist desta integração");
     }
     String expectedPayloadPattern =
-        appointmentConfirmed || appointmentRescheduled
+        appointmentConfirmed || appointmentRescheduled || appointmentOutcome
             ? "\\{\"appointmentId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}"
             : aggregateType.equals("SERVICE")
                 ? "\\{\"serviceId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}"

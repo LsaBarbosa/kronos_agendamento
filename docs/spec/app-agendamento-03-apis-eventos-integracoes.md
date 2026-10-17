@@ -319,6 +319,16 @@ Preferir cancelamento lógico para objetos que já produziram efeitos auditávei
 | POST | `/api/v1/admin/appointments/{id}/correct-outcome` | correção excepcional |
 | GET | `/api/v1/admin/appointments/{id}/history` | linha do tempo |
 
+#### Encerramento administrativo (AGD-023)
+
+Os comandos são separados: `POST /api/v1/admin/appointments/{id}/cancel`, `/complete` e `/mark-no-show`. Cada um recebe `expectedVersion`, `reason` opcional (até 500 caracteres) e `Idempotency-Key`; usa escopo idempotente próprio e digest canônico versionado com tenant, ação, alvo, versão e motivo normalizado. O tenant e o administrador são derivados da associação OIDC atual. Cancelamento pelo administrador transita para `CANCELLED_BY_PROVIDER` e é registrado como ator `ADMIN/TENANT_ADMIN`, nunca como sessão verificada do cliente. Serviços inativos não impedem administrar a reserva.
+
+Somente `CONFIRMED` pode transitar. Replays revalidam autorização atual antes de devolver o receipt original, inclusive depois da transição terminal; uma nova intenção para estado terminal recebe `409 INVALID_STATE_TRANSITION`. Estado, versão, revisão monotônica da agenda, história, auditoria allowlisted, receipt e evento previsto compartilham a transação. A ocupação de reserva cancelada deixa de contar somente após commit. Motivo livre é preservado na história autorizada, mas não é copiado para auditoria/outbox. Eventos são `AppointmentCancelled`, `AppointmentCompleted` e `ClientNoShowRecorded`, com payload limitado a `{appointmentId,version}`; falta registrada não comprova bloqueio automático, envio de notificação nem cancelamento de lembrete.
+
+**Pendente de decisão de produto (17/10/2026):** a especificação não fixa quando `COMPLETED` ou `NO_SHOW` se tornam elegíveis, inclusive igualdade no limite. Como proteção provisória e não aprovada, a implementação rejeita conclusão antes de `service_ends_at` e falta antes de `occupied_until`, permitindo igualdade; não existe tolerância de dez minutos. O critério temporal segue parcial até decisão explícita. Cancelamento não recebe essa barreira temporal.
+
+Cancelamento pelo cliente permanece sujeito à política, mas não há rota mutável nesta história: identidade verificada depende de AGD-024/025. Lembretes/notificações efetivos dependem de AGD-030/031; contagem/restrição automática por falta depende de AGD-032/033.
+
 #### Consulta administrativa da agenda (AGD-020)
 
 - `from` e `to` são datas locais inclusivas no timezone IANA atual do tenant; `from` não pode ser posterior a `to`. A consulta aceita no máximo 366 datas locais inclusivas, igual ao limite das consultas administrativas de bloqueios. Esta janela não é limitada pelo horizonte de novas reservas e permite consultar histórico existente.

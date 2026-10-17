@@ -3,6 +3,8 @@ package com.appagendamento.appointments.api;
 import com.appagendamento.appointments.application.CreateAdministrativeAppointment;
 import com.appagendamento.appointments.application.GetAdminAppointments;
 import com.appagendamento.appointments.application.RescheduleAdministrativeAppointment;
+import com.appagendamento.appointments.application.TransitionAdministrativeAppointment;
+import com.appagendamento.appointments.domain.AppointmentOutcome;
 import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Size;
@@ -25,14 +27,58 @@ public class AdminAppointmentController {
   private final GetAdminAppointments appointments;
   private final CreateAdministrativeAppointment createAppointment;
   private final RescheduleAdministrativeAppointment rescheduleAppointment;
+  private final TransitionAdministrativeAppointment transitionAppointment;
 
   public AdminAppointmentController(
       GetAdminAppointments appointments,
       CreateAdministrativeAppointment createAppointment,
-      RescheduleAdministrativeAppointment rescheduleAppointment) {
+      RescheduleAdministrativeAppointment rescheduleAppointment,
+      TransitionAdministrativeAppointment transitionAppointment) {
     this.appointments = appointments;
     this.createAppointment = createAppointment;
     this.rescheduleAppointment = rescheduleAppointment;
+    this.transitionAppointment = transitionAppointment;
+  }
+
+  @PostMapping("/api/v1/admin/appointments/{id}/cancel")
+  ResponseEntity<AdministrativeAppointmentOutcomeResponse> cancel(
+      @AuthenticationPrincipal AuthenticatedAdmin actor,
+      @PathVariable UUID id,
+      @RequestHeader("Idempotency-Key") @Size(min = 16, max = 128) String key,
+      @Valid @RequestBody AdministrativeAppointmentOutcomeRequest request) {
+    return transition(actor, id, key, request, AppointmentOutcome.CANCEL_BY_PROVIDER);
+  }
+
+  @PostMapping("/api/v1/admin/appointments/{id}/complete")
+  ResponseEntity<AdministrativeAppointmentOutcomeResponse> complete(
+      @AuthenticationPrincipal AuthenticatedAdmin actor,
+      @PathVariable UUID id,
+      @RequestHeader("Idempotency-Key") @Size(min = 16, max = 128) String key,
+      @Valid @RequestBody AdministrativeAppointmentOutcomeRequest request) {
+    return transition(actor, id, key, request, AppointmentOutcome.COMPLETE);
+  }
+
+  @PostMapping("/api/v1/admin/appointments/{id}/mark-no-show")
+  ResponseEntity<AdministrativeAppointmentOutcomeResponse> markNoShow(
+      @AuthenticationPrincipal AuthenticatedAdmin actor,
+      @PathVariable UUID id,
+      @RequestHeader("Idempotency-Key") @Size(min = 16, max = 128) String key,
+      @Valid @RequestBody AdministrativeAppointmentOutcomeRequest request) {
+    return transition(actor, id, key, request, AppointmentOutcome.MARK_NO_SHOW);
+  }
+
+  private ResponseEntity<AdministrativeAppointmentOutcomeResponse> transition(
+      AuthenticatedAdmin actor,
+      UUID id,
+      String key,
+      AdministrativeAppointmentOutcomeRequest request,
+      AppointmentOutcome outcome) {
+    var result = transitionAppointment.execute(actor, key, outcome, request.toCommand(id));
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .header("Idempotency-Replayed", Boolean.toString(result.replayed()))
+        .header("X-Operation-Id", result.operationId().toString())
+        .body(AdministrativeAppointmentOutcomeResponse.from(result.value()));
   }
 
   @PostMapping("/api/v1/admin/appointments/{id}/reschedule")

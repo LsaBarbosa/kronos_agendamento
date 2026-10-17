@@ -294,6 +294,7 @@ Regras:
 - Estado terminal não volta para confirmado por edição simples; correção exige operação administrativa explícita e trilha própria.
 - Cancelamento libera a ocupação somente após commit.
 - Remarcação valida e troca o intervalo atomicamente; se o novo intervalo falhar, o antigo permanece.
+- Em AGD-023, cancelamento/conclusão/falta são comandos administrativos distintos e somente partem de `CONFIRMED`. A elegibilidade temporal de conclusão/falta não possui decisão aprovada; nenhuma tolerância de dez minutos está habilitada.
 
 ## 10. Faltas e bloqueio de autoagendamento
 
