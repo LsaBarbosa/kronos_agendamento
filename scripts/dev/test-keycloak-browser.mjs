@@ -650,12 +650,12 @@ try {
     await setAdminAppointmentField('Horário local', '08:00', evaluate);
     await waitUntil(() => evaluate(`(() => {
       const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
-      const label = [...form.querySelectorAll('label')].find(item => item.innerText.includes('Ignorar somente a grade semanal/slot'));
+      const label = [...form.querySelectorAll('label')].find(item => item.innerText.includes('Ignorar somente a grade semanal'));
       return Boolean(label && !label.querySelector('input')?.disabled);
     })()`));
     await evaluate(`(() => {
       const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
-      [...form.querySelectorAll('label')].find(item => item.innerText.includes('Ignorar somente a grade semanal/slot'))?.querySelector('input')?.click();
+      [...form.querySelectorAll('label')].find(item => item.innerText.includes('Ignorar somente a grade semanal'))?.querySelector('input')?.click();
     })()`);
     await setAdminAppointmentField('Nome', 'Encaixe administrativo E2E', evaluate);
     await setAdminAppointmentField('Telefone para cadastro', '+5511999998311', evaluate);

@@ -760,6 +760,7 @@ class PublicAppointmentIT {
         "Fechamento de teste");
     long revision = currentScheduleRevision();
     int appointmentsBefore = count("appointment", tenantId);
+    int clientsBefore = count("client", tenantId);
     int historyBefore = count("appointment_history", tenantId);
     int auditBefore = countByAction("APPOINTMENT_CONFIRMED");
     int outboxBefore = countByEvent("AppointmentConfirmed");
@@ -776,6 +777,7 @@ class PublicAppointmentIT {
     assertThat(status).isEqualTo(409);
     assertThat(currentScheduleRevision()).isEqualTo(revision);
     assertThat(count("appointment", tenantId)).isEqualTo(appointmentsBefore);
+    assertThat(count("client", tenantId)).isEqualTo(clientsBefore);
     assertThat(count("appointment_history", tenantId)).isEqualTo(historyBefore);
     assertThat(countByAction("APPOINTMENT_CONFIRMED")).isEqualTo(auditBefore);
     assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(outboxBefore);
@@ -803,6 +805,7 @@ class PublicAppointmentIT {
             "+5511999996102");
     assertThat(acceptedStatus).isEqualTo(201);
     int appointmentsAfterAccepted = count("appointment", tenantId);
+    int clientsAfterAccepted = count("client", tenantId);
     int historyAfterAccepted = count("appointment_history", tenantId);
     int auditAfterAccepted = countByAction("APPOINTMENT_CONFIRMED");
     int outboxAfterAccepted = countByEvent("AppointmentConfirmed");
@@ -816,6 +819,7 @@ class PublicAppointmentIT {
             "Não ultrapassar SPECIAL",
             "+5511999996103");
     assertThat(outsideStatus).isEqualTo(409);
+    assertThat(currentScheduleRevision()).isEqualTo(revision);
 
     LocalDate bufferDate = specialDate.plusWeeks(1);
     manageScheduleExceptions.create(
@@ -836,7 +840,9 @@ class PublicAppointmentIT {
             "+5511999996104");
 
     assertThat(bufferStatus).isEqualTo(409);
+    assertThat(currentScheduleRevision()).isEqualTo(bufferRevision);
     assertThat(count("appointment", tenantId)).isEqualTo(appointmentsAfterAccepted);
+    assertThat(count("client", tenantId)).isEqualTo(clientsAfterAccepted);
     assertThat(count("appointment_history", tenantId)).isEqualTo(historyAfterAccepted);
     assertThat(countByAction("APPOINTMENT_CONFIRMED")).isEqualTo(auditAfterAccepted);
     assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(outboxAfterAccepted);
