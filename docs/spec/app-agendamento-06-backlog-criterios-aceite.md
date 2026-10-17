@@ -242,6 +242,8 @@ Critérios de aceite:
 - Retry do mesmo comando é idempotente.
 - Cancelamento libera ocupação apenas após commit.
 
+**Decisão de produto aprovada pelo usuário em 17/10/2026 e registrada na ADR-0018:** `COMPLETED` e `NO_SHOW` exigem instante atual igual ou posterior a `occupiedUntil`, incluindo buffer; cancelamento do cliente aceita igualdade em `startsAt - cancellationCutoffHours`; cancelamento administrativo não herda o cutoff do cliente. Sem tolerância de dez minutos. O domínio calcula a política do cliente, mas a rota mutável depende de identidade verificada AGD-024/025. Cancelamento administrativo não exige serviço ativo.
+
 ### AGD-024 — Código de acesso por WhatsApp
 
 **Prioridade:** P0 · **Tamanho:** L

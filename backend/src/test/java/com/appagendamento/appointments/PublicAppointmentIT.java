@@ -40,6 +40,7 @@ import com.appagendamento.publicpage.application.UpdatePublicContact;
 import com.appagendamento.support.PostgresTestEnvironment;
 import java.security.SecureRandom;
 import java.time.DayOfWeek;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -103,7 +104,7 @@ class PublicAppointmentIT {
   @Autowired private SetServiceStatus setServiceStatus;
   @Autowired private MockMvc mvc;
   @Autowired private ObjectMapper objectMapper;
-  @Autowired private java.time.Clock clock;
+  @MockitoBean private java.time.Clock clock;
   @MockitoBean private PublicationEvidence publicationEvidence;
   @MockitoBean private ClientBookingRestrictionQuery clientRestrictions;
 
@@ -123,6 +124,7 @@ class PublicAppointmentIT {
 
   @BeforeEach
   void preparePublishedTenant() throws Exception {
+    org.mockito.Mockito.when(clock.instant()).thenReturn(Instant.now());
     org.mockito.Mockito.when(
             publicationEvidence.unavailableEvidence(org.mockito.ArgumentMatchers.any()))
         .thenReturn(List.of());
@@ -359,6 +361,575 @@ class PublicAppointmentIT {
                 .with(authentication(principalToken(actor))))
         .andExpect(status().isNotFound())
         .andExpect(jsonPath("$.error.code").value("RESOURCE_NOT_FOUND"));
+  }
+
+  @Test
+  void administratorCancellationIsAtomicAndAuthorizedReplayKeepsOriginalReceipt() throws Exception {
+    submitBooking(
+            "outcome-booking-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Cancelamento", "+5511999994321"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    String key = "admin-cancel-" + UUID.randomUUID();
+    String body = "{\"expectedVersion\":1,\"reason\":\"Solicitado pelo estabelecimento\"}";
+    int auditBefore = countByAction("APPOINTMENT_CANCELLED_BY_PROVIDER");
+    int outboxBefore = countByEvent("AppointmentCancelled");
+
+    mvc.perform(
+            post("/api/v1/admin/appointments/{id}/cancel", appointmentId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CANCELLED_BY_PROVIDER"))
+        .andExpect(jsonPath("$.version").value(2));
+
+    mvc.perform(
+            post("/api/v1/admin/appointments/{id}/cancel", appointmentId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.appointmentId").value(appointmentId.toString()))
+        .andExpect(jsonPath("$.version").value(2));
+
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status || ':' || version FROM agendamento.appointment WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("CANCELLED_BY_PROVIDER:2");
+    assertThat(count("appointment_history", tenantId)).isEqualTo(2);
+    assertThat(countByAction("APPOINTMENT_CANCELLED_BY_PROVIDER")).isEqualTo(auditBefore + 1);
+    assertThat(countByEvent("AppointmentCancelled")).isEqualTo(outboxBefore + 1);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT actor_type || ':' || actor_ref || ':' || reason FROM agendamento.appointment_history WHERE appointment_id = ? AND to_status = 'CANCELLED_BY_PROVIDER'",
+                String.class,
+                appointmentId))
+        .isEqualTo("ADMIN:TENANT_ADMIN:Solicitado pelo estabelecimento");
+
+    mvc.perform(
+            get("/api/v1/public/" + slug + "/availability")
+                .param("serviceId", serviceId.toString())
+                .param("from", bookingDate.toString())
+                .param("to", bookingDate.toString()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.days[0].slots.length()").value(5));
+
+    mvc.perform(
+            post("/api/v1/admin/appointments/{id}/complete", appointmentId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "another-command-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":2}"))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("INVALID_STATE_TRANSITION"));
+    assertThat(count("appointment_history", tenantId)).isEqualTo(2);
+  }
+
+  @Test
+  void completeAndNoShowUseSeparateCommandsAndOnlyReleaseOccupancyAfterCommit() throws Exception {
+    submitBooking(
+            "complete-booking-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Conclusão", "+5511999994322"))
+        .andExpect(status().isCreated());
+    UUID completeId = appointmentIdForTenant();
+    setAppointmentInPast(completeId);
+    String completeKey = "admin-complete-" + UUID.randomUUID();
+    mvc.perform(
+            post("/api/v1/admin/appointments/{id}/complete", completeId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", completeKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("COMPLETED"))
+        .andExpect(jsonPath("$.version").value(2));
+    assertThat(countByAction("APPOINTMENT_COMPLETED")).isEqualTo(1);
+    assertThat(countByEvent("AppointmentCompleted")).isEqualTo(1);
+
+    String nextStart = bookingDate.atTime(10, 0).atZone(ZONE).toOffsetDateTime().toString();
+    submitBooking(
+            "no-show-booking-" + UUID.randomUUID(),
+            requestBody(serviceId, nextStart, "Falta", "+5511999994323"))
+        .andExpect(status().isCreated());
+    UUID noShowId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ? AND status = 'CONFIRMED'",
+            UUID.class,
+            tenantId);
+    setAppointmentInPast(noShowId);
+    mvc.perform(
+            post("/api/v1/admin/appointments/{id}/mark-no-show", noShowId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "admin-no-show-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("NO_SHOW"))
+        .andExpect(jsonPath("$.version").value(2));
+    assertThat(countByAction("APPOINTMENT_NO_SHOW_RECORDED")).isEqualTo(1);
+    assertThat(countByEvent("ClientNoShowRecorded")).isEqualTo(1);
+  }
+
+  @Test
+  void futureCompletionAndNoShowAreRejectedWithoutAnySuccessEffects() throws Exception {
+    submitBooking(
+            "future-outcome-booking-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Futuro", "+5511999994324"))
+        .andExpect(status().isCreated());
+    UUID appointmentId = appointmentIdForTenant();
+    int historyBefore = count("appointment_history", tenantId);
+    for (String action : List.of("complete", "mark-no-show")) {
+      mvc.perform(
+              post("/api/v1/admin/appointments/{id}/" + action, appointmentId)
+                  .with(authentication(principalToken(actor)))
+                  .with(csrf())
+                  .header("Idempotency-Key", "blocked-" + action + "-" + UUID.randomUUID())
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"expectedVersion\":1}"))
+          .andExpect(status().isConflict())
+          .andExpect(jsonPath("$.error.code").value("INVALID_STATE_TRANSITION"));
+    }
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historyBefore);
+    assertThat(countByAction("APPOINTMENT_COMPLETED")).isZero();
+    assertThat(countByAction("APPOINTMENT_NO_SHOW_RECORDED")).isZero();
+    assertThat(countByEvent("AppointmentCompleted")).isZero();
+    assertThat(countByEvent("ClientNoShowRecorded")).isZero();
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND (command_scope LIKE 'appointments.admin.complete%' OR command_scope LIKE 'appointments.admin.mark_no_show%')",
+                Integer.class, tenantId))
+        .isZero();
+  }
+
+  @Test
+  void outcomesWaitUntilOccupiedUntilIncludingBufferAndReplayAtTheBoundary() throws Exception {
+    submitBooking(
+            "positive-buffer-outcome-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Buffer positivo", "+5511999994341"))
+        .andExpect(status().isCreated());
+    UUID positiveBufferId = appointmentIdForTenant();
+
+    UUID zeroBufferService =
+        createService
+            .execute(
+                actor,
+                "zero-buffer-outcome-" + UUID.randomUUID(),
+                "Consulta sem buffer",
+                "Atendimento",
+                30,
+                0,
+                ServiceStatus.ACTIVE)
+            .value()
+            .serviceId();
+    String zeroBufferStart = bookingDate.atTime(10, 0).atZone(ZONE).toOffsetDateTime().toString();
+    submitBooking(
+            "zero-buffer-outcome-booking-" + UUID.randomUUID(),
+            requestBody(zeroBufferService, zeroBufferStart, "Buffer zero", "+5511999994342"))
+        .andExpect(status().isCreated());
+    UUID zeroBufferId = appointmentIdForClientName("Buffer zero");
+
+    Instant positiveStart = java.time.OffsetDateTime.parse(requestedStart).toInstant();
+    Instant positiveOccupiedUntil = positiveStart.plusSeconds(45 * 60L);
+    setAppointmentInterval(
+        positiveBufferId,
+        positiveStart,
+        positiveStart.plusSeconds(30 * 60L),
+        positiveOccupiedUntil);
+    String positiveKey = "complete-positive-boundary-" + UUID.randomUUID();
+    int idempotencyRecordsBeforePositiveBoundary = idempotencyRecordCount();
+    org.mockito.Mockito.when(clock.instant()).thenReturn(positiveOccupiedUntil.minusNanos(1));
+    postOutcome(positiveBufferId, "complete", positiveKey, 1)
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("INVALID_STATE_TRANSITION"));
+    assertThat(persistedStatus(positiveBufferId)).isEqualTo("CONFIRMED:1");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ? AND status = 'CONFIRMED' AND occupied_until = ? AND tstzrange(starts_at, occupied_until, '[)') @> ?::timestamptz",
+                Integer.class,
+                tenantId,
+                positiveBufferId,
+                java.sql.Timestamp.from(positiveOccupiedUntil),
+                java.sql.Timestamp.from(positiveStart)))
+        .isEqualTo(1);
+    assertThat(countByAction("APPOINTMENT_COMPLETED")).isZero();
+    assertThat(countByEvent("AppointmentCompleted")).isZero();
+    assertThat(countHistoryReason(positiveBufferId, "APPOINTMENT_COMPLETED")).isZero();
+    assertThat(idempotencyRecordCount()).isEqualTo(idempotencyRecordsBeforePositiveBoundary);
+
+    org.mockito.Mockito.when(clock.instant()).thenReturn(positiveOccupiedUntil);
+    postOutcome(positiveBufferId, "complete", positiveKey, 1)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("COMPLETED"))
+        .andExpect(jsonPath("$.version").value(2));
+    org.mockito.Mockito.when(clock.instant()).thenReturn(positiveOccupiedUntil.plusNanos(1));
+    postOutcome(positiveBufferId, "complete", positiveKey, 1)
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.version").value(2));
+
+    Instant zeroStart = bookingDate.atTime(10, 0).atZone(ZONE).toInstant();
+    Instant zeroOccupiedUntil = zeroStart.plusSeconds(30 * 60L);
+    setAppointmentInterval(zeroBufferId, zeroStart, zeroOccupiedUntil, zeroOccupiedUntil);
+    String zeroKey = "no-show-zero-boundary-" + UUID.randomUUID();
+    int idempotencyRecordsBeforeZeroBoundary = idempotencyRecordCount();
+    org.mockito.Mockito.when(clock.instant()).thenReturn(zeroOccupiedUntil.minusNanos(1));
+    postOutcome(zeroBufferId, "mark-no-show", zeroKey, 1)
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("INVALID_STATE_TRANSITION"));
+    assertThat(persistedStatus(zeroBufferId)).isEqualTo("CONFIRMED:1");
+    assertThat(countByAction("APPOINTMENT_NO_SHOW_RECORDED")).isZero();
+    assertThat(countByEvent("ClientNoShowRecorded")).isZero();
+    assertThat(countHistoryReason(zeroBufferId, "APPOINTMENT_NO_SHOW")).isZero();
+    assertThat(idempotencyRecordCount()).isEqualTo(idempotencyRecordsBeforeZeroBoundary);
+
+    org.mockito.Mockito.when(clock.instant()).thenReturn(zeroOccupiedUntil);
+    postOutcome(zeroBufferId, "mark-no-show", zeroKey, 1)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("NO_SHOW"))
+        .andExpect(jsonPath("$.version").value(2));
+    org.mockito.Mockito.when(clock.instant()).thenReturn(zeroOccupiedUntil.plusNanos(1));
+    postOutcome(zeroBufferId, "mark-no-show", zeroKey, 1)
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.version").value(2));
+    assertThat(countByAction("APPOINTMENT_COMPLETED")).isEqualTo(1);
+    assertThat(countByEvent("AppointmentCompleted")).isEqualTo(1);
+    assertThat(countByAction("APPOINTMENT_NO_SHOW_RECORDED")).isEqualTo(1);
+    assertThat(countByEvent("ClientNoShowRecorded")).isEqualTo(1);
+    assertThat(countHistoryReason(positiveBufferId, "APPOINTMENT_COMPLETED")).isEqualTo(1);
+    assertThat(countHistoryReason(zeroBufferId, "APPOINTMENT_NO_SHOW")).isEqualTo(1);
+  }
+
+  @Test
+  void auditFailureRollsBackCancellationAndDoesNotReleaseTheSlot() throws Exception {
+    submitBooking(
+            "rollback-outcome-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Rollback", "+5511999994325"))
+        .andExpect(status().isCreated());
+    UUID appointmentId = appointmentIdForTenant();
+    String key = "rollback-cancel-" + UUID.randomUUID();
+    migrationJdbc.execute(
+        "CREATE FUNCTION agendamento.fail_outcome_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action = 'APPOINTMENT_CANCELLED_BY_PROVIDER' THEN RAISE EXCEPTION 'injected failure'; END IF; RETURN NEW; END $$");
+    migrationJdbc.execute(
+        "CREATE TRIGGER fail_outcome_audit BEFORE INSERT ON agendamento.audit_event FOR EACH ROW EXECUTE FUNCTION agendamento.fail_outcome_audit()");
+    try {
+      org.assertj.core.api.Assertions.assertThatThrownBy(
+              () ->
+                  mvc.perform(
+                      post("/api/v1/admin/appointments/{id}/cancel", appointmentId)
+                          .with(authentication(principalToken(actor)))
+                          .with(csrf())
+                          .header("Idempotency-Key", key)
+                          .contentType(MediaType.APPLICATION_JSON)
+                          .content("{\"expectedVersion\":1}")))
+          .isInstanceOf(Exception.class);
+    } finally {
+      migrationJdbc.execute("DROP TRIGGER fail_outcome_audit ON agendamento.audit_event");
+      migrationJdbc.execute("DROP FUNCTION agendamento.fail_outcome_audit()");
+    }
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status || ':' || version FROM agendamento.appointment WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("CONFIRMED:1");
+    assertThat(count("appointment_history", tenantId)).isEqualTo(1);
+    assertThat(countByAction("APPOINTMENT_CANCELLED_BY_PROVIDER")).isZero();
+    assertThat(countByEvent("AppointmentCancelled")).isZero();
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope = 'appointments.admin.cancel_by_provider.v1' AND key_digest = ?",
+                Integer.class,
+                tenantId,
+                com.appagendamento.idempotency.application.IdempotencyKey.digest(key)))
+        .isZero();
+    mvc.perform(
+            get("/api/v1/public/" + slug + "/availability")
+                .param("serviceId", serviceId.toString())
+                .param("from", bookingDate.toString())
+                .param("to", bookingDate.toString()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.days[0].slots.length()").value(3));
+  }
+
+  @Test
+  void outcomesRequireCsrfAndConcealAppointmentsFromOtherTenants() throws Exception {
+    submitBooking(
+            "csrf-outcome-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "CSRF", "+5511999994326"))
+        .andExpect(status().isCreated());
+    UUID appointmentId = appointmentIdForTenant();
+    mvc.perform(
+            post("/api/v1/admin/appointments/{id}/cancel", appointmentId)
+                .with(authentication(principalToken(actor)))
+                .header("Idempotency-Key", "missing-csrf-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1}"))
+        .andExpect(status().isForbidden());
+
+    UUID foreignId = seedForeignAppointment(bookingDate);
+    mvc.perform(
+            post("/api/v1/admin/appointments/{id}/cancel", foreignId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "foreign-outcome-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1}"))
+        .andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.error.code").value("RESOURCE_NOT_FOUND"));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status FROM agendamento.appointment WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("CONFIRMED");
+    assertThat(countByAction("APPOINTMENT_CANCELLED_BY_PROVIDER")).isZero();
+  }
+
+  @Test
+  void administratorCanCancelAnExistingAppointmentAfterServiceDeactivation() throws Exception {
+    submitBooking(
+            "inactive-service-outcome-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Inativo", "+5511999994327"))
+        .andExpect(status().isCreated());
+    UUID appointmentId = appointmentIdForTenant();
+    setServiceStatus.execute(
+        actor,
+        serviceId,
+        "deactivate-before-cancel-" + UUID.randomUUID(),
+        0,
+        ServiceStatus.INACTIVE);
+    mvc.perform(
+            post("/api/v1/admin/appointments/{id}/cancel", appointmentId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "inactive-service-cancel-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CANCELLED_BY_PROVIDER"));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status FROM agendamento.appointment WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("CANCELLED_BY_PROVIDER");
+  }
+
+  @Test
+  void cancellationAndCompletionRaceHasOnlyOneCommittedTerminalTransition() throws Exception {
+    submitBooking(
+            "race-outcome-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Corrida", "+5511999994328"))
+        .andExpect(status().isCreated());
+    UUID appointmentId = appointmentIdForTenant();
+    setAppointmentInPast(appointmentId);
+    installRescheduleUpdatePause(appointmentId);
+    try (ExecutorService commands = Executors.newFixedThreadPool(2)) {
+      var cancellation =
+          commands.submit(
+              () -> submitOutcome(appointmentId, "cancel", "cancel-race-" + UUID.randomUUID()));
+      awaitUpdateInProgress();
+      var completion =
+          commands.submit(
+              () -> submitOutcome(appointmentId, "complete", "complete-race-" + UUID.randomUUID()));
+      int cancelStatus = cancellation.get();
+      int completeStatus = completion.get();
+      assertThat(List.of(cancelStatus, completeStatus)).contains(200, 409);
+    } finally {
+      removeRescheduleUpdatePause();
+    }
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status || ':' || version FROM agendamento.appointment WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .matches("(CANCELLED_BY_PROVIDER|COMPLETED):2");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.appointment_history WHERE appointment_id = ? AND from_status = 'CONFIRMED'",
+                Integer.class,
+                appointmentId))
+        .isEqualTo(1);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.audit_event WHERE target_id = ? AND action IN ('APPOINTMENT_CANCELLED_BY_PROVIDER','APPOINTMENT_COMPLETED')",
+                Integer.class,
+                appointmentId))
+        .isEqualTo(1);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = ? AND event_type IN ('AppointmentCancelled','AppointmentCompleted')",
+                Integer.class,
+                appointmentId))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void concurrentBookingCanReuseCancelledSlotOnlyAfterCancellationCommits() throws Exception {
+    submitBooking(
+            "cancel-booking-race-source-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Cancelamento concorrente", "+5511999994329"))
+        .andExpect(status().isCreated());
+    UUID appointmentId = appointmentIdForTenant();
+    installRescheduleUpdatePause(appointmentId);
+    try (ExecutorService commands = Executors.newFixedThreadPool(2)) {
+      var cancellation =
+          commands.submit(
+              () ->
+                  submitOutcome(
+                      appointmentId, "cancel", "cancel-before-booking-" + UUID.randomUUID()));
+      awaitUpdateInProgress();
+      var newBooking = commands.submit(() -> reserve("booking-after-cancel-" + UUID.randomUUID()));
+      assertThat(cancellation.get()).isEqualTo(200);
+      assertThat(newBooking.get()).isTrue();
+    } finally {
+      removeRescheduleUpdatePause();
+    }
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status FROM agendamento.appointment WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("CANCELLED_BY_PROVIDER");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.appointment WHERE tenant_id = ? AND starts_at = ? AND status = 'CONFIRMED'",
+                Integer.class,
+                tenantId,
+                java.time.OffsetDateTime.parse(requestedStart)))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void concurrentBlockCanUseCancelledSlotOnlyAfterCancellationCommits() throws Exception {
+    submitBooking(
+            "cancel-block-race-source-" + UUID.randomUUID(),
+            requestBody(
+                serviceId, requestedStart, "Cancelamento antes de bloqueio", "+5511999994330"))
+        .andExpect(status().isCreated());
+    UUID appointmentId = appointmentIdForTenant();
+    installRescheduleUpdatePause(appointmentId);
+    try (ExecutorService commands = Executors.newFixedThreadPool(2)) {
+      var cancellation =
+          commands.submit(
+              () ->
+                  submitOutcome(
+                      appointmentId, "cancel", "cancel-before-block-" + UUID.randomUUID()));
+      awaitUpdateInProgress();
+      var block =
+          commands.submit(() -> createBlockAt(java.time.OffsetDateTime.parse(requestedStart)));
+      assertThat(cancellation.get()).isEqualTo(200);
+      assertThat(block.get()).isTrue();
+    } finally {
+      removeRescheduleUpdatePause();
+    }
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status FROM agendamento.appointment WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("CANCELLED_BY_PROVIDER");
+    assertThat(count("blocked_period", tenantId)).isEqualTo(1);
+  }
+
+  private int submitOutcome(UUID appointmentId, String action, String key) {
+    try {
+      return mvc.perform(
+              post("/api/v1/admin/appointments/{id}/" + action, appointmentId)
+                  .with(authentication(principalToken(actor)))
+                  .with(csrf())
+                  .header("Idempotency-Key", key)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"expectedVersion\":1}"))
+          .andReturn()
+          .getResponse()
+          .getStatus();
+    } catch (Exception exception) {
+      throw new IllegalStateException(exception);
+    }
+  }
+
+  private UUID appointmentIdForTenant() {
+    return appJdbc.queryForObject(
+        "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ? AND status = 'CONFIRMED' ORDER BY created_at DESC LIMIT 1",
+        UUID.class,
+        tenantId);
+  }
+
+  private UUID appointmentIdForClientName(String name) {
+    return appJdbc.queryForObject(
+        "SELECT appointment.appointment_id FROM agendamento.appointment appointment JOIN agendamento.client client USING (tenant_id, client_id) WHERE appointment.tenant_id = ? AND client.display_name = ? ORDER BY appointment.created_at DESC LIMIT 1",
+        UUID.class,
+        tenantId,
+        name);
+  }
+
+  private void setAppointmentInterval(
+      UUID appointmentId, Instant startsAt, Instant serviceEndsAt, Instant occupiedUntil) {
+    migrationJdbc.update(
+        "UPDATE agendamento.appointment SET starts_at = ?, service_ends_at = ?, occupied_until = ? WHERE tenant_id = ? AND appointment_id = ?",
+        java.sql.Timestamp.from(startsAt),
+        java.sql.Timestamp.from(serviceEndsAt),
+        java.sql.Timestamp.from(occupiedUntil),
+        tenantId,
+        appointmentId);
+  }
+
+  private String persistedStatus(UUID appointmentId) {
+    return appJdbc.queryForObject(
+        "SELECT status || ':' || version FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+        String.class,
+        tenantId,
+        appointmentId);
+  }
+
+  private int idempotencyRecordCount() {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ?",
+        Integer.class,
+        tenantId);
+  }
+
+  private int countHistoryReason(UUID appointmentId, String reasonCode) {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.appointment_history WHERE tenant_id = ? AND appointment_id = ? AND reason_code = ?",
+        Integer.class,
+        tenantId,
+        appointmentId,
+        reasonCode);
+  }
+
+  private ResultActions postOutcome(UUID appointmentId, String action, String key, long version)
+      throws Exception {
+    return mvc.perform(
+        post("/api/v1/admin/appointments/{id}/" + action, appointmentId)
+            .with(authentication(principalToken(actor)))
+            .with(csrf())
+            .header("Idempotency-Key", key)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"expectedVersion\":" + version + "}"));
+  }
+
+  private void setAppointmentInPast(UUID appointmentId) {
+    migrationJdbc.update(
+        "WITH past AS (SELECT clock_timestamp() - interval '90 minutes' AS starts_at) UPDATE agendamento.appointment AS appointment SET starts_at = past.starts_at, service_ends_at = past.starts_at + interval '30 minutes', occupied_until = past.starts_at + interval '45 minutes' FROM past WHERE appointment.appointment_id = ?",
+        appointmentId);
   }
 
   @Test

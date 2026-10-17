@@ -7,6 +7,7 @@
 | Override `OUTSIDE_WEEKLY_SCHEDULE` em datas com exceção | AGD-021; documentos 01–03 e 06 | Só ignora a grade semanal quando não há exceção. CLOSED permanece fechado; SPECIAL é lista final e exige ocupação completa dentro de um período; MIN_NOTICE é independente e pode ser ignorada dentro de SPECIAL com motivo. Nenhuma mutação de grade/exceção pelo encaixe. | Aprovado pelo usuário em 17/10/2026; ADR-0016 e contratos atualizados. |
 | Protocolo de remarcação administrativa | AGD-022; ADR-0014/0017 | Atualização atômica da reserva confirmada com CAS independente da revisão da agenda e lock tenant-first compartilhado. | Decisão técnica registrada na ADR-0017; não agrega versões nem herda overrides. |
 | Elegibilidade do serviço em remarcação | AGD-022; ADR-0017; documentos 01–03 | Serviço associado deve estar ativo para uma nova mutação; snapshots preservados e replay já concluído não revalida essa elegibilidade. | **Aprovado pelo usuário em 17/10/2026 nesta instrução.** Persistência consulta elegibilidade atual separadamente do snapshot; overrides não ignoram inatividade. |
+| Limites temporais de AGD-023 | AGD-023; documentos 01 §9, 02 §§6/9, 03 comandos administrativos | `COMPLETED`/`NO_SHOW` em ou após `occupiedUntil`; cancelamento do cliente permite igualdade no cutoff; cancelamento administrativo sem cutoff de cliente. | **Aprovado pelo usuário nesta instrução em 17/10/2026.** Sem tolerância de dez minutos; implementação e contratos registrados na ADR-0018. Política do cliente sem rota mutável até AGD-024/025. |
 
 ## Dúvidas abertas
 

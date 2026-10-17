@@ -134,6 +134,8 @@ A disponibilidade de um serviço é a interseção de:
 | Antecedência mínima | de 1 a 24 horas, configurável |
 | Janela máxima de reserva | 7, 30, 60 ou 90 dias |
 | Limite para cancelamento pelo cliente | de 2 a 24 horas antes do início |
+
+**Decisão de produto aprovada pelo usuário em 17/10/2026 e registrada na ADR-0018:** o cancelamento é permitido quando `now <= startsAt - cancellationCutoffHours`, inclusive no instante exato do cutoff. AGD-023 mantém apenas a política de domínio; a rota mutável continua fechada até identidade verificada em AGD-024/025.
 | Lembrete único | 2, 6, 12 ou 24 horas antes do início |
 
 ### 5.5 Horário de verão e relógio
@@ -294,6 +296,7 @@ Regras:
 - Estado terminal não volta para confirmado por edição simples; correção exige operação administrativa explícita e trilha própria.
 - Cancelamento libera a ocupação somente após commit.
 - Remarcação valida e troca o intervalo atomicamente; se o novo intervalo falhar, o antigo permanece.
+- Em AGD-023, cancelamento/conclusão/falta são comandos administrativos distintos e somente partem de `CONFIRMED`. Decisão aprovada em 17/10/2026 (ADR-0018): conclusão e falta exigem `Clock.instant() >= occupiedUntil`, incluindo buffer; cancelamento do cliente permite igualdade em `startsAt - cancellationCutoffHours`; cancelamento administrativo não recebe o prazo do cliente. Não há tolerância de dez minutos.
 
 ## 10. Faltas e bloqueio de autoagendamento
 

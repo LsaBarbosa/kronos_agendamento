@@ -485,9 +485,21 @@ try {
       document.querySelector('[data-appointment-id="${secondAppointmentId}"] button')?.click();
       [...document.querySelectorAll('button')].find(button => button.innerText === 'Fechar detalhes')?.click();
     })()`);
-    await waitUntil(() =>
-        evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('Visitante de demonstração') && [...document.querySelectorAll('[role=alert]')].some(alert => alert.innerText.includes('Resolva primeiro a remarcação'))`),
-    );
+    const guardedNavigation = await evaluate(`(() => ({
+      detail: document.querySelector('.admin-agenda__details')?.innerText,
+      closeDisabled: [...document.querySelectorAll('button')].find(button => button.innerText === 'Fechar detalhes')?.disabled,
+      periodDisabled: [...document.querySelectorAll('button')].find(button => button.innerText === 'Próximo período')?.disabled,
+    }))()`);
+    if (
+        !guardedNavigation.closeDisabled ||
+        !guardedNavigation.periodDisabled ||
+        !guardedNavigation.detail.includes('Visitante de demonstração') ||
+        guardedNavigation.detail.includes('Segundo visitante de demonstração')
+    ) {
+        throw new Error(
+            `A navegação alterou a associação durante o POST pendente: ${JSON.stringify(guardedNavigation)}`,
+        );
+    }
     await evaluate('window.__releaseRescheduleResponse?.()');
     await waitForText('A resposta não chegou; o resultado pode estar confirmado.', evaluate);
     const uncertainAssociation = await evaluate(`(() => ({
@@ -621,11 +633,19 @@ try {
         );
     }
     await evaluate(`document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"] button')?.click()`);
-    await waitUntil(() =>
-        evaluate(
-            `document.querySelector('.admin-agenda__details')?.innerText.includes('Segundo visitante de demonstração') && [...document.querySelectorAll('[role=alert]')].some(alert => alert.innerText.includes('Resolva primeiro a remarcação'))`,
-        ),
-    );
+    const delayedSuccessGuard = await evaluate(`(() => ({
+      detail: document.querySelector('.admin-agenda__details')?.innerText,
+      closeDisabled: [...document.querySelectorAll('button')].find(button => button.innerText === 'Fechar detalhes')?.disabled,
+    }))()`);
+    if (
+        !delayedSuccessGuard.closeDisabled ||
+        !delayedSuccessGuard.detail.includes('Segundo visitante de demonstração') ||
+        delayedSuccessGuard.detail.includes('Visitante de demonstração ·')
+    ) {
+        throw new Error(
+            `A remarcação pendente de B perdeu sua associação visual: ${JSON.stringify(delayedSuccessGuard)}`,
+        );
+    }
     await evaluate('window.__releaseDelayedSuccess?.()');
     await waitForText('Remarcação confirmada e persistida.', evaluate);
     const delayedSuccessVersion = Number(
@@ -1048,6 +1068,370 @@ try {
         throw new Error('Recuperação explícita do conflito não carregou a versão atual.');
     }
     console.log('Browser: conflito CAS preservou rascunho e recuperação explícita carregou a versão vigente.');
+
+    const administrativeAppointmentId = queryPostgres(
+        `SELECT a.appointment_id FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.client_name_snapshot = 'Reserva administrativa E2E' AND a.status = 'CONFIRMED'`,
+        appEnvironment,
+    );
+    queryPostgres(
+        `WITH moment AS (SELECT clock_timestamp() AS now) UPDATE agendamento.appointment a SET starts_at = moment.now - interval '1 day', service_ends_at = moment.now - interval '1 day' + make_interval(mins => a.service_duration_minutes), occupied_until = moment.now - interval '1 day' + make_interval(mins => a.service_duration_minutes + a.service_buffer_after_minutes) FROM moment WHERE a.appointment_id = '${administrativeAppointmentId}'::uuid`,
+        appEnvironment,
+    );
+
+    await setFieldByLabel('Data de referência', publicDate, evaluate);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"]'))`));
+    await evaluate(`document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"] button')?.click()`);
+    await waitUntil(() => evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('Visitante de demonstração')`));
+    const initialOutcomeAppointment = await evaluate(
+        `fetch('/api/v1/admin/appointments/${appointmentIdInEachTab[0]}', {credentials:'same-origin'}).then(response => response.json())`,
+    );
+    const externalRescheduleDate = new Date(`${publicDate}T12:00:00Z`);
+    externalRescheduleDate.setUTCDate(externalRescheduleDate.getUTCDate() + 7);
+    const externalRescheduleLocalDate = externalRescheduleDate.toISOString().slice(0, 10);
+    const externalReschedule = await secondTab.evaluate(`(async () => {
+      const [appointmentResponse, scheduleResponse, csrfResponse] = await Promise.all([
+        fetch('/api/v1/admin/appointments/${appointmentIdInEachTab[0]}', {credentials:'same-origin'}),
+        fetch('/api/v1/admin/schedule/weekly-periods', {credentials:'same-origin'}),
+        fetch('/api/v1/csrf', {credentials:'same-origin'})
+      ]);
+      const [appointment, schedule, csrf] = await Promise.all([appointmentResponse.json(), scheduleResponse.json(), csrfResponse.json()]);
+      const response = await fetch('/api/v1/admin/appointments/${appointmentIdInEachTab[0]}/reschedule', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json', [csrf.headerName]:csrf.token, 'Idempotency-Key':crypto.randomUUID()},
+        body:JSON.stringify({expectedVersion:appointment.version, expectedScheduleRevision:schedule.scheduleRevision, startsAt:'${externalRescheduleLocalDate}T10:00:00-03:00'})
+      });
+      return {status:response.status, body:await response.json()};
+    })()`);
+    if (externalReschedule.status !== 200) {
+        throw new Error(`A alteração de outra aba não provocou conflito CAS: ${JSON.stringify(externalReschedule)}`);
+    }
+    await clickButtonByText('Cancelar reserva', evaluate);
+    await clickButtonByText('Confirmar ação', evaluate);
+    await waitForText('mudou em outra operação', evaluate);
+    const rejectedOutcomeContext = await evaluate(`(() => {
+      const details = document.querySelector('.admin-agenda__details');
+      const labels = [...(details?.querySelectorAll('button') ?? [])].map(button => button.innerText.trim());
+      return {
+        conflict: details?.innerText.includes('mudou em outra operação'),
+        terminalActionsAvailable: ['Cancelar reserva', 'Concluir atendimento', 'Marcar falta'].every(label => labels.includes(label)),
+      };
+    })()`);
+    if (!rejectedOutcomeContext.conflict || !rejectedOutcomeContext.terminalActionsAvailable) {
+        throw new Error(`Conflito definitivo manteve uma ação antiga ou perdeu a recuperação: ${JSON.stringify(rejectedOutcomeContext)}`);
+    }
+    await clickButtonByText('Atualizar detalhes da reserva', evaluate);
+    await waitUntil(() => evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('versão ${initialOutcomeAppointment.version + 1}')`));
+    await waitForText('mudou em outra operação', evaluate);
+    await clickButtonByText('Remarcar', evaluate);
+
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        if (String(args[0]).includes('/reschedule') && args[1]?.method === 'POST' && response.ok) {
+          window.__pendingRescheduleRequest = { url: String(args[0]), body: args[1].body, key: args[1].headers['Idempotency-Key'] };
+          window.__pendingRescheduleReady = true;
+          await new Promise(resolve => { window.__releaseRescheduleResponse = resolve; });
+          window.fetch = originalFetch;
+          throw new TypeError('Simulated lost reschedule response after commit');
+        }
+        return response;
+      };
+    })()`);
+    const retryRescheduleDate = new Date(`${publicDate}T12:00:00Z`);
+    retryRescheduleDate.setUTCDate(retryRescheduleDate.getUTCDate() + 14);
+    await setFieldByLabel('Nova data local', retryRescheduleDate.toISOString().slice(0, 10), evaluate);
+    await setFieldByLabel('Novo horário local', '10:00', evaluate);
+    await clickButtonByText('Confirmar remarcação', evaluate);
+    await waitForText(
+        'A reserva ou agenda mudou. Atualize as versões e revise o destino antes de enviar uma nova intenção.',
+        evaluate,
+    );
+    await clickButtonByText('Atualizar versões sem alterar o destino', evaluate);
+    await waitForText('Versões atualizadas. Revise a data e confirme uma nova intenção.', evaluate);
+    await clickButtonByText('Confirmar remarcação', evaluate);
+    await waitUntil(() => evaluate(`window.__pendingRescheduleReady === true`));
+    const originalRescheduleRequest = await evaluate('window.__pendingRescheduleRequest');
+    if (!originalRescheduleRequest.url.includes(appointmentIdInEachTab[0])) {
+        throw new Error(`Remarcação pendente não ficou associada ao alvo original: ${JSON.stringify(originalRescheduleRequest)}`);
+    }
+    const conflictAndNavigationGuarded = await evaluate(`(() => {
+      const text = document.querySelector('.admin-agenda__details')?.innerText ?? '';
+      const refresh = [...document.querySelectorAll('.admin-agenda__details button')].find(button => button.innerText.trim() === 'Atualizar detalhes da reserva');
+      const close = [...document.querySelectorAll('.admin-agenda__details button')].find(button => button.innerText.trim() === 'Fechar detalhes');
+      const otherAppointment = document.querySelector('[data-appointment-id="${secondAppointmentId}"] button');
+      return text.includes('mudou em outra operação') && refresh?.disabled === true && close?.disabled === true && otherAppointment?.disabled === true;
+    })()`);
+    if (!conflictAndNavigationGuarded) throw new Error('Refresh manual ou navegação escapou do guard enquanto a remarcação estava pendente.');
+
+    const externalCancel = await secondTab.evaluate(`(async () => {
+      const [appointmentResponse, csrfResponse] = await Promise.all([
+        fetch('/api/v1/admin/appointments/${appointmentIdInEachTab[0]}', {credentials:'same-origin'}),
+        fetch('/api/v1/csrf', {credentials:'same-origin'})
+      ]);
+      const [appointment, csrf] = await Promise.all([appointmentResponse.json(), csrfResponse.json()]);
+      const response = await fetch('/api/v1/admin/appointments/${appointmentIdInEachTab[0]}/cancel', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json', [csrf.headerName]:csrf.token, 'Idempotency-Key':crypto.randomUUID()},
+        body:JSON.stringify({expectedVersion:appointment.version, reason:'Cancelamento em outra aba'})
+      });
+      return {status:response.status, body:await response.json()};
+    })()`);
+    if (externalCancel.status !== 200) {
+        throw new Error(`Cancelamento concorrente em outra aba falhou: ${JSON.stringify(externalCancel)}`);
+    }
+    const refreshStayedBlocked = await evaluate(`(() => {
+      const text = document.querySelector('.admin-agenda__details')?.innerText ?? '';
+      const refresh = [...document.querySelectorAll('.admin-agenda__details button')].find(button => button.innerText.trim() === 'Atualizar detalhes da reserva');
+      const retry = [...document.querySelectorAll('.admin-agenda__details button')].find(button => button.innerText.includes('Recuperar / repetir a mesma intenção'));
+      return text.includes('Visitante de demonstração') && text.includes('mudou em outra operação') && refresh?.disabled === true && !retry;
+    })()`);
+    if (!refreshStayedBlocked) throw new Error('A atualização manual alterou ou ocultou o contexto da intenção pendente.');
+    await evaluate('window.__releaseRescheduleResponse?.()');
+    await waitForText('A resposta não chegou; o resultado pode estar confirmado.', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (...args) => {
+        if (String(args[0]).includes('/reschedule') && args[1]?.method === 'POST') {
+          window.__retryRescheduleRequest = { url: String(args[0]), body: args[1].body, key: args[1].headers['Idempotency-Key'] };
+          window.fetch = originalFetch;
+        }
+        return originalFetch(...args);
+      };
+    })()`);
+    await clickButtonByText('Recuperar / repetir a mesma intenção', evaluate);
+    await waitForText('Remarcação confirmada e persistida.', evaluate);
+    const retryRescheduleRequest = await evaluate('window.__retryRescheduleRequest');
+    if (JSON.stringify(originalRescheduleRequest) !== JSON.stringify(retryRescheduleRequest)) {
+        throw new Error(`Retry da remarcação alterou alvo/body/chave: ${JSON.stringify({ originalRescheduleRequest, retryRescheduleRequest })}`);
+    }
+    await waitUntil(() => evaluate(`(() => {
+      const text = document.querySelector('.admin-agenda__details')?.innerText ?? '';
+      return text.includes('CANCELLED_BY_PROVIDER') && text.includes('versão ${initialOutcomeAppointment.version + 3}') && text.includes('APPOINTMENT_RESCHEDULED') && text.includes('APPOINTMENT_CANCELLED_BY_PROVIDER');
+    })()`));
+    const outcomeDetailsReleased = await evaluate(`(() => {
+      const text = document.querySelector('.admin-agenda__details')?.innerText ?? '';
+      const close = [...document.querySelectorAll('.admin-agenda__details button')].find(button => button.innerText.trim() === 'Fechar detalhes');
+      const otherAppointment = document.querySelector('[data-appointment-id="${secondAppointmentId}"] button');
+      const refresh = [...document.querySelectorAll('.admin-agenda__details button')].find(button => button.innerText.trim() === 'Atualizar detalhes da reserva');
+      return text.includes('CANCELLED_BY_PROVIDER') && !text.includes('mudou em outra operação') && !text.includes('resultado pode estar confirmado') && refresh === undefined && close?.disabled === false && otherAppointment?.disabled === false;
+    })()`);
+    if (!outcomeDetailsReleased) throw new Error('A reconciliação não exibiu o estado atual nem liberou a navegação.');
+    const outcomeEffects = Number(queryPostgres(
+        `SELECT CASE WHEN (SELECT count(*) FROM agendamento.appointment_history WHERE appointment_id = '${appointmentIdInEachTab[0]}' AND reason_code = 'APPOINTMENT_RESCHEDULED') = 3 AND (SELECT count(*) FROM agendamento.audit_event WHERE target_id = '${appointmentIdInEachTab[0]}' AND action = 'APPOINTMENT_RESCHEDULED') = 3 AND (SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = '${appointmentIdInEachTab[0]}' AND event_type = 'AppointmentRescheduled') = 3 AND (SELECT count(*) FROM agendamento.appointment_history WHERE appointment_id = '${appointmentIdInEachTab[0]}' AND reason_code = 'APPOINTMENT_CANCELLED_BY_PROVIDER') = 1 AND (SELECT count(*) FROM agendamento.audit_event WHERE target_id = '${appointmentIdInEachTab[0]}' AND action = 'APPOINTMENT_CANCELLED_BY_PROVIDER') = 1 AND (SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = '${appointmentIdInEachTab[0]}' AND event_type = 'AppointmentCancelled') = 1 AND (SELECT version FROM agendamento.appointment WHERE appointment_id = '${appointmentIdInEachTab[0]}') = ${initialOutcomeAppointment.version + 3} THEN 1 ELSE 0 END`,
+        appEnvironment,
+    ));
+    if (outcomeEffects !== 1) throw new Error('Replay repetiu ou omitiu efeitos entre abas.');
+    await evaluate(`document.querySelector('[data-appointment-id="${secondAppointmentId}"] button')?.click()`);
+    await waitUntil(() => evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('Segundo visitante de demonstração')`));
+    queryPostgres(
+        `WITH moment AS (SELECT clock_timestamp() AS now) UPDATE agendamento.appointment a SET starts_at = moment.now - interval '2 days', service_ends_at = moment.now - interval '2 days' + make_interval(mins => a.service_duration_minutes), occupied_until = moment.now - interval '2 days' + make_interval(mins => a.service_duration_minutes + a.service_buffer_after_minutes) FROM moment WHERE a.appointment_id = '${secondAppointmentId}'::uuid`,
+        appEnvironment,
+    );
+    const completionAppointment = await evaluate(
+        `fetch('/api/v1/admin/appointments/${secondAppointmentId}', {credentials:'same-origin'}).then(response => response.json())`,
+    );
+    const completionDate = await evaluate(`(() => {
+      const parts = new Intl.DateTimeFormat('en-CA', {timeZone:${JSON.stringify(publication.timeZone)},year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(${JSON.stringify(completionAppointment.startsAt)}));
+      const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+      return values.year + '-' + values.month + '-' + values.day;
+    })()`);
+    await setFieldByLabel('Data de referência', completionDate, evaluate);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-appointment-id="${secondAppointmentId}"]'))`));
+    await evaluate(`document.querySelector('[data-appointment-id="${secondAppointmentId}"] button')?.click()`);
+    await waitUntil(() => evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('Segundo visitante de demonstração')`));
+    await clickButtonByText('Concluir atendimento', evaluate);
+    await clickButtonByText('Confirmar ação', evaluate);
+    await waitForText('Estado atualizado e persistido.', evaluate);
+    await waitUntil(() => evaluate(`(() => {
+      const text = document.querySelector('.admin-agenda__details')?.innerText ?? '';
+      return text.includes('COMPLETED') && text.includes('versão 3') && text.includes('APPOINTMENT_COMPLETED') && text.includes('versão 2 → 3');
+    })()`));
+
+    const noShowAppointment = await evaluate(
+        `fetch('/api/v1/admin/appointments/${administrativeAppointmentId}', {credentials:'same-origin'}).then(response => response.json())`,
+    );
+    const noShowDate = await evaluate(`(() => {
+      const parts = new Intl.DateTimeFormat('en-CA', {timeZone:${JSON.stringify(publication.timeZone)},year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(${JSON.stringify(noShowAppointment.startsAt)}));
+      const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+      return values.year + '-' + values.month + '-' + values.day;
+    })()`);
+    await setFieldByLabel('Data de referência', noShowDate, evaluate);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-appointment-id="${administrativeAppointmentId}"]'))`));
+    await evaluate(`document.querySelector('[data-appointment-id="${administrativeAppointmentId}"] button')?.click()`);
+    await waitUntil(() => evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('Reserva administrativa E2E')`));
+    await clickButtonByText('Marcar falta', evaluate);
+    await clickButtonByText('Confirmar ação', evaluate);
+    await waitForText('Estado atualizado e persistido.', evaluate);
+    await waitUntil(() => evaluate(`(() => {
+      const text = document.querySelector('.admin-agenda__details')?.innerText ?? '';
+      return text.includes('NO_SHOW') && text.includes('versão 2') && text.includes('APPOINTMENT_NO_SHOW');
+    })()`));
+
+    const cancelRetryAppointmentId = queryPostgres(
+        `SELECT a.appointment_id FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.client_name_snapshot = 'Encaixe administrativo E2E' AND a.status = 'CONFIRMED'`,
+        appEnvironment,
+    );
+    const cancelRetryInitialVersion = Number(queryPostgres(
+        `SELECT version FROM agendamento.appointment WHERE appointment_id = '${cancelRetryAppointmentId}'`,
+        appEnvironment,
+    ));
+    await setFieldByLabel('Data de referência', publicDate, evaluate);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-appointment-id="${cancelRetryAppointmentId}"]'))`));
+    await evaluate(`document.querySelector('[data-appointment-id="${cancelRetryAppointmentId}"] button')?.click()`);
+    await waitUntil(() => evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('Encaixe administrativo E2E')`));
+    await clickButtonByText('Cancelar reserva', evaluate);
+    await evaluate(`(() => {
+      const details = document.querySelector('.admin-agenda__details');
+      const wrapper = [...(details?.querySelectorAll('label') ?? [])].find(item => item.childNodes[0]?.textContent?.trim() === 'Motivo (opcional)');
+      const field = wrapper?.querySelector('input');
+      if (!field) throw new Error('Cancellation reason field not found inside appointment details');
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+      descriptor.set.call(field, 'Cancelamento com resposta perdida E2E');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      field.dispatchEvent(new Event('change', { bubbles: true }));
+      if (field.value !== 'Cancelamento com resposta perdida E2E') throw new Error('Cancellation reason was not rendered in the original appointment details');
+    })()`);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const url = String(args[0]);
+        if (url.endsWith('/api/v1/admin/appointments/${cancelRetryAppointmentId}/cancel') && args[1]?.method === 'POST' && response.ok) {
+          window.__pendingCancelRequest = { url, body: args[1].body, key: args[1].headers['Idempotency-Key'] };
+          window.__committedCancelReceipt = await response.clone().json();
+          window.__committedCancelReplayHeader = response.headers.get('Idempotency-Replayed');
+          window.__pendingCancelReady = true;
+          await new Promise(resolve => { window.__releaseCancelResponse = resolve; });
+          window.fetch = originalFetch;
+          throw new TypeError('Simulated lost cancellation response after commit');
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Confirmar ação', evaluate);
+    await waitUntil(() => evaluate('window.__pendingCancelReady === true'));
+    const pendingCancelDom = await evaluate(`(() => {
+      const details = document.querySelector('.admin-agenda__details');
+      return {
+        text: details?.innerText ?? '',
+        closeDisabled: [...(details?.querySelectorAll('button') ?? [])].find(button => button.innerText.trim() === 'Fechar detalhes')?.disabled,
+        periodDisabled: [...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'Próximo período')?.disabled,
+        request: window.__pendingCancelRequest,
+        receipt: window.__committedCancelReceipt,
+      };
+    })()`);
+    if (
+        !pendingCancelDom.closeDisabled ||
+        !pendingCancelDom.periodDisabled ||
+        !pendingCancelDom.text.includes('Encaixe administrativo E2E') ||
+        !pendingCancelDom.text.includes(`CONFIRMED · versão ${cancelRetryInitialVersion}`) ||
+        pendingCancelDom.request?.url !== `/api/v1/admin/appointments/${cancelRetryAppointmentId}/cancel` ||
+        pendingCancelDom.receipt?.appointmentId !== cancelRetryAppointmentId ||
+        pendingCancelDom.receipt?.status !== 'CANCELLED_BY_PROVIDER' ||
+        pendingCancelDom.receipt?.version !== cancelRetryInitialVersion + 1
+    ) {
+        throw new Error(`Cancelamento ainda não estava associado à intenção original após commit: ${JSON.stringify(pendingCancelDom)}`);
+    }
+    const lostCancelCommitted = Number(queryPostgres(
+        `SELECT CASE WHEN (SELECT status = 'CANCELLED_BY_PROVIDER' AND version = ${cancelRetryInitialVersion + 1} FROM agendamento.appointment WHERE appointment_id = '${cancelRetryAppointmentId}') AND (SELECT count(*) FROM agendamento.appointment_history WHERE appointment_id = '${cancelRetryAppointmentId}' AND reason_code = 'APPOINTMENT_CANCELLED_BY_PROVIDER') = 1 AND (SELECT count(*) FROM agendamento.audit_event WHERE target_id = '${cancelRetryAppointmentId}' AND action = 'APPOINTMENT_CANCELLED_BY_PROVIDER') = 1 AND (SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = '${cancelRetryAppointmentId}' AND event_type = 'AppointmentCancelled') = 1 THEN 1 ELSE 0 END`,
+        appEnvironment,
+    ));
+    if (lostCancelCommitted !== 1) throw new Error('POST de cancelamento não confirmou o conjunto transacional antes da resposta perdida.');
+    await evaluate('window.__releaseCancelResponse?.()');
+    await waitForText('A resposta não chegou; o comando pode ter sido confirmado.', evaluate);
+    const uncertainCancelDom = await evaluate(`(() => {
+      const details = document.querySelector('.admin-agenda__details');
+      return {
+        text: details?.innerText ?? '',
+        retryVisible: [...(details?.querySelectorAll('button') ?? [])].some(button => button.innerText.trim() === 'Repetir exatamente a mesma ação'),
+        closeDisabled: [...(details?.querySelectorAll('button') ?? [])].find(button => button.innerText.trim() === 'Fechar detalhes')?.disabled,
+        request: window.__pendingCancelRequest,
+      };
+    })()`);
+    if (
+        !uncertainCancelDom.text.includes(`Resultado incerto para cancel da reserva ${cancelRetryAppointmentId}`) ||
+        !uncertainCancelDom.retryVisible ||
+        !uncertainCancelDom.closeDisabled ||
+        uncertainCancelDom.request?.body !== JSON.stringify({ expectedVersion: cancelRetryInitialVersion, reason: 'Cancelamento com resposta perdida E2E' })
+    ) {
+        throw new Error(`UI não preservou o contexto de cancelamento incerto: ${JSON.stringify(uncertainCancelDom)}`);
+    }
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        if (String(args[0]).endsWith('/api/v1/admin/appointments/${cancelRetryAppointmentId}/cancel') && args[1]?.method === 'POST') {
+          window.__cancelRetryRequest = { url: String(args[0]), body: args[1].body, key: args[1].headers['Idempotency-Key'] };
+          window.__cancelRetryReceipt = await response.clone().json();
+          window.__cancelRetryReplayHeader = response.headers.get('Idempotency-Replayed');
+          window.fetch = originalFetch;
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Repetir exatamente a mesma ação', evaluate);
+    await waitForText('Estado atualizado e persistido.', evaluate);
+    const cancelRetryEvidence = await evaluate(`({
+      original: window.__pendingCancelRequest,
+      retry: window.__cancelRetryRequest,
+      firstReceipt: window.__committedCancelReceipt,
+      retryReceipt: window.__cancelRetryReceipt,
+      replayHeader: window.__cancelRetryReplayHeader,
+    })`);
+    if (
+        JSON.stringify(cancelRetryEvidence.original) !== JSON.stringify(cancelRetryEvidence.retry) ||
+        cancelRetryEvidence.firstReceipt?.operationId !== cancelRetryEvidence.retryReceipt?.operationId ||
+        cancelRetryEvidence.retryReceipt?.status !== 'CANCELLED_BY_PROVIDER' ||
+        cancelRetryEvidence.retryReceipt?.version !== cancelRetryInitialVersion + 1 ||
+        cancelRetryEvidence.replayHeader !== 'true'
+    ) {
+        throw new Error(`Retry de cancelamento não recuperou a mesma intenção/receipt: ${JSON.stringify(cancelRetryEvidence)}`);
+    }
+    await waitUntil(() => evaluate(`(() => {
+      const details = document.querySelector('.admin-agenda__details');
+      const text = details?.innerText ?? '';
+      return text.includes('CANCELLED_BY_PROVIDER') && text.includes('versão ${cancelRetryInitialVersion + 1}') && text.includes('APPOINTMENT_CANCELLED_BY_PROVIDER') && text.includes('Cancelamento com resposta perdida E2E');
+    })()`));
+    const reconciledCancelDom = await evaluate(`(() => {
+      const details = document.querySelector('.admin-agenda__details');
+      const text = details?.innerText ?? '';
+      const buttons = [...(details?.querySelectorAll('button') ?? [])];
+      return {
+        text,
+        pendingWarning: text.includes('Resultado incerto') || text.includes('A resposta não chegou'),
+        retryVisible: buttons.some(button => button.innerText.trim() === 'Repetir exatamente a mesma ação'),
+        closeDisabled: buttons.find(button => button.innerText.trim() === 'Fechar detalhes')?.disabled,
+        periodDisabled: [...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'Próximo período')?.disabled,
+      };
+    })()`);
+    if (
+        reconciledCancelDom.pendingWarning ||
+        reconciledCancelDom.retryVisible ||
+        reconciledCancelDom.closeDisabled !== false ||
+        reconciledCancelDom.periodDisabled !== false
+    ) {
+        throw new Error(`Cancelamento reconciliado não limpou alertas/liberou navegação: ${JSON.stringify(reconciledCancelDom)}`);
+    }
+    await clickButtonByText('Fechar detalhes', evaluate);
+    await waitUntil(() => evaluate('!document.querySelector(".admin-agenda__details")'));
+    const dateBeforeNavigation = await evaluate(`(() => [...document.querySelectorAll('label')].find(label => label.childNodes[0]?.textContent?.trim() === 'Data de referência')?.querySelector('input')?.value)()`);
+    await clickButtonByText('Próximo período', evaluate);
+    await waitUntil(() => evaluate(`(() => [...document.querySelectorAll('label')].find(label => label.childNodes[0]?.textContent?.trim() === 'Data de referência')?.querySelector('input')?.value !== ${JSON.stringify(dateBeforeNavigation)})()`));
+    const cancelRetryEffects = Number(queryPostgres(
+        `SELECT CASE WHEN (SELECT count(*) FROM agendamento.appointment_history WHERE appointment_id = '${cancelRetryAppointmentId}' AND reason_code = 'APPOINTMENT_CANCELLED_BY_PROVIDER') = 1 AND (SELECT count(*) FROM agendamento.audit_event WHERE target_id = '${cancelRetryAppointmentId}' AND action = 'APPOINTMENT_CANCELLED_BY_PROVIDER') = 1 AND (SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = '${cancelRetryAppointmentId}' AND event_type = 'AppointmentCancelled') = 1 AND (SELECT count(*) FROM agendamento.idempotency_record WHERE operation_id = '${cancelRetryEvidence.retryReceipt.operationId}' AND command_scope = 'appointments.admin.cancel_by_provider.v1' AND state = 'COMPLETED') = 1 AND (SELECT status = 'CANCELLED_BY_PROVIDER' AND version = ${cancelRetryInitialVersion + 1} FROM agendamento.appointment WHERE appointment_id = '${cancelRetryAppointmentId}') THEN 1 ELSE 0 END`,
+        appEnvironment,
+    ));
+    if (cancelRetryEffects !== 1) throw new Error('Cancelamento retry duplicou ou omitiu status, versão, história, auditoria, receipt ou outbox.');
+    console.log('Browser: cancelamento administrativo independente perdeu a resposta após commit, repetiu o mesmo alvo/body/chave, recuperou o receipt no DOM e manteve efeitos únicos.');
+
+    const allOutcomeEffects = Number(queryPostgres(
+        `SELECT CASE WHEN (SELECT count(*) FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.status IN ('CANCELLED_BY_PROVIDER','COMPLETED','NO_SHOW')) = 4 AND (SELECT count(*) FROM agendamento.outbox_event WHERE event_type IN ('AppointmentCancelled','AppointmentCompleted','ClientNoShowRecorded') AND tenant_id = (SELECT tenant_id FROM agendamento.tenant WHERE slug = '${publication.slug}')) = 4 THEN 1 ELSE 0 END`,
+        appEnvironment,
+    ));
+    if (allOutcomeEffects !== 1) throw new Error('Os quatro estados terminais não têm evento persistido único por reserva.');
+    console.log('Browser: cancelamento com resposta perdida/replay, cancelamento concorrente, conclusão e falta persistidos; detalhes e história renderizam estados terminais.');
+
     const foreignTenantQuery = await evaluate(
         `fetch('/api/v1/admin/tenant?tenantId=00000000-0000-0000-0000-000000000001', {credentials:'same-origin'}).then(response => response.json())`,
     );

@@ -5,7 +5,9 @@ import com.appagendamento.appointments.domain.AdminAppointmentNotFoundException;
 import com.appagendamento.appointments.domain.AdministrativeScheduleConflictException;
 import com.appagendamento.appointments.domain.AdministrativeScheduleVersionConflictException;
 import com.appagendamento.appointments.domain.AppointmentDataUnavailableException;
+import com.appagendamento.appointments.domain.AppointmentNotConfirmedException;
 import com.appagendamento.appointments.domain.AppointmentNotReschedulableException;
+import com.appagendamento.appointments.domain.AppointmentOutcomeNotYetAllowedException;
 import com.appagendamento.appointments.domain.AppointmentVersionConflictException;
 import com.appagendamento.appointments.domain.InvalidAdminAgendaQueryException;
 import com.appagendamento.appointments.domain.SlotNoLongerAvailableException;
@@ -71,6 +73,24 @@ public class AdminAppointmentExceptionHandler {
         HttpStatus.CONFLICT,
         "APPOINTMENT_NOT_RESCHEDULABLE",
         "Somente reservas confirmadas podem ser remarcadas.");
+  }
+
+  @ExceptionHandler(AppointmentNotConfirmedException.class)
+  ResponseEntity<ApiErrorResponse> appointmentNotConfirmed(
+      AppointmentNotConfirmedException exception, HttpServletRequest request) {
+    return error(
+        HttpStatus.CONFLICT,
+        "INVALID_STATE_TRANSITION",
+        "Somente reservas confirmadas podem receber este comando.");
+  }
+
+  @ExceptionHandler(AppointmentOutcomeNotYetAllowedException.class)
+  ResponseEntity<ApiErrorResponse> outcomeNotYetAllowed(
+      AppointmentOutcomeNotYetAllowedException exception, HttpServletRequest request) {
+    return error(
+        HttpStatus.CONFLICT,
+        "INVALID_STATE_TRANSITION",
+        "O atendimento ainda não atingiu o limite temporal para este encerramento.");
   }
 
   @ExceptionHandler(SlotNoLongerAvailableException.class)
