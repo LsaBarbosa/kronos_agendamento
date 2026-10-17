@@ -1,8 +1,12 @@
-# Decisões pendentes
+# Dúvidas abertas e decisões resolvidas
 
-| Tema | Referência | Efeito | Tratamento atual |
+## Decisões resolvidas
+
+| Tema | Referência | Decisão | Registro |
 |---|---|---|---|
-| Override `OUTSIDE_WEEKLY_SCHEDULE` em data com exceção | AGD-021; documento 02, modelo de exceção; documento 03, POST administrativo | encaixe em datas CLOSED/SPECIAL | Ambiguidade material: requisitos permitem ignorar grade, enquanto SPECIAL substitui a grade semanal e CLOSED significa sem atendimento. A implementação provisória e conservadora bloqueia overrides em ambas as exceções (CLOSED permanece fechado; SPECIAL limita aos períodos finais). Solicita-se confirmação do produto se `OUTSIDE_WEEKLY_SCHEDULE` deve poder ultrapassar períodos SPECIAL; essa interpretação do código não é decisão aprovada. |
+| Override `OUTSIDE_WEEKLY_SCHEDULE` em datas com exceção | AGD-021; documentos 01–03 e 06 | Só ignora a grade semanal quando não há exceção. CLOSED permanece fechado; SPECIAL é lista final e exige ocupação completa dentro de um período; MIN_NOTICE é independente e pode ser ignorada dentro de SPECIAL com motivo. Nenhuma mutação de grade/exceção pelo encaixe. | Aprovado pelo usuário em 17/10/2026; ADR-0016 e contratos atualizados. |
+
+## Dúvidas abertas
 
 | Tema | Referência | Efeito | Tratamento atual |
 |---|---|---|---|

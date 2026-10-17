@@ -129,10 +129,10 @@ public class AvailabilityAdministrativeBookingPolicyQuery
                 slot -> slot.startsAt().atZone(zone).getOffset().equals(requestedStart.getOffset()))
             .findFirst();
     boolean outsideSchedule = matchingSlot.isEmpty();
-    if (outsideSchedule && exception != null) {
+    if (outsideSchedule && exception != null && exception.kind() == ScheduleExceptionKind.SPECIAL) {
       throw new AdministrativeScheduleConflictException();
     }
-    if (outsideSchedule && !allowOutsideWeeklySchedule) {
+    if (outsideSchedule && exception == null && !allowOutsideWeeklySchedule) {
       throw new AdministrativeScheduleConflictException();
     }
 

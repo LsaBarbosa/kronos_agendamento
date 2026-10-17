@@ -653,7 +653,7 @@ export function AdminAgendaPanel({
             (!overrideSchedule || specialOrClosedBlocksScheduleOverride)
         ) {
             setCreateError(
-                'Revise a regra de grade. Exceções CLOSED/SPECIAL não podem ser ultrapassadas por encaixe.',
+                'OUTSIDE_WEEKLY_SCHEDULE ignora somente a grade semanal e não ultrapassa uma exceção CLOSED ou os períodos SPECIAL.',
             );
             return;
         }
@@ -1085,15 +1085,19 @@ export function AdminAgendaPanel({
                                     {dateException?.kind === 'SPECIAL' && (
                                         <p>
                                             Esta data usa os períodos especiais
-                                            como configuração final; o encaixe
-                                            não ultrapassa esses períodos.
+                                            como configuração final. Serviço e
+                                            buffer precisam caber em um período;
+                                            somente a antecedência mínima pode
+                                            ser ignorada independentemente.
                                         </p>
                                     )}
                                     <p>
                                         Estimativa local:{' '}
                                         {policyViolationBySchedule
-                                            ? 'fora da grade/slot configurado'
-                                            : 'dentro da grade estimada'}
+                                            ? dateException?.kind === 'SPECIAL'
+                                                ? 'fora dos períodos ou do passo SPECIAL'
+                                                : 'fora da grade semanal/slot configurado'
+                                            : 'dentro da configuração estimada'}
                                         ;{' '}
                                         {policyViolationByNotice
                                             ? 'antecedência abaixo do mínimo'
@@ -1119,8 +1123,8 @@ export function AdminAgendaPanel({
                                                     )
                                                 }
                                             />
-                                            Ignorar somente a grade semanal/slot
-                                            para este encaixe
+                                            Ignorar somente a grade semanal (sem
+                                            exceção para a data)
                                         </label>
                                         <label>
                                             <input

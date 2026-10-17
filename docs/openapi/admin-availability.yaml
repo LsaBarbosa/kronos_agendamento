@@ -654,8 +654,11 @@ paths:
       summary: Criar reserva administrativa ou encaixe
       description: >-
         Deriva tenant/ator da sessão atual. A lista ignorável contém somente OUTSIDE_WEEKLY_SCHEDULE
-        e MIN_NOTICE; ambas exigem reason. Horizonte, serviço inativo, falta de configuração,
-        exceção CLOSED/SPECIAL, bloqueios, ocupações e OVERLAP nunca são ignoráveis. O servidor
+        e MIN_NOTICE; ambas exigem reason. OUTSIDE_WEEKLY_SCHEDULE ignora somente a grade semanal
+        e só se aplica sem exceção por data. CLOSED continua fechado; SPECIAL substitui a grade,
+        e a ocupação completa com buffer deve caber em um período especial. MIN_NOTICE é independente
+        e pode ser ignorada dentro de SPECIAL se a ocupação respeitar seus períodos. Horizonte,
+        serviço inativo, falta de configuração, bloqueios, ocupações e OVERLAP nunca são ignoráveis. O servidor
         revalida revisão da agenda e serviço no commit, compartilha lock PostgreSQL com reserva
         pública/bloqueio e mantém reserva, história, auditoria, idempotência e AppointmentConfirmed
         atômicos. Publicação pública não é pré-requisito. Motivo é preservado somente na história

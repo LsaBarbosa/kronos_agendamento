@@ -259,7 +259,7 @@ O cliente não altera diretamente serviço ou horário no MVP; remarcação é f
 
 O encaixe permite ao administrador criar uma reserva fora da grade publicada ou das políticas de antecedência, mas **não** autoriza sobreposição. A tela precisa mostrar qual regra foi excepcionalmente ignorada e exigir motivo.
 
-Em AGD-021, a allowlist é limitada à grade semanal e antecedência mínima. Horizonte, serviço inativo, bloqueio, ocupação, falta de configuração e `OVERLAP` não podem ser ignorados. A autorização administrativa é independente da publicação do link; publicação continua sujeita ao gate próprio. A interação com exceções `CLOSED`/`SPECIAL` permanece registrada em OPEN-QUESTIONS até resolução explícita.
+Em AGD-021, a allowlist é limitada à grade semanal e antecedência mínima. `OUTSIDE_WEEKLY_SCHEDULE` ignora somente a grade semanal: sem exceção para a data, permite encaixe fora dela mediante confirmação explícita e motivo; `CLOSED` permanece fechado; `SPECIAL` substitui a grade e seus períodos finais não podem ser ultrapassados, devendo a ocupação completa, inclusive buffer, caber em um único período. `MIN_NOTICE` é independente e pode ser ignorada também em uma data `SPECIAL`, mediante motivo, desde que o início permaneça em um período especial. Horizonte, serviço inativo, bloqueio, ocupação, falta de configuração e `OVERLAP` não podem ser ignorados. A autorização administrativa é independente da publicação do link; publicação continua sujeita ao gate próprio. O POST não altera nem amplia exceções ou grade como efeito colateral.
 
 Se o negócio futuramente precisar de sobreposição deliberada, isso deve ser modelado como capacidade paralela ou múltiplos recursos; não como bypass da restrição de integridade.
 

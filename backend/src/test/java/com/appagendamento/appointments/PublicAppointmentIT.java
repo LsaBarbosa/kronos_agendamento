@@ -19,9 +19,12 @@ import com.appagendamento.appointments.domain.AppointmentStatus;
 import com.appagendamento.appointments.domain.SlotNoLongerAvailableException;
 import com.appagendamento.availability.application.CalculateAvailabilityForDateRange;
 import com.appagendamento.availability.application.ManageBlockedPeriods;
+import com.appagendamento.availability.application.ManageScheduleExceptions;
 import com.appagendamento.availability.application.ReplaceAvailabilityPolicy;
 import com.appagendamento.availability.application.ReplaceWeeklySchedule;
 import com.appagendamento.availability.domain.ConfirmedAppointmentConflictException;
+import com.appagendamento.availability.domain.ScheduleExceptionKind;
+import com.appagendamento.availability.domain.SpecialPeriod;
 import com.appagendamento.availability.domain.WeeklyPeriod;
 import com.appagendamento.catalog.application.CreateService;
 import com.appagendamento.catalog.application.SetServiceStatus;
@@ -40,6 +43,7 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.temporal.TemporalAdjusters;
 import java.util.Base64;
 import java.util.List;
@@ -91,6 +95,7 @@ class PublicAppointmentIT {
   @Autowired private ChangePublicationStatus changePublicationStatus;
   @Autowired private CalculateAvailabilityForDateRange availability;
   @Autowired private ManageBlockedPeriods manageBlockedPeriods;
+  @Autowired private ManageScheduleExceptions manageScheduleExceptions;
   @Autowired private CreatePublicAppointment createAppointment;
   @Autowired private CreateAdministrativeAppointment createAdministrativeAppointment;
   @Autowired private AppointmentRepository appointmentRepository;
@@ -98,6 +103,7 @@ class PublicAppointmentIT {
   @Autowired private SetServiceStatus setServiceStatus;
   @Autowired private MockMvc mvc;
   @Autowired private ObjectMapper objectMapper;
+  @Autowired private java.time.Clock clock;
   @MockitoBean private PublicationEvidence publicationEvidence;
   @MockitoBean private ClientBookingRestrictionQuery clientRestrictions;
 
@@ -741,6 +747,149 @@ class PublicAppointmentIT {
         .andExpect(status().isConflict())
         .andExpect(jsonPath("$.error.code").value("SLOT_NO_LONGER_AVAILABLE"));
     assertThat(count("appointment", tenantId)).isEqualTo(1);
+  }
+
+  @Test
+  void administrativeOutsideScheduleOverrideDoesNotReopenClosedDate() {
+    manageScheduleExceptions.create(
+        actor,
+        "admin-closed-" + UUID.randomUUID(),
+        bookingDate,
+        ScheduleExceptionKind.CLOSED,
+        List.of(),
+        "Fechamento de teste");
+    long revision = currentScheduleRevision();
+    int appointmentsBefore = count("appointment", tenantId);
+    int historyBefore = count("appointment_history", tenantId);
+    int auditBefore = countByAction("APPOINTMENT_CONFIRMED");
+    int outboxBefore = countByEvent("AppointmentConfirmed");
+
+    int status =
+        submitAdministrativeBooking(
+            "admin-closed-rejected-" + UUID.randomUUID(),
+            bookingDate.atTime(8, 0).atZone(ZONE).toOffsetDateTime().toString(),
+            revision,
+            List.of("OUTSIDE_WEEKLY_SCHEDULE"),
+            "Exceção explicitamente solicitada",
+            "+5511999996101");
+
+    assertThat(status).isEqualTo(409);
+    assertThat(currentScheduleRevision()).isEqualTo(revision);
+    assertThat(count("appointment", tenantId)).isEqualTo(appointmentsBefore);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historyBefore);
+    assertThat(countByAction("APPOINTMENT_CONFIRMED")).isEqualTo(auditBefore);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(outboxBefore);
+  }
+
+  @Test
+  void specialPeriodsAreFinalAndMustContainTheCompleteOccupiedInterval() {
+    LocalDate specialDate = bookingDate.plusWeeks(1);
+    manageScheduleExceptions.create(
+        actor,
+        "admin-special-" + UUID.randomUUID(),
+        specialDate,
+        ScheduleExceptionKind.SPECIAL,
+        List.of(new SpecialPeriod(LocalTime.of(9, 0), LocalTime.of(11, 0))),
+        "Período especial de teste");
+    long revision = currentScheduleRevision();
+
+    int acceptedStatus =
+        submitAdministrativeBooking(
+            "admin-special-inside-" + UUID.randomUUID(),
+            specialDate.atTime(10, 0).atZone(ZONE).toOffsetDateTime().toString(),
+            revision,
+            List.of(),
+            null,
+            "+5511999996102");
+    assertThat(acceptedStatus).isEqualTo(201);
+    int appointmentsAfterAccepted = count("appointment", tenantId);
+    int historyAfterAccepted = count("appointment_history", tenantId);
+    int auditAfterAccepted = countByAction("APPOINTMENT_CONFIRMED");
+    int outboxAfterAccepted = countByEvent("AppointmentConfirmed");
+
+    int outsideStatus =
+        submitAdministrativeBooking(
+            "admin-special-outside-" + UUID.randomUUID(),
+            specialDate.atTime(8, 0).atZone(ZONE).toOffsetDateTime().toString(),
+            revision,
+            List.of("OUTSIDE_WEEKLY_SCHEDULE"),
+            "Não ultrapassar SPECIAL",
+            "+5511999996103");
+    assertThat(outsideStatus).isEqualTo(409);
+
+    LocalDate bufferDate = specialDate.plusWeeks(1);
+    manageScheduleExceptions.create(
+        actor,
+        "admin-special-buffer-" + UUID.randomUUID(),
+        bufferDate,
+        ScheduleExceptionKind.SPECIAL,
+        List.of(new SpecialPeriod(LocalTime.of(9, 0), LocalTime.of(10, 30))),
+        "Limite de buffer de teste");
+    long bufferRevision = currentScheduleRevision();
+    int bufferStatus =
+        submitAdministrativeBooking(
+            "admin-special-buffer-rejected-" + UUID.randomUUID(),
+            bufferDate.atTime(10, 0).atZone(ZONE).toOffsetDateTime().toString(),
+            bufferRevision,
+            List.of(),
+            null,
+            "+5511999996104");
+
+    assertThat(bufferStatus).isEqualTo(409);
+    assertThat(count("appointment", tenantId)).isEqualTo(appointmentsAfterAccepted);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historyAfterAccepted);
+    assertThat(countByAction("APPOINTMENT_CONFIRMED")).isEqualTo(auditAfterAccepted);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(outboxAfterAccepted);
+  }
+
+  @Test
+  void minimumNoticeCanBeOverriddenInsideSpecialAndReplayDoesNotRepeatEffects() {
+    ZonedDateTime now = clock.instant().atZone(ZONE).withSecond(0).withNano(0);
+    int minuteRemainder = now.getMinute() % 30;
+    ZonedDateTime candidate = now.plusMinutes(minuteRemainder == 0 ? 30 : 30 - minuteRemainder);
+    if (candidate.toLocalTime().plusMinutes(45).isAfter(LocalTime.of(23, 45))) {
+      candidate = candidate.toLocalDate().plusDays(1).atStartOfDay(ZONE);
+    }
+    LocalDate specialDate = candidate.toLocalDate();
+    manageScheduleExceptions.create(
+        actor,
+        "admin-special-notice-" + UUID.randomUUID(),
+        specialDate,
+        ScheduleExceptionKind.SPECIAL,
+        List.of(new SpecialPeriod(LocalTime.MIDNIGHT, LocalTime.of(23, 45))),
+        "Janela especial de teste");
+    long revision = currentScheduleRevision();
+    String start = candidate.toOffsetDateTime().toString();
+    String key = "admin-special-notice-replay-" + UUID.randomUUID();
+    int appointmentsBefore = count("appointment", tenantId);
+    int historyBefore = count("appointment_history", tenantId);
+    int auditBefore = countByAction("APPOINTMENT_CONFIRMED");
+    int outboxBefore = countByEvent("AppointmentConfirmed");
+
+    assertThat(
+            submitAdministrativeBooking(
+                key,
+                start,
+                revision,
+                List.of("MIN_NOTICE"),
+                "Solicitação com antecedência curta",
+                "+5511999996105"))
+        .isEqualTo(201);
+    assertThat(
+            submitAdministrativeBooking(
+                key,
+                start,
+                revision,
+                List.of("MIN_NOTICE"),
+                "Solicitação com antecedência curta",
+                "+5511999996105"))
+        .isEqualTo(201);
+
+    assertThat(count("appointment", tenantId)).isEqualTo(appointmentsBefore + 1);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historyBefore + 1);
+    assertThat(countByAction("APPOINTMENT_CONFIRMED")).isEqualTo(auditBefore + 1);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(outboxBefore + 1);
+    assertThat(currentScheduleRevision()).isEqualTo(revision);
   }
 
   @Test

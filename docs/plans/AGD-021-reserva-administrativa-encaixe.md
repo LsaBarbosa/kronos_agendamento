@@ -18,8 +18,8 @@
 ## Contrato e decisões
 
 - `POST /api/v1/admin/appointments` recebe `serviceId`, `startsAt` com offset, exatamente uma forma de cliente (`clientId` existente ou `client{name,phone}` novo), `overridePolicies`, `reason` e `expectedScheduleVersion`.
-- Allowlist exclusiva de override: `OUTSIDE_WEEKLY_SCHEDULE` e `MIN_NOTICE`. Horizonte, serviço inativo, ausência de configuração, CLOSED/SPECIAL, bloqueios, ocupações e `OVERLAP` não são ignoráveis. Políticas desconhecidas/repetidas são rejeitadas. Qualquer override requer motivo não vazio.
-- Decisão material de produto ainda solicitada: incidência de `OUTSIDE_WEEKLY_SCHEDULE` quando a data tem exceção `CLOSED` ou `SPECIAL`. A implementação provisória bloqueia `CLOSED` e limita `SPECIAL` à lista final dos seus períodos; o override da grade semanal não ultrapassa uma exceção. Essa interpretação conservadora está coberta por teste, destacada na UI e permanece aberta para confirmação; não é registrada como decisão aprovada.
+- Allowlist exclusiva de override: `OUTSIDE_WEEKLY_SCHEDULE` e `MIN_NOTICE`. Decisão aprovada em 17/10/2026 e registrada em ADR-0016: `OUTSIDE_WEEKLY_SCHEDULE` ignora somente a grade semanal quando não existe exceção por data. `CLOSED` permanece fechado. `SPECIAL` substitui a grade e exige que a ocupação completa, incluindo buffer, caiba em um único período final. `MIN_NOTICE` é independente e pode ser ignorada dentro de `SPECIAL`, com motivo, respeitando seu período.
+- Horizonte, serviço inativo, ausência de configuração, `CLOSED`, saída dos períodos de `SPECIAL`, bloqueios, ocupações e `OVERLAP` não são ignoráveis. Políticas desconhecidas/repetidas são rejeitadas. Qualquer override requer motivo não vazio. O comando não altera a grade nem cria/altera/remove exceção.
 - `expectedScheduleVersion` é o contador monotônico já persistido em `schedule_revision`, não soma das versões independentes. Será obtido/validado junto das leituras relevantes e protegido por lock compartilhado até o commit para serializar contra alterações de grade, política, exceção e bloqueio. Mudança após análise na UI resulta em conflito e nova decisão.
 - Mesmo tenant e mesmo slot seguem o lock comum de agenda em READ COMMITTED; exclusion constraint permanece autoridade final. Bloqueios e appointments são reconsultados após aquisição do lock. Nenhuma exceção autoriza overlap.
 - O service é lido e travado via porta de catálogo `FOR SHARE`; identidade do cliente e serviço são validadas pelo tenant. Snapshot é formado pelo servidor e não contém preço/moeda quando ausentes.
@@ -46,23 +46,25 @@
 - [x] 17/10/2026 — backend local: `spotless:check verify` passou com 70 testes unitários/arquiteturais e 111 integrações PostgreSQL 16.13/Testcontainers; frontend Prettier, Oxlint, 23 Vitest, TypeScript e Vite build passaram. `node --check` e `git diff --check` passaram.
 - [x] Diagnóstico do primeiro App CI: o E2E recebeu conflito de revisão porque a UI reutilizava `scheduleRevision` carregada antes de mudanças posteriores de grade/exceção/bloqueio. A abertura do formulário agora atualiza grade e política e mantém o envio desabilitado até essa leitura terminar.
 - [x] 17/10/2026 — head `33cf966dd0398ba323d855cb2a5daeed94ea17b2`: App CI push/PR, incluindo Keycloak/PostgreSQL/Chrome E2E, e CodeQL push/PR passaram. Runs em `docs/development/VALIDATION.md`.
-- [ ] Resposta de produto para a relação de `OUTSIDE_WEEKLY_SCHEDULE` com datas `CLOSED`/`SPECIAL`; PR permanece draft até a decisão.
-- [x] Revisão sequencial do diff e dos testes, commit/push e criação do PR #13; revisão independente não ocorreu por limite de threads. CI final passou no SHA registrado acima.
+- [x] 17/10/2026 — decisão aprovada para CLOSED/SPECIAL/MIN_NOTICE registrada em ADR-0016, requisitos, contrato OpenAPI, plano e `OPEN-QUESTIONS.md`.
+- [x] 17/10/2026 — decisão aplicada no backend/API, UI e contratos; `spotless:check verify` passou com 70 unitários/arquiteturais e 114 integrações PostgreSQL 16.13/Testcontainers; frontend format/lint/23 Vitest/TS/build passou.
+- [ ] Publicar o head validado, acompanhar App CI/CodeQL em push e PR e retirar o draft depois dos checks finais aprovados.
+- [x] Revisão sequencial do diff original, commits e PR #13; revisores independentes indisponíveis por limite de threads. O CI do head anterior `2bd45cd` passou, mas não valida o delta desta decisão.
 
 ## Validação
 
 | Critério | Procedimento esperado | Resultado observado |
 |---|---|---|
 | Integração AGD-020 | App CI/CodeQL push/PR e pós-merge | Passou; runs e escopo registrados em `docs/development/VALIDATION.md`. |
-| Reserva administrativa normal/encaixe | `./mvnw -B -ntp spotless:check verify` com PostgreSQL/Testcontainers | Passou localmente: 70 unitários/arquiteturais + 111 integrações; inclui cliente existente/novo, snapshot, motivo/allowlist, rollback, histórico/auditoria/outbox, replay e corridas reserva–bloqueio nos dois sentidos. |
+| Reserva administrativa normal/encaixe e limites de override | `./mvnw -B -ntp spotless:check verify` com PostgreSQL/Testcontainers | Passou em 17/10/2026: 70 unitários/arquiteturais + 114 integrações. Testes HTTP/PostgreSQL cobrem CLOSED rejeitado sem efeitos; SPECIAL permitido dentro e negado fora; atendimento que cabe mas buffer que excede; MIN_NOTICE isolado dentro de SPECIAL; replay sem duplicar reserva/história/auditoria/outbox e sem alterar revisão. A reserva às 08:00 sem exceção continua demonstrando encaixe fora da grade semanal. |
 | Isolamento, CAS, atomicidade e conflitos | MockMvc + Testcontainers/transações independentes | Passou localmente: CSRF/revisão atual, tenant próprio/alheio, associação revogada, replay, conflitos, reserva–bloqueio nos dois sentidos e migrations V15. |
-| Frontend | `npm run format:check && npm run lint && npm test -- --run && npm run check` | Passou localmente: 23 Vitest, Prettier/Oxlint, TypeScript e Vite build. |
+| Frontend | `npm run format && npm run format:check && npm run lint && npm test -- --run && npm run check` | Passou em 17/10/2026: Prettier/Oxlint, 23 Vitest, TypeScript e Vite build; mensagem de UI diferencia grade semanal, CLOSED, períodos SPECIAL e override independente de antecedência. |
 | Browser E2E real | App CI `oidc-browser-e2e` com Keycloak/PostgreSQL/Chrome | Passou no SHA `33cf966dd0398ba323d855cb2a5daeed94ea17b2`, push e PR. E2E local não foi executado para preservar Compose/volumes compartilhados. |
 | Gate remoto AGD-021 | App CI e CodeQL em push e PR | Passou no SHA `33cf966dd0398ba323d855cb2a5daeed94ea17b2`; links e registro da falha inicial/correção em `docs/development/VALIDATION.md`. |
 
 ## Pendências e limites
 
-- A decisão de produto CLOSED/SPECIAL para `OUTSIDE_WEEKLY_SCHEDULE` está em aberto; o comportamento provisório conservador é negar override em ambas as exceções, sem alegar que a proposta foi aprovada.
+- A decisão CLOSED/SPECIAL/MIN_NOTICE está aprovada e os testes locais passaram. App CI/CodeQL no novo head ainda pendentes; o E2E existente no head anterior prova o fluxo geral, não estes cenários temporais novos.
 - Restrições reais de cliente dependem de AGD-032/033; adapters de teste demonstram apenas composição.
 - Revisões por subagentes não disponíveis por limite de threads; sem aprovação humana GitHub inferida.
 - Homologação, prontidão legal/comercial, secret manager/rotação em staging, HTTPS, preflight, scan completo, retenção e fornecedores reais permanecem fora deste incremento.
