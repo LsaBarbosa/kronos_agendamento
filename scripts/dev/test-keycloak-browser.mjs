@@ -928,7 +928,7 @@ try {
     await setAdminAppointmentField('Nome', 'Reserva administrativa E2E', evaluate);
     await setAdminAppointmentField('Telefone para cadastro', '+5511999998310', evaluate);
     await setAdminAppointmentField('Data local', publicDate, evaluate);
-    await setAdminAppointmentField('Horário local', '10:00', evaluate);
+    await setAdminAppointmentField('Horário local', '14:00', evaluate);
     await waitUntil(() =>
         evaluate(
             'document.querySelector(\'form[aria-label=\\"Criar reserva administrativa\\"] button[type=submit]\') && !document.querySelector(\'form[aria-label=\\"Criar reserva administrativa\\"] button[type=submit]\').disabled',
