@@ -477,6 +477,28 @@ try {
     await setFieldByLabel('Nova data local', conflictingDate, evaluate);
     await setFieldByLabel('Novo horário local', '10:00', evaluate);
     await clickButtonByText('Confirmar remarcação', evaluate);
+    await waitForText(
+        'A reserva ou agenda mudou. Atualize as versões e revise o destino antes de enviar uma nova intenção.',
+        evaluate,
+    );
+    await clickButtonByText('Atualizar versões sem alterar o destino', evaluate);
+    await waitForText(
+        'Versões atualizadas. Revise a data e confirme uma nova intenção.',
+        evaluate,
+    );
+    const preservedRescheduleDraft = await evaluate(`(() => {
+      const field = name => [...document.querySelectorAll('label')]
+        .find(label => label.childNodes[0]?.textContent?.trim() === name)
+        ?.querySelector('input')?.value;
+      return { date: field('Nova data local'), time: field('Novo horário local') };
+    })()`);
+    if (
+        preservedRescheduleDraft.date !== conflictingDate ||
+        preservedRescheduleDraft.time !== '10:00'
+    ) {
+        throw new Error(`A atualização de versões alterou o rascunho do destino: ${JSON.stringify(preservedRescheduleDraft)}`);
+    }
+    await clickButtonByText('Confirmar remarcação', evaluate);
     await waitForText('O horário conflita com um bloqueio ou atendimento existente.', evaluate);
     const afterRejectedReschedule = await evaluate(
         `fetch('/api/v1/admin/appointments/${appointmentIdInEachTab[0]}', {credentials:'same-origin'}).then(response => response.json())`,
