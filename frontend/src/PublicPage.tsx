@@ -407,6 +407,21 @@ function PublicPageContent({
         recoveryCapability: string;
         body: PublicBookingRequest | null;
     } | null>(null);
+    const recoveryPollTimer = useRef<number | null>(null);
+    const recoveryPollAttempts = useRef(0);
+
+    function scheduleRecoveryPoll(): boolean {
+        if (recoveryPollAttempts.current >= 8) return false;
+        if (recoveryPollTimer.current !== null)
+            window.clearTimeout(recoveryPollTimer.current);
+        const delay = Math.min(250 * 2 ** recoveryPollAttempts.current, 2000);
+        recoveryPollTimer.current = window.setTimeout(() => {
+            recoveryPollTimer.current = null;
+            recoveryPollAttempts.current += 1;
+            setRecoveryRefresh((current) => current + 1);
+        }, delay);
+        return true;
+    }
 
     useEffect(() => {
         bookingIntent.current = null;
@@ -421,6 +436,7 @@ function PublicPageContent({
         void getPublicBookingIntent(slug, stored.recoveryCapability, apiBaseUrl)
             .then((result: PublicBookingRecovery) => {
                 if (result.state === 'COMPLETED') {
+                    recoveryPollAttempts.current = 0;
                     setConfirmation(result.receipt);
                     setBookingState('confirmed');
                     setBookingMessage('Reserva original recuperada.');
@@ -429,8 +445,13 @@ function PublicPageContent({
                     setRecoveryNeedsDetails(true);
                     setBookingState('uncertain');
                     setBookingMessage(
-                        'Ainda não há confirmação disponível. Reintroduza os mesmos dados para reconciliar a intenção original; não será criada outra chave.',
+                        'A operação ainda pode estar em andamento. Consultando novamente sem criar outra reserva; se continuar incerta, reintroduza os mesmos dados para repetir a mesma intenção.',
                     );
+                    if (!scheduleRecoveryPoll()) {
+                        setBookingMessage(
+                            'O resultado continua incerto. Reintroduza os mesmos dados e repita somente esta intenção; a mesma chave será preservada.',
+                        );
+                    }
                 }
             })
             .catch((error: unknown) => {
@@ -438,18 +459,34 @@ function PublicPageContent({
                     error instanceof PublicBookingError &&
                     error.status === 404
                 ) {
-                    setBookingState('recovery-unavailable');
+                    setBookingState('uncertain');
                     setBookingMessage(
-                        'Não foi possível autorizar a recuperação desta intenção. Não inicie outra reserva; tente consultar novamente ou procure o atendimento do negócio.',
+                        'A intenção ainda não está visível no servidor. O resultado não foi considerado ausente; consultando novamente com a mesma identidade.',
                     );
+                    if (!scheduleRecoveryPoll()) {
+                        setRecoveryNeedsDetails(true);
+                        setBookingMessage(
+                            'Não foi possível localizar a intenção após novas consultas. Não inicie outra reserva. Reintroduza os mesmos dados para repetir apenas a identidade original.',
+                        );
+                    }
                 } else {
                     setBookingState('uncertain');
                     setRecoveryLookupFailed(true);
                     setBookingMessage(
                         'A recuperação está temporariamente indisponível. O resultado continua incerto; consulte novamente antes de qualquer nova intenção.',
                     );
+                    if (!scheduleRecoveryPoll()) {
+                        setRecoveryNeedsDetails(true);
+                        setRecoveryLookupFailed(false);
+                    }
                 }
             });
+        return () => {
+            if (recoveryPollTimer.current !== null) {
+                window.clearTimeout(recoveryPollTimer.current);
+                recoveryPollTimer.current = null;
+            }
+        };
     }, [apiBaseUrl, recoveryLookupIntent, recoveryRefresh, slug]);
 
     useEffect(() => {
