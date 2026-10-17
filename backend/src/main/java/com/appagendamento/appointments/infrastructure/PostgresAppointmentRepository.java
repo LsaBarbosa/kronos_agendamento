@@ -4,13 +4,17 @@ import com.appagendamento.appointments.api.AppointmentOccupancy;
 import com.appagendamento.appointments.api.AppointmentOccupancyQuery;
 import com.appagendamento.appointments.api.ConfirmedAppointmentConflictProbe;
 import com.appagendamento.appointments.api.TenantAgendaLock;
+import com.appagendamento.appointments.application.AdminAppointmentView;
+import com.appagendamento.appointments.application.AppointmentHistoryEntry;
 import com.appagendamento.appointments.application.AppointmentRepository;
 import com.appagendamento.appointments.domain.Appointment;
 import com.appagendamento.appointments.domain.AppointmentDataUnavailableException;
+import com.appagendamento.appointments.domain.AppointmentStatus;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -127,6 +131,133 @@ public class PostgresAppointmentRepository
         throw new com.appagendamento.appointments.domain.SlotNoLongerAvailableException();
       }
       throw exception;
+    }
+  }
+
+  @Override
+  public String findTenantTimeZone(UUID tenantId) {
+    try {
+      return jdbc.queryForObject(
+          "SELECT timezone FROM agendamento.tenant WHERE tenant_id = ?", String.class, tenantId);
+    } catch (DataAccessException exception) {
+      throw new AppointmentDataUnavailableException(exception);
+    }
+  }
+
+  @Override
+  public List<AdminAppointmentView> findAdminAppointments(
+      UUID tenantId,
+      Instant windowStart,
+      Instant windowEnd,
+      String status,
+      UUID serviceId,
+      Instant afterStartsAt,
+      UUID afterAppointmentId,
+      int limit) {
+    try {
+      return jdbc.query(
+          """
+          SELECT appointment_id, service_id, client_name_snapshot, service_name_snapshot,
+                 starts_at, service_ends_at, occupied_until, time_zone,
+                 service_duration_minutes, service_buffer_after_minutes, status, created_at, version
+          FROM agendamento.appointment
+          WHERE tenant_id = ?
+            AND starts_at < ? AND occupied_until > ?
+            AND (CAST(? AS text) IS NULL OR status = ?)
+            AND (CAST(? AS uuid) IS NULL OR service_id = ?)
+            AND (CAST(? AS timestamptz) IS NULL OR (starts_at, appointment_id) > (?, ?))
+          ORDER BY starts_at ASC, appointment_id ASC
+          LIMIT ?
+          """,
+          (row, index) ->
+              new AdminAppointmentView(
+                  row.getObject("appointment_id", UUID.class),
+                  row.getObject("service_id", UUID.class),
+                  row.getString("client_name_snapshot"),
+                  row.getString("service_name_snapshot"),
+                  row.getTimestamp("starts_at").toInstant(),
+                  row.getTimestamp("service_ends_at").toInstant(),
+                  row.getTimestamp("occupied_until").toInstant(),
+                  row.getString("time_zone"),
+                  row.getInt("service_duration_minutes"),
+                  row.getInt("service_buffer_after_minutes"),
+                  AppointmentStatus.valueOf(row.getString("status")),
+                  row.getTimestamp("created_at").toInstant(),
+                  row.getLong("version")),
+          tenantId,
+          Timestamp.from(windowEnd),
+          Timestamp.from(windowStart),
+          status,
+          status,
+          serviceId,
+          serviceId,
+          afterStartsAt == null ? null : Timestamp.from(afterStartsAt),
+          afterStartsAt == null ? null : Timestamp.from(afterStartsAt),
+          afterAppointmentId,
+          limit);
+    } catch (DataAccessException exception) {
+      throw new AppointmentDataUnavailableException(exception);
+    }
+  }
+
+  @Override
+  public Optional<AdminAppointmentView> findAdminAppointment(UUID tenantId, UUID appointmentId) {
+    try {
+      List<AdminAppointmentView> result =
+          jdbc.query(
+              """
+              SELECT appointment_id, service_id, client_name_snapshot, service_name_snapshot,
+                     starts_at, service_ends_at, occupied_until, time_zone,
+                     service_duration_minutes, service_buffer_after_minutes, status, created_at, version
+              FROM agendamento.appointment
+              WHERE tenant_id = ? AND appointment_id = ?
+              """,
+              (row, index) ->
+                  new AdminAppointmentView(
+                      row.getObject("appointment_id", UUID.class),
+                      row.getObject("service_id", UUID.class),
+                      row.getString("client_name_snapshot"),
+                      row.getString("service_name_snapshot"),
+                      row.getTimestamp("starts_at").toInstant(),
+                      row.getTimestamp("service_ends_at").toInstant(),
+                      row.getTimestamp("occupied_until").toInstant(),
+                      row.getString("time_zone"),
+                      row.getInt("service_duration_minutes"),
+                      row.getInt("service_buffer_after_minutes"),
+                      AppointmentStatus.valueOf(row.getString("status")),
+                      row.getTimestamp("created_at").toInstant(),
+                      row.getLong("version")),
+              tenantId,
+              appointmentId);
+      return result.stream().findFirst();
+    } catch (DataAccessException exception) {
+      throw new AppointmentDataUnavailableException(exception);
+    }
+  }
+
+  @Override
+  public List<AppointmentHistoryEntry> findAdminAppointmentHistory(
+      UUID tenantId, UUID appointmentId) {
+    try {
+      return jdbc.query(
+          """
+          SELECT from_status, to_status, actor_type, actor_ref, reason_code, occurred_at
+          FROM agendamento.appointment_history
+          WHERE tenant_id = ? AND appointment_id = ?
+          ORDER BY occurred_at ASC, history_id ASC
+          """,
+          (row, index) ->
+              new AppointmentHistoryEntry(
+                  row.getString("from_status"),
+                  row.getString("to_status"),
+                  row.getString("actor_type"),
+                  row.getString("actor_ref"),
+                  row.getString("reason_code"),
+                  row.getTimestamp("occurred_at").toInstant()),
+          tenantId,
+          appointmentId);
+    } catch (DataAccessException exception) {
+      throw new AppointmentDataUnavailableException(exception);
     }
   }
 

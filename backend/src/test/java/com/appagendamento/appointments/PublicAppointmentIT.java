@@ -1,6 +1,7 @@
 package com.appagendamento.appointments;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -21,6 +22,7 @@ import com.appagendamento.availability.application.ReplaceWeeklySchedule;
 import com.appagendamento.availability.domain.ConfirmedAppointmentConflictException;
 import com.appagendamento.availability.domain.WeeklyPeriod;
 import com.appagendamento.catalog.application.CreateService;
+import com.appagendamento.catalog.application.SetServiceStatus;
 import com.appagendamento.catalog.application.UpdateService;
 import com.appagendamento.catalog.domain.ServiceStatus;
 import com.appagendamento.idempotency.api.IdempotentCommandResult;
@@ -57,6 +59,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import tools.jackson.databind.ObjectMapper;
 
 @SpringBootTest(
     properties = {
@@ -87,7 +90,9 @@ class PublicAppointmentIT {
   @Autowired private CreatePublicAppointment createAppointment;
   @Autowired private AppointmentRepository appointmentRepository;
   @Autowired private UpdateService updateService;
+  @Autowired private SetServiceStatus setServiceStatus;
   @Autowired private MockMvc mvc;
+  @Autowired private ObjectMapper objectMapper;
   @MockitoBean private PublicationEvidence publicationEvidence;
 
   private JdbcTemplate migrationJdbc;
@@ -181,6 +186,39 @@ class PublicAppointmentIT {
             "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
             UUID.class,
             tenantId);
+    submitBooking(key, body)
+        .andExpect(status().isCreated())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.appointmentId").value(appointmentId.toString()));
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(1);
+    assertThat(count("audit_event", tenantId)).isEqualTo(auditEventsBeforeBooking + 1);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
+    assertThat(countByAction("APPOINTMENT_CONFIRMED")).isEqualTo(1);
+
+    submitBooking("lost-slot-" + UUID.randomUUID(), body)
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("SLOT_NO_LONGER_AVAILABLE"));
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
+
+    mvc.perform(
+            get("/api/v1/public/" + slug + "/availability")
+                .param("serviceId", serviceId.toString())
+                .param("from", bookingDate.toString())
+                .param("to", bookingDate.toString()))
+        .andExpect(status().isOk())
+        .andExpect(
+            org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath(
+                    "$.days[0].slots[*].startsAt")
+                .value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasItem(requestedStart))));
+
+    submitBooking(key, requestBody(serviceId, requestedStart, "Outro nome", "+5511999991234"))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_KEY_REUSED"));
+
+    setServiceStatus.execute(
+        actor, serviceId, "deactivate-agenda-" + UUID.randomUUID(), 0, ServiceStatus.INACTIVE);
     assertThat(
             appJdbc.queryForObject(
                 "SELECT normalized_phone FROM agendamento.client WHERE tenant_id = ?",
@@ -200,28 +238,8 @@ class PublicAppointmentIT {
                 appointmentId))
         .isEqualTo("Consulta:30:15:1");
     assertThat(count("appointment_history", tenantId)).isEqualTo(1);
-    assertThat(count("audit_event", tenantId)).isEqualTo(auditEventsBeforeBooking + 1);
+    assertThat(count("audit_event", tenantId)).isEqualTo(auditEventsBeforeBooking + 2);
     assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
-
-    submitBooking(key, body)
-        .andExpect(status().isCreated())
-        .andExpect(header().string("Idempotency-Replayed", "true"))
-        .andExpect(jsonPath("$.appointmentId").value(appointmentId.toString()));
-    assertThat(count("appointment", tenantId)).isEqualTo(1);
-    assertThat(count("appointment_history", tenantId)).isEqualTo(1);
-    assertThat(count("audit_event", tenantId)).isEqualTo(auditEventsBeforeBooking + 1);
-    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
-    assertThat(countByAction("APPOINTMENT_CONFIRMED")).isEqualTo(1);
-
-    submitBooking("lost-slot-" + UUID.randomUUID(), body)
-        .andExpect(status().isConflict())
-        .andExpect(jsonPath("$.error.code").value("SLOT_NO_LONGER_AVAILABLE"));
-    assertThat(count("appointment", tenantId)).isEqualTo(1);
-    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
-
-    submitBooking(key, requestBody(serviceId, requestedStart, "Outro nome", "+5511999991234"))
-        .andExpect(status().isConflict())
-        .andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_KEY_REUSED"));
 
     long version =
         appJdbc.queryForObject(
@@ -245,21 +263,237 @@ class PublicAppointmentIT {
                 appointmentId))
         .isEqualTo("Consulta");
 
-    mvc.perform(
-            get("/api/v1/public/" + slug + "/availability")
-                .param("serviceId", serviceId.toString())
-                .param("from", bookingDate.toString())
-                .param("to", bookingDate.toString()))
-        .andExpect(status().isOk())
-        .andExpect(
-            org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath(
-                    "$.days[0].slots[*].startsAt")
-                .value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasItem(requestedStart))));
-
     changePublicationStatus.execute(actor, "revoke-before-replay-" + UUID.randomUUID(), false, 2);
     submitBooking(key, body).andExpect(status().isNotFound());
     assertThat(count("appointment", tenantId)).isEqualTo(1);
     assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
+  }
+
+  @Test
+  void administratorReadsTenantScopedAgendaDetailsAndActualHistory() throws Exception {
+    String key = "admin-agenda-" + UUID.randomUUID();
+    submitBooking(
+            key, requestBody(serviceId, requestedStart, "Cliente da agenda", "+5511999991234"))
+        .andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+
+    mvc.perform(
+            get("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .param("from", bookingDate.toString())
+                .param("to", bookingDate.toString())
+                .param("status", "CONFIRMED")
+                .param("serviceId", serviceId.toString())
+                .param("limit", "10"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.timeZone").value(ZONE.getId()))
+        .andExpect(jsonPath("$.items.length()").value(1))
+        .andExpect(jsonPath("$.items[0].appointmentId").value(appointmentId.toString()))
+        .andExpect(jsonPath("$.items[0].clientName").value("Cliente da agenda"))
+        .andExpect(jsonPath("$.items[0].serviceName").value("Consulta"))
+        .andExpect(jsonPath("$.items[0].durationMinutes").value(30))
+        .andExpect(jsonPath("$.items[0].bufferAfterMinutes").value(15))
+        .andExpect(jsonPath("$.items[0].status").value("CONFIRMED"))
+        .andExpect(jsonPath("$.items[0].normalizedPhone").doesNotExist())
+        .andExpect(jsonPath("$.items[0].recoveryCapability").doesNotExist());
+
+    mvc.perform(
+            get("/api/v1/admin/appointments/{id}", appointmentId)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.appointmentId").value(appointmentId.toString()))
+        .andExpect(jsonPath("$.occupiedUntil").exists());
+
+    mvc.perform(
+            get("/api/v1/admin/appointments/{id}/history", appointmentId)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.items.length()").value(1))
+        .andExpect(jsonPath("$.items[0].reasonCode").value("APPOINTMENT_CREATED"));
+
+    mvc.perform(
+            get("/api/v1/admin/appointments/{id}", UUID.randomUUID())
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.error.code").value("RESOURCE_NOT_FOUND"));
+
+    UUID foreignAppointmentId = seedForeignAppointment(bookingDate);
+    mvc.perform(
+            get("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .param("from", bookingDate.toString())
+                .param("to", bookingDate.toString()))
+        .andExpect(status().isOk())
+        .andExpect(
+            jsonPath("$.items[*].appointmentId")
+                .value(
+                    org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.hasItem(foreignAppointmentId.toString()))));
+    mvc.perform(
+            get("/api/v1/admin/appointments/{id}", foreignAppointmentId)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.error.code").value("RESOURCE_NOT_FOUND"));
+    mvc.perform(
+            get("/api/v1/admin/appointments/{id}/history", foreignAppointmentId)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.error.code").value("RESOURCE_NOT_FOUND"));
+  }
+
+  @Test
+  void administratorAgendaUsesStableKeysetPagesAndValidatesWindowLimits() throws Exception {
+    var slots =
+        availability
+            .execute(tenantId, serviceId, bookingDate, bookingDate)
+            .days()
+            .getFirst()
+            .slots();
+    for (int index = 0; index < 3; index++) {
+      var slot = slots.get(index * 2);
+      executePrepared(
+          "page-booking-" + UUID.randomUUID(),
+          serviceId,
+          java.time.OffsetDateTime.parse(slot.startsAt().toString()),
+          "Página " + index,
+          "+551199999" + String.format("%04d", 2000 + index));
+    }
+
+    var firstPage =
+        mvc.perform(
+                get("/api/v1/admin/appointments")
+                    .with(authentication(principalToken(actor)))
+                    .param("from", bookingDate.toString())
+                    .param("to", bookingDate.toString())
+                    .param("limit", "1"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.items.length()").value(1))
+            .andExpect(jsonPath("$.hasMore").value(true))
+            .andReturn();
+    String cursor =
+        objectMapper
+            .readTree(firstPage.getResponse().getContentAsString())
+            .get("nextCursor")
+            .asText();
+    mvc.perform(
+            get("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .param("from", bookingDate.toString())
+                .param("to", bookingDate.toString())
+                .param("limit", "1")
+                .param("cursor", cursor))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.items.length()").value(1))
+        .andExpect(jsonPath("$.hasMore").value(true));
+
+    mvc.perform(
+            get("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .param("from", bookingDate.toString())
+                .param("to", bookingDate.plusDays(366).toString()))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
+    mvc.perform(
+            get("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .param("from", bookingDate.toString())
+                .param("to", bookingDate.toString())
+                .param("limit", "101"))
+        .andExpect(status().isBadRequest());
+    mvc.perform(
+            get("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .param("from", bookingDate.toString())
+                .param("to", bookingDate.toString())
+                .param("status", "CANCELLED"))
+        .andExpect(status().isBadRequest());
+  }
+
+  @Test
+  void administratorAgendaIncludesOccupancyThatStartsBeforeTheLocalDateWindow() throws Exception {
+    UUID appointmentId = seedAppointmentCrossingIntoBookingDate();
+
+    mvc.perform(
+            get("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .param("from", bookingDate.toString())
+                .param("to", bookingDate.toString()))
+        .andExpect(status().isOk())
+        .andExpect(
+            jsonPath("$.items[*].appointmentId")
+                .value(org.hamcrest.Matchers.hasItem(appointmentId.toString())))
+        .andExpect(jsonPath("$.items[0].clientName").value("Continuação"));
+  }
+
+  private UUID seedAppointmentCrossingIntoBookingDate() {
+    UUID clientId = UUID.randomUUID();
+    UUID appointmentId = UUID.randomUUID();
+    migrationJdbc.update(
+        "INSERT INTO agendamento.client (client_id, tenant_id, display_name, normalized_phone) VALUES (?, ?, 'Continuação', ?)",
+        clientId,
+        tenantId,
+        "+551199999" + String.format("%04d", Math.floorMod(System.nanoTime(), 10_000)));
+    var startsAt = bookingDate.minusDays(1).atTime(23, 45).atZone(ZONE).toInstant();
+    var serviceEndsAt = startsAt.plusSeconds(30 * 60L);
+    var occupiedUntil = serviceEndsAt.plusSeconds(15 * 60L);
+    migrationJdbc.update(
+        "INSERT INTO agendamento.appointment (appointment_id, tenant_id, client_id, service_id, starts_at, service_ends_at, occupied_until, time_zone, client_name_snapshot, service_name_snapshot, service_duration_minutes, service_buffer_after_minutes, status, created_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Continuação', 'Consulta', 30, 15, 'CONFIRMED', clock_timestamp(), 1)",
+        appointmentId,
+        tenantId,
+        clientId,
+        serviceId,
+        java.sql.Timestamp.from(startsAt),
+        java.sql.Timestamp.from(serviceEndsAt),
+        java.sql.Timestamp.from(occupiedUntil),
+        ZONE.getId());
+    migrationJdbc.update(
+        "INSERT INTO agendamento.appointment_history (history_id, tenant_id, appointment_id, from_status, to_status, actor_type, actor_ref, reason_code, occurred_at) VALUES (?, ?, ?, NULL, 'CONFIRMED', 'PUBLIC', 'PUBLIC_BOOKING', 'APPOINTMENT_CREATED', clock_timestamp())",
+        UUID.randomUUID(),
+        tenantId,
+        appointmentId);
+    return appointmentId;
+  }
+
+  private UUID seedForeignAppointment(LocalDate date) {
+    UUID foreignTenant = UUID.randomUUID();
+    UUID foreignService = UUID.randomUUID();
+    UUID foreignClient = UUID.randomUUID();
+    UUID foreignAppointment = UUID.randomUUID();
+    migrationJdbc.update(
+        "INSERT INTO agendamento.tenant (tenant_id, name, slug, timezone, status) VALUES (?, 'Other tenant', ?, ?, 'ACTIVE')",
+        foreignTenant,
+        "other-" + UUID.randomUUID().toString().substring(0, 8),
+        ZONE.getId());
+    migrationJdbc.update(
+        "INSERT INTO agendamento.service (service_id, tenant_id, name, normalized_name, duration_minutes, buffer_after_minutes, status, version) VALUES (?, ?, 'Foreign service', 'foreign service', 30, 0, 'INACTIVE', 1)",
+        foreignService,
+        foreignTenant);
+    migrationJdbc.update(
+        "INSERT INTO agendamento.client (client_id, tenant_id, display_name, normalized_phone) VALUES (?, ?, 'Private client', '+5511999999911')",
+        foreignClient,
+        foreignTenant);
+    var startsAt = date.atTime(9, 0).atZone(ZONE).toInstant();
+    var endsAt = startsAt.plusSeconds(30 * 60L);
+    migrationJdbc.update(
+        "INSERT INTO agendamento.appointment (appointment_id, tenant_id, client_id, service_id, starts_at, service_ends_at, occupied_until, time_zone, client_name_snapshot, service_name_snapshot, service_duration_minutes, service_buffer_after_minutes, status, created_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Private client', 'Foreign service', 30, 0, 'CONFIRMED', clock_timestamp(), 1)",
+        foreignAppointment,
+        foreignTenant,
+        foreignClient,
+        foreignService,
+        java.sql.Timestamp.from(startsAt),
+        java.sql.Timestamp.from(endsAt),
+        java.sql.Timestamp.from(endsAt),
+        ZONE.getId());
+    migrationJdbc.update(
+        "INSERT INTO agendamento.appointment_history (history_id, tenant_id, appointment_id, from_status, to_status, actor_type, actor_ref, reason_code, occurred_at) VALUES (?, ?, ?, NULL, 'CONFIRMED', 'PUBLIC', 'PUBLIC_BOOKING', 'APPOINTMENT_CREATED', clock_timestamp())",
+        UUID.randomUUID(),
+        foreignTenant,
+        foreignAppointment);
+    return foreignAppointment;
   }
 
   @Test

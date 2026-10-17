@@ -391,6 +391,134 @@ try {
     console.log(`Browser: visitante consultou ${publicDate}, confirmou um de ${publicSlotsBeforeSelection} horários; layout móvel/desktop sem overflow.`);
     await navigate('http://localhost:5173/admin', command, evaluate);
     await waitForText('Estado: Publicado', evaluate);
+    const adminAppointment = await evaluate(
+        `fetch('/api/v1/admin/appointments?from=${publicDate}&to=${publicDate}&serviceId=${encodeURIComponent(publicService.serviceId)}', {credentials:'same-origin'}).then(response => response.json()).then(page => page.items.find(item => item.appointmentId === ${JSON.stringify(appointmentIdInEachTab[0])}))`,
+    );
+    if (
+        !adminAppointment ||
+        adminAppointment.serviceName !== publicService.name ||
+        adminAppointment.durationMinutes !== 45 ||
+        adminAppointment.bufferAfterMinutes !== 0 ||
+        adminAppointment.timeZone !== publication.timeZone
+    ) {
+        throw new Error(`Reserva persistida não apareceu na consulta administrativa com snapshot esperado: ${JSON.stringify(adminAppointment)}`);
+    }
+    await setFieldByLabel('Data de referência', publicDate, evaluate);
+    await clickButtonByText('Semana', evaluate);
+    await waitForText('Visitante de demonstração', evaluate);
+    await waitForText('45 min', evaluate);
+    await waitForText(publication.timeZone, evaluate);
+    await clickButtonByText('Detalhes e história', evaluate);
+    await waitForText('Detalhes da reserva', evaluate);
+    await waitForText('APPOINTMENT_CREATED', evaluate);
+    await clickButtonByText('Dia', evaluate);
+    await waitForText('Visitante de demonstração', evaluate);
+    await command('Page.reload');
+    await waitForText('Agenda', evaluate);
+    await waitUntil(async () => (await evaluate(
+        "[...document.querySelectorAll('label')].some(label => label.childNodes[0]?.textContent?.trim() === 'Data de referência' && label.querySelector('input'))",
+    )));
+    await setFieldByLabel('Data de referência', publicDate, evaluate);
+    await waitForText('Visitante de demonstração', evaluate);
+    if (!(await evaluate(`document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"]')?.innerText.includes('45 min')`))) {
+        throw new Error('Reload não recuperou a reserva persistida na agenda administrativa.');
+    }
+    await setSelectByLabel('Serviço', publicService.serviceId, evaluate);
+    await setSelectByLabel('Status', 'CONFIRMED', evaluate);
+    await waitForText('Visitante de demonstração', evaluate);
+    const staleAgendaDate = new Date(new Date(publicDate + 'T12:00:00Z').getTime() + 86400000)
+        .toISOString()
+        .slice(0, 10);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.__originalAgendaFetch = originalFetch;
+      window.__staleAgendaHeld = false;
+      window.__latestAgendaResponseSeen = false;
+      window.fetch = async (...args) => {
+        const url = String(args[0]);
+        if (!window.__staleAgendaHeld && url.includes('/v1/admin/appointments?from=${staleAgendaDate}')) {
+          window.__staleAgendaHeld = true;
+          await new Promise(resolve => { window.__releaseStaleAgenda = resolve; });
+        }
+        const response = await originalFetch(...args);
+        if (url.includes('/v1/admin/appointments?from=${publicDate}')) window.__latestAgendaResponseSeen = true;
+        return response;
+      };
+    })()`);
+    await setFieldByLabel('Data de referência', staleAgendaDate, evaluate);
+    await waitUntil(() => evaluate('window.__staleAgendaHeld === true'));
+    await setFieldByLabel('Data de referência', publicDate, evaluate);
+    await waitUntil(() => evaluate('window.__latestAgendaResponseSeen === true'));
+    await waitForText('Visitante de demonstração', evaluate);
+    await evaluate('window.__releaseStaleAgenda?.(); window.fetch = window.__originalAgendaFetch');
+    if (!(await evaluate(`document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"]')?.innerText.includes('45 min')`))) {
+        throw new Error('Uma resposta antiga substituiu a consulta administrativa mais recente.');
+    }
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.__originalAgendaFetch = originalFetch;
+      window.__agendaPageCalls = 0;
+      window.fetch = async (...args) => {
+        const url = String(args[0]);
+        if (url.includes('/v1/admin/appointments?')) {
+          window.__agendaPageCalls++;
+          const firstPage = window.__agendaPageCalls === 1;
+          return new Response(JSON.stringify({timeZone:${JSON.stringify(publication.timeZone)},items:[],nextCursor:firstPage?'test-next-page':null,hasMore:firstPage}), {status:200,headers:{'Content-Type':'application/json'}});
+        }
+        if (url.includes('/v1/admin/blocked-periods?')) {
+          return new Response('[]', {status:200,headers:{'Content-Type':'application/json'}});
+        }
+        return originalFetch(...args);
+      };
+    })()`);
+    await clickButtonByText('Atualizar', evaluate);
+    await waitForText('Exibindo uma página parcial.', evaluate);
+    await clickButtonByText('Próxima página', evaluate);
+    await waitForText('Página 2', evaluate);
+    await waitForText('Nenhum atendimento ou bloqueio neste período.', evaluate);
+    await clickButtonByText('Página anterior', evaluate);
+    await waitForText('Página 1', evaluate);
+    await evaluate('window.fetch = window.__originalAgendaFetch');
+    await clickButtonByText('Atualizar', evaluate);
+    await waitForText('Visitante de demonstração', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.fetch = async (...args) => {
+        if (String(args[0]).includes('/v1/admin/appointments?')) {
+          window.fetch = originalFetch;
+          throw new Error('Falha simulada de rede da agenda');
+        }
+        return originalFetch(...args);
+      };
+    })()`);
+    await waitUntil(async () => (await evaluate(
+        "[...document.querySelectorAll('.admin-agenda button')].some(button => button.innerText.trim() === 'Atualizar' && !button.disabled)",
+    )));
+    await clickButtonByText('Atualizar', evaluate);
+    await waitForText('Falha simulada de rede da agenda', evaluate);
+    await clickButtonByText('Tentar novamente', evaluate);
+    await waitForText('Visitante de demonstração', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.__originalSessionFetch = originalFetch;
+      window.fetch = async (...args) => {
+        if (String(args[0]).includes('/v1/admin/appointments?')) {
+          return new Response('', {status:401});
+        }
+        return originalFetch(...args);
+      };
+    })()`);
+    await waitUntil(async () => (await evaluate(
+        "[...document.querySelectorAll('.admin-agenda button')].some(button => button.innerText.trim() === 'Atualizar' && !button.disabled)",
+    )));
+    await clickButtonByText('Atualizar', evaluate);
+    await waitForText('Sua sessão expirou. Entre novamente para continuar.', evaluate);
+    await evaluate('window.fetch = window.__originalSessionFetch');
+    await command('Page.reload');
+    await waitForText('Sessão administrativa ativa.', evaluate);
+    await waitForText('Agenda', evaluate);
+    await setFieldByLabel('Data de referência', publicDate, evaluate);
+    await waitForText('Visitante de demonstração', evaluate);
     await clickButtonByText('Despublicar página', evaluate);
     await waitForText('Página pública despublicada.', evaluate);
     const unpublishedRead = await evaluate(
@@ -486,11 +614,15 @@ try {
     if (createdBlocks.length !== 1 || createdBlocks[0].status !== 'ACTIVE') {
         throw new Error('Bloqueio não apareceu na consulta após criação.');
     }
+    await setFieldByLabel('Data de referência', blockDay, evaluate);
+    await waitUntil(() => evaluate("document.querySelector('.admin-agenda__block--active')?.innerText.includes('Manutenção E2E')"));
     await setFieldByLabel('Motivo do cancelamento', 'Concluído E2E', evaluate);
     await clickButtonByText('Cancelar bloqueio', evaluate);
     await waitUntil(async () => (await evaluate(
         `fetch('/api/v1/admin/blocked-periods?from=${blockDay}&to=${blockDay}', {credentials:'same-origin'}).then(response => response.json()).then(rows => rows[0]?.status)`,
     )) === 'CANCELLED');
+    await clickButtonByText('Atualizar', evaluate);
+    await waitUntil(() => evaluate("document.querySelector('.admin-agenda__block--cancelled')?.innerText.includes('Manutenção E2E')"));
     console.log('Browser: exceção fechada, horário especial, restauração e bloqueio cancelado persistem após reload.');
     await setFieldByAriaLabel('Segunda-feira início 1', '08:00', evaluate);
     const concurrentUpdateStatus = await evaluate(`(async () => {

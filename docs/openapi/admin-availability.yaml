@@ -607,6 +607,86 @@ paths:
         "403": { $ref: "#/components/responses/ActionNotAllowed" }
         "404": { description: Recurso inexistente ou inacessível. }
         "409": { $ref: "#/components/responses/CommandConflict" }
+  /admin/appointments:
+    get:
+      operationId: listAdminAppointments
+      summary: Consultar agenda por intervalo local, status e serviço
+      description: >-
+        Datas inclusivas no timezone atual do tenant, até 366 datas. Filtra pela interseção
+        semiaberta da ocupação [startsAt, occupiedUntil) com a janela. O cursor keyset ordena por
+        startsAt e appointmentId; cada página é uma leitura independente, portanto novos itens
+        podem aparecer após atualizar. A consulta não altera estado.
+      security: [{ backendSession: [] }]
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - name: status
+          in: query
+          schema: { type: string, enum: [CONFIRMED] }
+        - name: serviceId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: cursor
+          in: query
+          description: Cursor opaco de continuação; não seleciona tenant nem concede acesso.
+          schema: { type: string, maxLength: 512 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        "200":
+          description: Página ordenada, incluindo timezone IANA do tenant.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminAppointmentPage" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ActionNotAllowed" }
+        "503": { description: Fonte da agenda temporariamente indisponível. }
+  /admin/appointments/{id}:
+    get:
+      operationId: getAdminAppointment
+      summary: Consultar detalhes históricos de uma reserva
+      security: [{ backendSession: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Snapshot do atendimento autorizado no tenant atual.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminAppointment" }
+        "401": { $ref: "#/components/responses/AuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ActionNotAllowed" }
+        "404": { description: ID inexistente ou pertencente a outro tenant; mesma resposta. }
+  /admin/appointments/{id}/history:
+    get:
+      operationId: getAdminAppointmentHistory
+      summary: Consultar eventos reais da história da reserva
+      security: [{ backendSession: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: História do domínio, sem expor a tabela interna de auditoria.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminAppointmentHistory" }
+        "401": { $ref: "#/components/responses/AuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ActionNotAllowed" }
+        "404": { description: ID inexistente ou pertencente a outro tenant; mesma resposta. }
 components:
   securitySchemes:
     backendSession:
@@ -627,6 +707,55 @@ components:
         minLength: 1
         maxLength: 255
   schemas:
+    AdminAppointmentPage:
+      type: object
+      additionalProperties: false
+      required: [timeZone, items, nextCursor, hasMore]
+      properties:
+        timeZone: { type: string, description: Timezone IANA atual do tenant. }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AdminAppointment" }
+        nextCursor: { type: [string, "null"] }
+        hasMore: { type: boolean }
+    AdminAppointment:
+      type: object
+      additionalProperties: false
+      required:
+        [appointmentId, serviceId, clientName, serviceName, startsAt, serviceEndsAt, occupiedUntil, timeZone, durationMinutes, bufferAfterMinutes, status, createdAt, version]
+      properties:
+        appointmentId: { type: string, format: uuid }
+        serviceId: { type: string, format: uuid }
+        clientName: { type: string, description: Snapshot necessário ao administrador autorizado. }
+        serviceName: { type: string, description: Snapshot imutável do serviço. }
+        startsAt: { type: string, format: date-time }
+        serviceEndsAt: { type: string, format: date-time }
+        occupiedUntil: { type: string, format: date-time, description: Fim da ocupação incluindo buffer. }
+        timeZone: { type: string, description: Fuso IANA usado na confirmação. }
+        durationMinutes: { type: integer }
+        bufferAfterMinutes: { type: integer, minimum: 0 }
+        status: { type: string, enum: [CONFIRMED] }
+        createdAt: { type: string, format: date-time }
+        version: { type: integer, minimum: 1 }
+    AdminAppointmentHistory:
+      type: object
+      additionalProperties: false
+      required: [timeZone, items]
+      properties:
+        timeZone: { type: string }
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [toStatus, actorType, actorRef, reasonCode, occurredAt]
+            properties:
+              fromStatus: { type: [string, "null"] }
+              toStatus: { type: string }
+              actorType: { type: string }
+              actorRef: { type: string }
+              reasonCode: { type: string }
+              occurredAt: { type: string, format: date-time }
     PublicBusiness:
       type: object
       additionalProperties: false

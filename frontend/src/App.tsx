@@ -6,6 +6,7 @@ import { SchedulePanel } from './SchedulePanel';
 import { ScheduleExceptionsPanel } from './ScheduleExceptionsPanel';
 import { PublicPage } from './PublicPage';
 import { PublicPublicationPanel } from './PublicPublicationPanel';
+import { AdminAgendaPanel } from './AdminAgendaPanel';
 
 type Session = { authenticated: boolean; tenantId: string; role: string };
 type Csrf = { headerName: string; token: string };
@@ -510,6 +511,18 @@ function AdminApp() {
                 <ScheduleExceptionsPanel
                     enabled={Boolean(session)}
                     csrf={csrf}
+                    onSessionInvalid={(responseStatus) => {
+                        setSession(null);
+                        setCsrf(null);
+                        setStatus(
+                            responseStatus === 401
+                                ? 'Sua sessão expirou. Entre novamente para continuar.'
+                                : 'Sua associação administrativa foi revogada ou o acesso foi negado.',
+                        );
+                    }}
+                />
+                <AdminAgendaPanel
+                    enabled={Boolean(session)}
                     onSessionInvalid={(responseStatus) => {
                         setSession(null);
                         setCsrf(null);
