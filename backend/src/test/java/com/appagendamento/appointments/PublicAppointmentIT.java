@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.appagendamento.appointments.application.AppointmentRepository;
 import com.appagendamento.appointments.application.CreatePublicAppointment;
+import com.appagendamento.appointments.application.PublicAppointmentReceipt;
 import com.appagendamento.appointments.domain.Appointment;
 import com.appagendamento.appointments.domain.AppointmentStatus;
 import com.appagendamento.appointments.domain.SlotNoLongerAvailableException;
@@ -22,18 +23,23 @@ import com.appagendamento.availability.domain.WeeklyPeriod;
 import com.appagendamento.catalog.application.CreateService;
 import com.appagendamento.catalog.application.UpdateService;
 import com.appagendamento.catalog.domain.ServiceStatus;
+import com.appagendamento.idempotency.api.IdempotentCommandResult;
 import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import com.appagendamento.publicpage.application.ChangePublicationStatus;
 import com.appagendamento.publicpage.application.PublicationEvidence;
 import com.appagendamento.publicpage.application.UpdatePublicContact;
 import com.appagendamento.support.PostgresTestEnvironment;
+import java.security.SecureRandom;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.temporal.TemporalAdjusters;
+import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -50,6 +56,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
 
 @SpringBootTest(
     properties = {
@@ -90,6 +97,7 @@ class PublicAppointmentIT {
   private String slug;
   private LocalDate bookingDate;
   private String requestedStart;
+  private final Map<String, String> recoveryCapabilities = new ConcurrentHashMap<>();
 
   @DynamicPropertySource
   static void database(DynamicPropertyRegistry registry) {
@@ -159,12 +167,7 @@ class PublicAppointmentIT {
     String key = "book-intent-" + UUID.randomUUID();
     String body = requestBody(serviceId, requestedStart, "  José Silva  ", "+55 (11) 99999-1234");
     int auditEventsBeforeBooking = count("audit_event", tenantId);
-    mvc.perform(
-            post("/api/v1/public/" + slug + "/appointments")
-                .with(csrf())
-                .header("Idempotency-Key", key)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(body))
+    submitBooking(key, body)
         .andExpect(status().isCreated())
         .andExpect(jsonPath("$.status").value("CONFIRMED"))
         .andExpect(jsonPath("$.startsAt").value(org.hamcrest.Matchers.endsWith("-03:00")))
@@ -200,12 +203,7 @@ class PublicAppointmentIT {
     assertThat(count("audit_event", tenantId)).isEqualTo(auditEventsBeforeBooking + 1);
     assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
 
-    mvc.perform(
-            post("/api/v1/public/" + slug + "/appointments")
-                .with(csrf())
-                .header("Idempotency-Key", key)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(body))
+    submitBooking(key, body)
         .andExpect(status().isCreated())
         .andExpect(header().string("Idempotency-Replayed", "true"))
         .andExpect(jsonPath("$.appointmentId").value(appointmentId.toString()));
@@ -215,23 +213,13 @@ class PublicAppointmentIT {
     assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
     assertThat(countByAction("APPOINTMENT_CONFIRMED")).isEqualTo(1);
 
-    mvc.perform(
-            post("/api/v1/public/" + slug + "/appointments")
-                .with(csrf())
-                .header("Idempotency-Key", "lost-slot-" + UUID.randomUUID())
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(body))
+    submitBooking("lost-slot-" + UUID.randomUUID(), body)
         .andExpect(status().isConflict())
         .andExpect(jsonPath("$.error.code").value("SLOT_NO_LONGER_AVAILABLE"));
     assertThat(count("appointment", tenantId)).isEqualTo(1);
     assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
 
-    mvc.perform(
-            post("/api/v1/public/" + slug + "/appointments")
-                .with(csrf())
-                .header("Idempotency-Key", key)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(requestBody(serviceId, requestedStart, "Outro nome", "+5511999991234")))
+    submitBooking(key, requestBody(serviceId, requestedStart, "Outro nome", "+5511999991234"))
         .andExpect(status().isConflict())
         .andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_KEY_REUSED"));
 
@@ -269,15 +257,136 @@ class PublicAppointmentIT {
                 .value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasItem(requestedStart))));
 
     changePublicationStatus.execute(actor, "revoke-before-replay-" + UUID.randomUUID(), false, 2);
+    submitBooking(key, body).andExpect(status().isNotFound());
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
+  }
+
+  @Test
+  void recoveryIsReadOnlyMinimalAndScopedToCapabilityAndTenant() throws Exception {
+    String key = "recover-" + UUID.randomUUID();
+    String capability = newCapability();
+    String body = requestBody(serviceId, requestedStart, "Recovery Person", "+5511999991009");
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/booking-intents/current")
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .header("X-Booking-Recovery", capability)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isNoContent());
+    recoveryCapabilities.put(key, capability);
+
+    int appointmentsBefore = count("appointment", tenantId);
+    int clientsBefore = count("client", tenantId);
+    int historiesBefore = count("appointment_history", tenantId);
+    int auditsBefore = count("audit_event", tenantId);
+    int eventsBefore = countByEvent("AppointmentConfirmed");
+    mvc.perform(
+            get("/api/v1/public/" + slug + "/booking-intents/current")
+                .header("X-Booking-Recovery", capability))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.state").value("PREPARED_UNKNOWN"))
+        .andExpect(jsonPath("$.receipt").doesNotExist());
+    assertThat(count("appointment", tenantId)).isEqualTo(appointmentsBefore);
+    assertThat(count("client", tenantId)).isEqualTo(clientsBefore);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historiesBefore);
+    assertThat(count("audit_event", tenantId)).isEqualTo(auditsBefore);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(eventsBefore);
+
+    submitBooking(key, body).andExpect(status().isCreated());
+    UUID appointmentId =
+        appJdbc.queryForObject(
+            "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ?",
+            UUID.class,
+            tenantId);
+    mvc.perform(
+            get("/api/v1/public/" + slug + "/booking-intents/current")
+                .header("X-Booking-Recovery", capability))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.state").value("COMPLETED"))
+        .andExpect(jsonPath("$.receipt.appointmentId").value(appointmentId.toString()))
+        .andExpect(jsonPath("$.receipt.clientName").doesNotExist())
+        .andExpect(jsonPath("$.receipt.phone").doesNotExist())
+        .andExpect(jsonPath("$.client").doesNotExist());
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(1);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
+
+    mvc.perform(
+            get("/api/v1/public/foreign-" + slug + "/booking-intents/current")
+                .header("X-Booking-Recovery", capability))
+        .andExpect(status().isNotFound());
+    mvc.perform(
+            get("/api/v1/public/" + slug + "/booking-intents/current")
+                .header("X-Booking-Recovery", newCapability()))
+        .andExpect(status().isNotFound());
+    mvc.perform(
+            get("/api/v1/public/" + slug + "/booking-intents/current")
+                .header("X-Booking-Recovery", "invalid"))
+        .andExpect(status().isNotFound());
+    migrationJdbc.update(
+        "UPDATE agendamento.public_booking_intent SET created_at = clock_timestamp() - interval '31 days', expires_at = clock_timestamp() - interval '1 second' WHERE tenant_id = ? AND command_scope = ? AND key_digest = ?",
+        tenantId,
+        "appointments.public.create.v1",
+        com.appagendamento.idempotency.application.IdempotencyKey.digest(key));
+    mvc.perform(
+            get("/api/v1/public/" + slug + "/booking-intents/current")
+                .header("X-Booking-Recovery", capability))
+        .andExpect(status().isNotFound());
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope = 'appointments.public.create.v1'",
+                Integer.class,
+                tenantId))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void recoveryBindingRejectsMissingCsrfTokenSwapAndChangedCommand() throws Exception {
+    String key = "bound-" + UUID.randomUUID();
+    String capability = newCapability();
+    String body = requestBody(serviceId, requestedStart, "Original Person", "+5511999991010");
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/booking-intents/current")
+                .header("Idempotency-Key", key)
+                .header("X-Booking-Recovery", capability)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isForbidden());
+
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/booking-intents/current")
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .header("X-Booking-Recovery", capability)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isNoContent());
+
     mvc.perform(
             post("/api/v1/public/" + slug + "/appointments")
                 .with(csrf())
                 .header("Idempotency-Key", key)
+                .header("X-Booking-Recovery", newCapability())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body))
         .andExpect(status().isNotFound());
-    assertThat(count("appointment", tenantId)).isEqualTo(1);
-    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
+
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/appointments")
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .header("X-Booking-Recovery", capability)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    requestBody(serviceId, requestedStart, "Different Person", "+5511999991010")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_KEY_REUSED"));
+    assertThat(count("appointment", tenantId)).isZero();
+    assertThat(count("client", tenantId)).isZero();
+    assertThat(countByEvent("AppointmentConfirmed")).isZero();
   }
 
   @Test
@@ -286,6 +395,7 @@ class PublicAppointmentIT {
     mvc.perform(
             post("/api/v1/public/" + slug + "/appointments")
                 .header("Idempotency-Key", "missing-csrf-" + UUID.randomUUID())
+                .header("X-Booking-Recovery", newCapability())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body))
         .andExpect(status().isForbidden());
@@ -300,18 +410,21 @@ class PublicAppointmentIT {
         "INSERT INTO agendamento.service (service_id, tenant_id, name, normalized_name, duration_minutes, buffer_after_minutes, status) VALUES (?, ?, 'Private', 'private', 30, 0, 'ACTIVE')",
         otherService,
         otherTenant);
+    String foreignKey = "foreign-service-" + UUID.randomUUID();
     mvc.perform(
-            post("/api/v1/public/" + slug + "/appointments")
+            post("/api/v1/public/" + slug + "/booking-intents/current")
                 .with(csrf())
-                .header("Idempotency-Key", "foreign-service-" + UUID.randomUUID())
+                .header("Idempotency-Key", foreignKey)
+                .header("X-Booking-Recovery", newCapability())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(requestBody(otherService, requestedStart, "Cliente", "+5511999991234")))
         .andExpect(status().isNotFound());
     changePublicationStatus.execute(actor, "unpublish-booking-" + UUID.randomUUID(), false, 2);
     mvc.perform(
-            post("/api/v1/public/" + slug + "/appointments")
+            post("/api/v1/public/" + slug + "/booking-intents/current")
                 .with(csrf())
                 .header("Idempotency-Key", "unpublished-" + UUID.randomUUID())
+                .header("X-Booking-Recovery", newCapability())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body))
         .andExpect(status().isNotFound());
@@ -336,9 +449,8 @@ class PublicAppointmentIT {
   }
 
   @Test
-  void postgresExclusionConstraintMapsToSlotConflict() {
-    createAppointment.execute(
-        slug,
+  void postgresExclusionConstraintMapsToSlotConflict() throws Exception {
+    executePrepared(
         "constraint-first-" + UUID.randomUUID(),
         serviceId,
         java.time.OffsetDateTime.parse(requestedStart),
@@ -446,8 +558,7 @@ class PublicAppointmentIT {
       try {
         org.assertj.core.api.Assertions.assertThatThrownBy(
                 () ->
-                    createAppointment.execute(
-                        slug,
+                    executePrepared(
                         key,
                         serviceId,
                         java.time.OffsetDateTime.parse(requestedStart),
@@ -496,6 +607,15 @@ class PublicAppointmentIT {
       awaitInsertInProgress("blocked_period");
       var reservation = commands.submit(() -> reserve("block-wins-" + UUID.randomUUID()));
       assertThat(block.get()).isTrue();
+      assertThat(
+              availability
+                  .execute(tenantId, serviceId, bookingDate, bookingDate)
+                  .days()
+                  .getFirst()
+                  .slots()
+                  .stream()
+                  .map(slot -> slot.startsAt().toString()))
+          .doesNotContain(requestedStart);
       assertThat(reservation.get()).isFalse();
     } finally {
       removePauseTrigger("blocked_period");
@@ -507,8 +627,7 @@ class PublicAppointmentIT {
   private boolean concurrentCreate(CyclicBarrier barrier, String key, String phone) {
     try {
       barrier.await();
-      createAppointment.execute(
-          slug,
+      executePrepared(
           key,
           serviceId,
           java.time.OffsetDateTime.parse(requestedStart),
@@ -524,8 +643,7 @@ class PublicAppointmentIT {
 
   private boolean reserve(String key) {
     try {
-      createAppointment.execute(
-          slug,
+      executePrepared(
           key,
           serviceId,
           java.time.OffsetDateTime.parse(requestedStart),
@@ -534,6 +652,8 @@ class PublicAppointmentIT {
       return true;
     } catch (SlotNoLongerAvailableException conflict) {
       return false;
+    } catch (Exception exception) {
+      throw new IllegalStateException(exception);
     }
   }
 
@@ -545,13 +665,60 @@ class PublicAppointmentIT {
       String phone) {
     try {
       barrier.await();
-      return createAppointment
-          .execute(slug, key, serviceId, startsAt, name, phone)
-          .value()
-          .appointmentId();
+      return executePrepared(key, serviceId, startsAt, name, phone).value().appointmentId();
     } catch (Exception exception) {
       throw new IllegalStateException(exception);
     }
+  }
+
+  private ResultActions submitBooking(String key, String body) throws Exception {
+    String recoveryCapability = recoveryCapabilities.get(key);
+    if (recoveryCapability == null) {
+      recoveryCapability = newCapability();
+      mvc.perform(
+              post("/api/v1/public/" + slug + "/booking-intents/current")
+                  .with(csrf())
+                  .header("Idempotency-Key", key)
+                  .header("X-Booking-Recovery", recoveryCapability)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(body))
+          .andExpect(status().isNoContent());
+      recoveryCapabilities.put(key, recoveryCapability);
+    }
+    return mvc.perform(
+        post("/api/v1/public/" + slug + "/appointments")
+            .with(csrf())
+            .header("Idempotency-Key", key)
+            .header("X-Booking-Recovery", recoveryCapability)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(body));
+  }
+
+  private IdempotentCommandResult<PublicAppointmentReceipt> executePrepared(
+      String key,
+      UUID commandServiceId,
+      java.time.OffsetDateTime startsAt,
+      String name,
+      String phone)
+      throws Exception {
+    String body = requestBody(commandServiceId, startsAt.toString(), name, phone);
+    String recoveryCapability = newCapability();
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/booking-intents/current")
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .header("X-Booking-Recovery", recoveryCapability)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isNoContent());
+    return createAppointment.execute(
+        slug, key, commandServiceId, startsAt, name, phone, recoveryCapability);
+  }
+
+  private static String newCapability() {
+    byte[] random = new byte[32];
+    new SecureRandom().nextBytes(random);
+    return Base64.getUrlEncoder().withoutPadding().encodeToString(random);
   }
 
   private boolean createConflictingBlock() {

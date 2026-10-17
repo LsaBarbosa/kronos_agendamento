@@ -16,13 +16,17 @@ export type PublicBookingConfirmation = {
     timeZone: string;
 };
 
+export type PublicBookingRecovery =
+    | { state: 'PREPARED_UNKNOWN' }
+    | { state: 'COMPLETED'; receipt: PublicBookingConfirmation };
+
 export class PublicBookingError extends Error {
     constructor(
         readonly kind: 'network' | 'http' | 'invalid-response',
         message: string,
         readonly status?: number,
         readonly code?: string,
-        readonly phase: 'csrf' | 'booking' = 'booking',
+        readonly phase: 'csrf' | 'prepare' | 'booking' | 'recovery' = 'booking',
         readonly outcomeUnknown = true,
     ) {
         super(message);
@@ -74,7 +78,7 @@ function isValidConfirmation(
 
 async function readError(
     response: Response,
-    phase: 'csrf' | 'booking' = 'booking',
+    phase: 'csrf' | 'prepare' | 'booking' | 'recovery' = 'booking',
 ): Promise<PublicBookingError> {
     let code: string | undefined;
     try {
@@ -95,8 +99,10 @@ async function readError(
         response.status,
         code,
         phase,
-        phase === 'booking' &&
-            (response.status >= 500 || code === 'OPERATION_IN_PROGRESS'),
+        phase === 'prepare' ||
+            phase === 'recovery' ||
+            (phase === 'booking' &&
+                (response.status >= 500 || code === 'OPERATION_IN_PROGRESS')),
     );
 }
 
@@ -104,6 +110,7 @@ export async function createPublicBooking(
     slug: string,
     request: PublicBookingRequest,
     idempotencyKey: string,
+    recoveryCapability: string,
     apiBaseUrl = defaultApiBaseUrl,
 ): Promise<PublicBookingConfirmation> {
     const basePath = apiBaseUrl + '/v1/public/' + encodeURIComponent(slug);
@@ -157,6 +164,30 @@ export async function createPublicBooking(
 
     let response: Response;
     try {
+        response = await fetch(basePath + '/booking-intents/current', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                'Idempotency-Key': idempotencyKey,
+                'X-Booking-Recovery': recoveryCapability,
+                [csrf.headerName]: csrf.token,
+            },
+            body: JSON.stringify(request),
+        });
+    } catch {
+        throw new PublicBookingError(
+            'network',
+            'Não foi possível preparar a recuperação. A intenção permanece a mesma; tente novamente.',
+            undefined,
+            undefined,
+            'prepare',
+        );
+    }
+    if (!response.ok) throw await readError(response, 'prepare');
+
+    try {
         response = await fetch(basePath + '/appointments', {
             method: 'POST',
             credentials: 'same-origin',
@@ -164,6 +195,7 @@ export async function createPublicBooking(
                 Accept: 'application/json',
                 'Content-Type': 'application/json',
                 'Idempotency-Key': idempotencyKey,
+                'X-Booking-Recovery': recoveryCapability,
                 [csrf.headerName]: csrf.token,
             },
             body: JSON.stringify(request),
@@ -196,6 +228,75 @@ export async function createPublicBooking(
     return body;
 }
 
+export async function getPublicBookingIntent(
+    slug: string,
+    recoveryCapability: string,
+    apiBaseUrl = defaultApiBaseUrl,
+): Promise<PublicBookingRecovery> {
+    const basePath = apiBaseUrl + '/v1/public/' + encodeURIComponent(slug);
+    let response: Response;
+    try {
+        response = await fetch(basePath + '/booking-intents/current', {
+            headers: {
+                Accept: 'application/json',
+                'X-Booking-Recovery': recoveryCapability,
+            },
+            cache: 'no-store',
+        });
+    } catch {
+        throw new PublicBookingError(
+            'network',
+            'Não foi possível consultar a recuperação. O resultado continua incerto.',
+            undefined,
+            undefined,
+            'recovery',
+        );
+    }
+    if (!response.ok) throw await readError(response, 'recovery');
+    let body: unknown;
+    try {
+        body = await response.json();
+    } catch {
+        throw new PublicBookingError(
+            'invalid-response',
+            'A resposta de recuperação não é válida.',
+            response.status,
+            undefined,
+            'recovery',
+        );
+    }
+    if (isRecord(body) && body.state === 'PREPARED_UNKNOWN') {
+        return { state: 'PREPARED_UNKNOWN' };
+    }
+    if (
+        isRecord(body) &&
+        body.state === 'COMPLETED' &&
+        isValidConfirmation(body.receipt)
+    ) {
+        return { state: 'COMPLETED', receipt: body.receipt };
+    }
+    throw new PublicBookingError(
+        'invalid-response',
+        'A resposta de recuperação não é válida.',
+        response.status,
+        undefined,
+        'recovery',
+    );
+}
+
 export function newPublicBookingKey(): string {
     return crypto.randomUUID();
+}
+
+export function newPublicBookingRecoveryCapability(): string {
+    const randomBytes = new Uint8Array(32);
+    crypto.getRandomValues(randomBytes);
+    let binary = '';
+    randomBytes.forEach((value) => {
+        binary += String.fromCharCode(value);
+    });
+    return btoa(binary)
+        .replaceAll('+', '-')
+        .replaceAll('/', '_')
+        .replace(/=+$/, '');
 }

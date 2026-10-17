@@ -16,6 +16,10 @@ public final class PostgresTestEnvironment {
   private PostgresTestEnvironment() {}
 
   public static synchronized void configure(DynamicPropertyRegistry registry) {
+    registry.add("app.public-booking.digest.active-key-id", () -> "test-v1");
+    registry.add(
+        "app.public-booking.digest.keys",
+        () -> "test-v1=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
     String externalUrl = System.getenv("TEST_DATABASE_URL");
     if (externalUrl != null && !externalUrl.isBlank()) {
       if (!externalUrl.startsWith("jdbc:postgresql://")) {

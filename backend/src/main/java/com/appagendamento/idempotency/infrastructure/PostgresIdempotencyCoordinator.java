@@ -1,6 +1,8 @@
 package com.appagendamento.idempotency.infrastructure;
 
+import com.appagendamento.idempotency.api.CommandDigest;
 import com.appagendamento.idempotency.api.CommandResultCodec;
+import com.appagendamento.idempotency.api.FixedCommandDigest;
 import com.appagendamento.idempotency.api.IdempotencyCoordinator;
 import com.appagendamento.idempotency.api.IdempotentCommandResult;
 import com.appagendamento.idempotency.application.IdempotencyKey;
@@ -33,6 +35,38 @@ public class PostgresIdempotencyCoordinator implements IdempotencyCoordinator {
       Runnable revalidate,
       Function<UUID, T> command,
       CommandResultCodec<T> codec) {
+    return executeInternal(
+        tenantId,
+        commandScope,
+        idempotencyKey,
+        new FixedCommandDigest(requestDigest),
+        revalidate,
+        command,
+        codec);
+  }
+
+  @Override
+  @Transactional(isolation = Isolation.READ_COMMITTED)
+  public <T> IdempotentCommandResult<T> execute(
+      UUID tenantId,
+      String commandScope,
+      String idempotencyKey,
+      CommandDigest requestDigest,
+      Runnable revalidate,
+      Function<UUID, T> command,
+      CommandResultCodec<T> codec) {
+    return executeInternal(
+        tenantId, commandScope, idempotencyKey, requestDigest, revalidate, command, codec);
+  }
+
+  private <T> IdempotentCommandResult<T> executeInternal(
+      UUID tenantId,
+      String commandScope,
+      String idempotencyKey,
+      CommandDigest requestDigest,
+      Runnable revalidate,
+      Function<UUID, T> command,
+      CommandResultCodec<T> codec) {
     revalidate.run();
     String keyDigest = IdempotencyKey.digest(idempotencyKey);
     UUID operationId = UUID.randomUUID();
@@ -49,7 +83,7 @@ public class PostgresIdempotencyCoordinator implements IdempotencyCoordinator {
             tenantId,
             commandScope,
             keyDigest,
-            requestDigest,
+            requestDigest.persistedValue(),
             operationId);
     if (created.isEmpty()) {
       IdempotencyRecord existing =
@@ -69,7 +103,7 @@ public class PostgresIdempotencyCoordinator implements IdempotencyCoordinator {
               tenantId,
               commandScope,
               keyDigest);
-      if (!existing.requestDigest().equals(requestDigest)) {
+      if (!requestDigest.matches(existing.requestDigest())) {
         throw new IdempotencyKeyReusedException();
       }
       return switch (existing.state()) {

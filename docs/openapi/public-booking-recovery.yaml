@@ -1,0 +1,131 @@
+openapi: 3.1.0
+info:
+  title: Public booking intent recovery
+  version: 1.0.0
+paths:
+  /api/v1/public/{slug}/booking-intents/current:
+    parameters:
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Bind a recovery capability before creating the appointment
+      description: Requires CSRF. Capability expires 30 days after binding; expiration disables lookup but does not delete a booking or receipt. Persists only an HMAC digest and minimum intent references; never persists the request body or PII.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RecoveryCapability'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookingCommand'
+      responses:
+        '204':
+          description: Recovery binding persisted before appointment submission
+        '400':
+          description: Invalid command
+        '404':
+          description: Tenant is not publicly eligible
+        '409':
+          description: Idempotency key or capability is bound to incompatible content
+        '503':
+          description: Required digest key or recovery state store is unavailable
+    get:
+      summary: Read the state of this booking intent
+      description: Read-only. A missing committed receipt is uncertain, not proof that no request is running. Capability never authorizes client identity or PII access.
+      parameters:
+        - $ref: '#/components/parameters/RecoveryCapability'
+      responses:
+        '200':
+          description: Minimal state or receipt
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/PreparedUnknown'
+                  - $ref: '#/components/schemas/CompletedReceipt'
+        '404':
+          description: Missing, invalid, expired or foreign capability/tenant, non-revealing
+        '503':
+          description: State store or required historical digest key unavailable
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+    RecoveryCapability:
+      name: X-Booking-Recovery
+      in: header
+      required: true
+      description: Random 256-bit intent-scoped identifier. Never place in URL or logs.
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_-]{43}$'
+  schemas:
+    BookingCommand:
+      type: object
+      additionalProperties: false
+      required: [serviceId, startsAt, client]
+      properties:
+        serviceId:
+          type: string
+          format: uuid
+        startsAt:
+          type: string
+          format: date-time
+        client:
+          type: object
+          additionalProperties: false
+          required: [name, phone]
+          properties:
+            name:
+              type: string
+            phone:
+              type: string
+    PreparedUnknown:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        state:
+          const: PREPARED_UNKNOWN
+    CompletedReceipt:
+      type: object
+      additionalProperties: false
+      required: [state, receipt]
+      properties:
+        state:
+          const: COMPLETED
+        receipt:
+          $ref: '#/components/schemas/AppointmentReceipt'
+    AppointmentReceipt:
+      type: object
+      additionalProperties: false
+      required: [appointmentId, operationId, status, serviceName, startsAt, serviceEndsAt, timeZone]
+      properties:
+        appointmentId:
+          type: string
+          format: uuid
+        operationId:
+          type: string
+          format: uuid
+        status:
+          const: CONFIRMED
+        serviceName:
+          type: string
+        startsAt:
+          type: string
+          format: date-time
+        serviceEndsAt:
+          type: string
+          format: date-time
+        timeZone:
+          type: string

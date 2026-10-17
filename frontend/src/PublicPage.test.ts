@@ -58,6 +58,10 @@ function jsonResponse(body: unknown, status = 200): Response {
     });
 }
 
+function noContentResponse(): Response {
+    return new Response(null, { status: 204 });
+}
+
 function deferred<T>() {
     let resolve!: (value: T) => void;
     const promise = new Promise<T>((complete) => {
@@ -239,7 +243,13 @@ describe('public booking REST client', () => {
         vi.stubGlobal('fetch', fetchMock);
 
         await expect(
-            createPublicBooking('atelie-horizonte', request, 'key', '/api'),
+            createPublicBooking(
+                'atelie-horizonte',
+                request,
+                'key',
+                'A'.repeat(43),
+                '/api',
+            ),
         ).rejects.toMatchObject<Partial<PublicBookingError>>({
             kind: 'network',
             phase: 'csrf',
@@ -252,6 +262,7 @@ describe('public booking REST client', () => {
         const fetchMock = vi
             .fn<FetchMock>()
             .mockResolvedValueOnce(jsonResponse(csrf))
+            .mockResolvedValueOnce(noContentResponse())
             .mockResolvedValueOnce(
                 jsonResponse({ error: { code: 'OPERATION_IN_PROGRESS' } }, 409),
             );
@@ -262,6 +273,7 @@ describe('public booking REST client', () => {
                 'atelie-horizonte',
                 request,
                 'same-key',
+                'A'.repeat(43),
                 '/api',
             ),
         ).rejects.toMatchObject<Partial<PublicBookingError>>({
@@ -275,6 +287,7 @@ describe('public booking REST client', () => {
         const fetchMock = vi
             .fn<FetchMock>()
             .mockResolvedValueOnce(jsonResponse(csrf))
+            .mockResolvedValueOnce(noContentResponse())
             .mockResolvedValueOnce(jsonResponse(confirmation, 201));
         vi.stubGlobal('fetch', fetchMock);
 
@@ -283,19 +296,32 @@ describe('public booking REST client', () => {
                 'atelie horizonte',
                 request,
                 'intent-key',
+                'A'.repeat(43),
                 '/api',
             ),
         ).resolves.toEqual(confirmation);
 
         expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/csrf');
         expect(fetchMock.mock.calls[1][0]).toBe(
-            '/api/v1/public/atelie%20horizonte/appointments',
+            '/api/v1/public/atelie%20horizonte/booking-intents/current',
         );
         expect(fetchMock.mock.calls[1][1]).toMatchObject({
+            method: 'POST',
+            headers: expect.objectContaining({
+                'Idempotency-Key': 'intent-key',
+                'X-Booking-Recovery': 'A'.repeat(43),
+            }),
+            body: JSON.stringify(request),
+        });
+        expect(fetchMock.mock.calls[2][0]).toBe(
+            '/api/v1/public/atelie%20horizonte/appointments',
+        );
+        expect(fetchMock.mock.calls[2][1]).toMatchObject({
             method: 'POST',
             credentials: 'same-origin',
             headers: {
                 'Idempotency-Key': 'intent-key',
+                'X-Booking-Recovery': 'A'.repeat(43),
                 'X-CSRF-TOKEN': 'csrf-token',
                 'Content-Type': 'application/json',
             },
@@ -307,8 +333,10 @@ describe('public booking REST client', () => {
         const fetchMock = vi
             .fn<FetchMock>()
             .mockResolvedValueOnce(jsonResponse(csrf))
+            .mockResolvedValueOnce(noContentResponse())
             .mockRejectedValueOnce(new TypeError('connection lost'))
             .mockResolvedValueOnce(jsonResponse(csrf))
+            .mockResolvedValueOnce(noContentResponse())
             .mockResolvedValueOnce(jsonResponse(confirmation));
         vi.stubGlobal('fetch', fetchMock);
 
@@ -317,6 +345,7 @@ describe('public booking REST client', () => {
                 'atelie-horizonte',
                 request,
                 'same-key',
+                'A'.repeat(43),
                 '/api',
             ),
         ).rejects.toMatchObject<Partial<PublicBookingError>>({
@@ -327,15 +356,16 @@ describe('public booking REST client', () => {
                 'atelie-horizonte',
                 request,
                 'same-key',
+                'A'.repeat(43),
                 '/api',
             ),
         ).resolves.toEqual(confirmation);
 
-        expect(fetchMock.mock.calls[1][1]).toMatchObject({
+        expect(fetchMock.mock.calls[2][1]).toMatchObject({
             headers: expect.objectContaining({ 'Idempotency-Key': 'same-key' }),
             body: JSON.stringify(request),
         });
-        expect(fetchMock.mock.calls[3][1]).toMatchObject({
+        expect(fetchMock.mock.calls[5][1]).toMatchObject({
             headers: expect.objectContaining({ 'Idempotency-Key': 'same-key' }),
             body: JSON.stringify(request),
         });
@@ -345,13 +375,20 @@ describe('public booking REST client', () => {
         const fetchMock = vi
             .fn<FetchMock>()
             .mockResolvedValueOnce(jsonResponse(csrf))
+            .mockResolvedValueOnce(noContentResponse())
             .mockResolvedValueOnce(
                 jsonResponse({ ...confirmation, status: 'PENDING' }),
             );
         vi.stubGlobal('fetch', fetchMock);
 
         await expect(
-            createPublicBooking('atelie-horizonte', request, 'key', '/api'),
+            createPublicBooking(
+                'atelie-horizonte',
+                request,
+                'key',
+                'A'.repeat(43),
+                '/api',
+            ),
         ).rejects.toMatchObject<Partial<PublicBookingError>>({
             kind: 'invalid-response',
             status: 200,
@@ -362,6 +399,7 @@ describe('public booking REST client', () => {
         const fetchMock = vi
             .fn<FetchMock>()
             .mockResolvedValueOnce(jsonResponse(csrf))
+            .mockResolvedValueOnce(noContentResponse())
             .mockResolvedValueOnce(
                 jsonResponse(
                     { error: { code: 'SLOT_NO_LONGER_AVAILABLE' } },
@@ -371,7 +409,13 @@ describe('public booking REST client', () => {
         vi.stubGlobal('fetch', fetchMock);
 
         await expect(
-            createPublicBooking('atelie-horizonte', request, 'key', '/api'),
+            createPublicBooking(
+                'atelie-horizonte',
+                request,
+                'key',
+                'A'.repeat(43),
+                '/api',
+            ),
         ).rejects.toMatchObject<Partial<PublicBookingError>>({
             kind: 'http',
             status: 409,
@@ -385,13 +429,20 @@ describe('public booking REST client', () => {
             const fetchMock = vi
                 .fn<FetchMock>()
                 .mockResolvedValueOnce(jsonResponse(csrf))
+                .mockResolvedValueOnce(noContentResponse())
                 .mockResolvedValueOnce(
                     jsonResponse({ error: { code: 'REQUEST_FAILED' } }, status),
                 );
             vi.stubGlobal('fetch', fetchMock);
 
             await expect(
-                createPublicBooking('atelie-horizonte', request, 'key', '/api'),
+                createPublicBooking(
+                    'atelie-horizonte',
+                    request,
+                    'key',
+                    'A'.repeat(43),
+                    '/api',
+                ),
             ).rejects.toMatchObject<Partial<PublicBookingError>>({ status });
         },
     );

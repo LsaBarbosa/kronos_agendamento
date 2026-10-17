@@ -3,11 +3,14 @@ import type { ChangeEvent, FormEvent } from 'react';
 import { apiBaseUrl as defaultApiBaseUrl } from './config';
 import {
     createPublicBooking,
+    getPublicBookingIntent,
     newPublicBookingKey,
+    newPublicBookingRecoveryCapability,
     PublicBookingError,
 } from './publicBookingApi';
 import type {
     PublicBookingConfirmation,
+    PublicBookingRecovery,
     PublicBookingRequest,
 } from './publicBookingApi';
 import './PublicPage.css';
@@ -47,6 +50,96 @@ export type PublicAvailability = {
 
 export type PublicTelemetryEvent =
     'SERVICE_SELECTED' | 'SLOT_SELECTED' | 'FLOW_ABANDONED';
+
+type StoredBookingIntent = {
+    idempotencyKey: string;
+    recoveryCapability: string;
+    serviceId: string;
+    date: string;
+    startsAt: string;
+    serviceEndsAt: string;
+};
+
+type BookingIntentClaim =
+    | { blocked: true; sharedIntent: StoredBookingIntent | null }
+    | {
+          blocked: false;
+          claimedIntent: {
+              fingerprint: string;
+              key: string;
+              recoveryCapability: string;
+              body: PublicBookingRequest;
+          };
+      };
+
+function bookingIntentStorageKey(slug: string): string {
+    return 'kronos.public-booking.intent.' + slug;
+}
+
+function parseStoredBookingIntent(
+    value: string | null,
+): StoredBookingIntent | null {
+    try {
+        if (!value) return null;
+        const parsed: unknown = JSON.parse(value);
+        if (typeof parsed !== 'object' || parsed === null) return null;
+        const candidate = parsed as Partial<StoredBookingIntent>;
+        if (
+            typeof candidate.idempotencyKey !== 'string' ||
+            typeof candidate.recoveryCapability !== 'string' ||
+            !/^[A-Za-z0-9_-]{43}$/.test(candidate.recoveryCapability) ||
+            typeof candidate.serviceId !== 'string' ||
+            typeof candidate.date !== 'string' ||
+            typeof candidate.startsAt !== 'string' ||
+            typeof candidate.serviceEndsAt !== 'string'
+        ) {
+            return null;
+        }
+        return candidate as StoredBookingIntent;
+    } catch {
+        return null;
+    }
+}
+
+function readStoredBookingIntent(slug: string): StoredBookingIntent | null {
+    try {
+        return parseStoredBookingIntent(
+            window.localStorage.getItem(bookingIntentStorageKey(slug)),
+        );
+    } catch {
+        return null;
+    }
+}
+
+async function withBookingIntentLock<T>(
+    slug: string,
+    action: () => T | Promise<T>,
+): Promise<T> {
+    if (!navigator.locks)
+        throw new Error(
+            'Web Locks API indisponível para reservar com segurança.',
+        );
+    return navigator.locks.request(
+        'kronos.public-booking.intent.' + slug,
+        { mode: 'exclusive' },
+        action,
+    );
+}
+
+function persistBookingIntent(
+    slug: string,
+    intent: StoredBookingIntent,
+): boolean {
+    try {
+        window.localStorage.setItem(
+            bookingIntentStorageKey(slug),
+            JSON.stringify(intent),
+        );
+        return true;
+    } catch {
+        return false;
+    }
+}
 
 export function unavailableBookingOutcome(wasUncertain: boolean) {
     return wasUncertain
@@ -249,18 +342,34 @@ function PublicPageContent({
     slug: string;
     apiBaseUrl?: string;
 }) {
+    const [storedIntent, setStoredIntent] = useState(() =>
+        readStoredBookingIntent(slug),
+    );
+    const [recoveryLookupIntent, setRecoveryLookupIntent] = useState(() =>
+        readStoredBookingIntent(slug),
+    );
+    const [initialStoredDate] = useState(() => storedIntent?.date ?? '');
     const [business, setBusiness] = useState<PublicBusiness | null>(null);
     const [services, setServices] = useState<PublicService[]>([]);
     const [servicesState, setServicesState] =
         useState<PublicPageState>('loading');
-    const [serviceId, setServiceId] = useState('');
-    const [date, setDate] = useState('');
+    const [serviceId, setServiceId] = useState(
+        () => storedIntent?.serviceId ?? '',
+    );
+    const [date, setDate] = useState(() => storedIntent?.date ?? '');
     const [availability, setAvailability] = useState<PublicAvailability | null>(
         null,
     );
     const [availabilityState, setAvailabilityState] =
         useState<PublicPageState>('loading');
-    const [selectedSlot, setSelectedSlot] = useState<PublicSlot | null>(null);
+    const [selectedSlot, setSelectedSlot] = useState<PublicSlot | null>(() =>
+        storedIntent
+            ? {
+                  startsAt: storedIntent.startsAt,
+                  serviceEndsAt: storedIntent.serviceEndsAt,
+              }
+            : null,
+    );
     const [clientName, setClientName] = useState('');
     const [clientPhone, setClientPhone] = useState('');
     const [bookingState, setBookingState] = useState<
@@ -270,13 +379,22 @@ function PublicPageContent({
         | 'validation-error'
         | 'slot-conflict'
         | 'unavailable'
+        | 'recovery-unavailable'
         | 'error'
         | 'confirmed'
-    >('idle');
-    const [bookingMessage, setBookingMessage] = useState('');
+    >(storedIntent ? 'uncertain' : 'idle');
+    const [bookingMessage, setBookingMessage] = useState(
+        storedIntent ? 'Verificando a intenção anterior…' : '',
+    );
     const [confirmation, setConfirmation] =
         useState<PublicBookingConfirmation | null>(null);
     const [availabilityRefresh, setAvailabilityRefresh] = useState(0);
+    const [recoveryRefresh, setRecoveryRefresh] = useState(0);
+    const [recoveryNeedsDetails, setRecoveryNeedsDetails] = useState(false);
+    const [recoveryLookupFailed, setRecoveryLookupFailed] = useState(false);
+    const [recoveryFromReload, setRecoveryFromReload] = useState(() =>
+        Boolean(storedIntent),
+    );
     const [announcement, setAnnouncement] = useState('');
     const [errorMessage, setErrorMessage] = useState('');
     const availabilityRequests = useRef(new LatestRequest());
@@ -284,10 +402,71 @@ function PublicPageContent({
     const selectionMade = useRef(false);
     const bookingInFlight = useRef(false);
     const bookingIntent = useRef<{
-        fingerprint: string;
+        fingerprint: string | null;
         key: string;
-        body: PublicBookingRequest;
+        recoveryCapability: string;
+        body: PublicBookingRequest | null;
     } | null>(null);
+
+    useEffect(() => {
+        bookingIntent.current = null;
+        const stored = recoveryLookupIntent;
+        if (!stored) return;
+        bookingIntent.current = {
+            fingerprint: null,
+            key: stored.idempotencyKey,
+            recoveryCapability: stored.recoveryCapability,
+            body: null,
+        };
+        void getPublicBookingIntent(slug, stored.recoveryCapability, apiBaseUrl)
+            .then((result: PublicBookingRecovery) => {
+                if (result.state === 'COMPLETED') {
+                    setConfirmation(result.receipt);
+                    setBookingState('confirmed');
+                    setBookingMessage('Reserva original recuperada.');
+                    setAnnouncement('Reserva confirmada recuperada.');
+                } else {
+                    setRecoveryNeedsDetails(true);
+                    setBookingState('uncertain');
+                    setBookingMessage(
+                        'Ainda não há confirmação disponível. Reintroduza os mesmos dados para reconciliar a intenção original; não será criada outra chave.',
+                    );
+                }
+            })
+            .catch((error: unknown) => {
+                if (
+                    error instanceof PublicBookingError &&
+                    error.status === 404
+                ) {
+                    setBookingState('recovery-unavailable');
+                    setBookingMessage(
+                        'Não foi possível autorizar a recuperação desta intenção. Não inicie outra reserva; tente consultar novamente ou procure o atendimento do negócio.',
+                    );
+                } else {
+                    setBookingState('uncertain');
+                    setRecoveryLookupFailed(true);
+                    setBookingMessage(
+                        'A recuperação está temporariamente indisponível. O resultado continua incerto; consulte novamente antes de qualquer nova intenção.',
+                    );
+                }
+            });
+    }, [apiBaseUrl, recoveryLookupIntent, recoveryRefresh, slug]);
+
+    useEffect(() => {
+        const onStorage = (event: StorageEvent) => {
+            if (event.key === bookingIntentStorageKey(slug)) {
+                if (bookingInFlight.current || bookingState === 'confirmed')
+                    return;
+                const nextIntent = parseStoredBookingIntent(event.newValue);
+                if (nextIntent) {
+                    adoptSharedIntent(nextIntent);
+                    setRecoveryRefresh((current) => current + 1);
+                }
+            }
+        };
+        window.addEventListener('storage', onStorage);
+        return () => window.removeEventListener('storage', onStorage);
+    }, [bookingState, slug]);
 
     useEffect(() => {
         const requests = businessRequests.current;
@@ -302,7 +481,7 @@ function PublicPageContent({
                 if (!request.isCurrent()) return;
                 setBusiness(publicBusiness);
                 setServices(publicServices);
-                setDate('');
+                setDate((current) => current || initialStoredDate);
                 setServicesState(
                     publicServices.length === 0 ? 'empty-services' : 'ready',
                 );
@@ -334,7 +513,7 @@ function PublicPageContent({
             });
 
         return () => requests.cancel();
-    }, [apiBaseUrl, slug]);
+    }, [apiBaseUrl, initialStoredDate, slug]);
 
     useEffect(() => {
         const requests = availabilityRequests.current;
@@ -452,6 +631,90 @@ function PublicPageContent({
         setBookingMessage('');
     }
 
+    function discardResolvedIntent() {
+        const sharedIntent = readStoredBookingIntent(slug);
+        if (
+            sharedIntent &&
+            bookingIntent.current &&
+            sharedIntent.idempotencyKey !== bookingIntent.current.key
+        ) {
+            return sharedIntent;
+        }
+        window.localStorage.removeItem(bookingIntentStorageKey(slug));
+        bookingIntent.current = null;
+        setStoredIntent(null);
+        setRecoveryLookupIntent(null);
+        setRecoveryFromReload(false);
+        setRecoveryNeedsDetails(false);
+        setRecoveryLookupFailed(false);
+        return null;
+    }
+
+    function adoptSharedIntent(intent: StoredBookingIntent) {
+        bookingIntent.current = {
+            fingerprint: null,
+            key: intent.idempotencyKey,
+            recoveryCapability: intent.recoveryCapability,
+            body: null,
+        };
+        setStoredIntent(intent);
+        setRecoveryLookupIntent(intent);
+        setServiceId(intent.serviceId);
+        setDate(intent.date);
+        setSelectedSlot({
+            startsAt: intent.startsAt,
+            serviceEndsAt: intent.serviceEndsAt,
+        });
+        setRecoveryFromReload(true);
+        setBookingState('uncertain');
+        setBookingMessage(
+            'Outra aba iniciou esta intenção. Verificando o resultado…',
+        );
+    }
+
+    async function startAnotherBooking() {
+        let intentFromOtherTab: StoredBookingIntent | null;
+        try {
+            intentFromOtherTab = await withBookingIntentLock(slug, () => {
+                const sharedIntent = readStoredBookingIntent(slug);
+                if (
+                    sharedIntent &&
+                    (!storedIntent ||
+                        sharedIntent.idempotencyKey !==
+                            storedIntent.idempotencyKey)
+                ) {
+                    return sharedIntent;
+                }
+                window.localStorage.removeItem(bookingIntentStorageKey(slug));
+                return null;
+            });
+        } catch {
+            setBookingState('error');
+            setBookingMessage(
+                'Este navegador não oferece coordenação segura entre abas. Atualize o navegador antes de iniciar outra reserva.',
+            );
+            return;
+        }
+        if (intentFromOtherTab) {
+            adoptSharedIntent(intentFromOtherTab);
+            setRecoveryRefresh((current) => current + 1);
+            return;
+        }
+        discardResolvedIntent();
+        setConfirmation(null);
+        setSelectedSlot(null);
+        setBookingState('idle');
+        setBookingMessage('');
+        setClientName('');
+        setClientPhone('');
+        setAvailability(null);
+        setAvailabilityState('loading');
+        setAvailabilityRefresh((current) => current + 1);
+        setAnnouncement(
+            'Escolha outro horário para iniciar uma nova intenção.',
+        );
+    }
+
     async function submitBooking(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
         if (
@@ -480,14 +743,85 @@ function PublicPageContent({
             client: { name, phone },
         };
         const fingerprint = JSON.stringify([slug, body]);
-        if (bookingIntent.current?.fingerprint !== fingerprint) {
-            bookingIntent.current = {
-                fingerprint,
-                key: newPublicBookingKey(),
-                body,
-            };
+        let claim: BookingIntentClaim;
+        try {
+            claim = await withBookingIntentLock(slug, () => {
+                const sharedIntent = readStoredBookingIntent(slug);
+                const activeIntent = bookingIntent.current;
+                if (sharedIntent) {
+                    const sameSlot =
+                        sharedIntent.serviceId === serviceId &&
+                        sharedIntent.date === date &&
+                        sharedIntent.startsAt === selectedSlot.startsAt;
+                    if (!sameSlot)
+                        return { blocked: true as const, sharedIntent };
+                    const claimedIntent = {
+                        fingerprint,
+                        key: sharedIntent.idempotencyKey,
+                        recoveryCapability: sharedIntent.recoveryCapability,
+                        body,
+                    };
+                    bookingIntent.current = claimedIntent;
+                    return { blocked: false as const, claimedIntent };
+                }
+                const claimedIntent =
+                    activeIntent &&
+                    (activeIntent.fingerprint === fingerprint ||
+                        bookingState === 'uncertain')
+                        ? { ...activeIntent, fingerprint, body }
+                        : {
+                              fingerprint,
+                              key: newPublicBookingKey(),
+                              recoveryCapability:
+                                  newPublicBookingRecoveryCapability(),
+                              body,
+                          };
+                const persisted = {
+                    idempotencyKey: claimedIntent.key,
+                    recoveryCapability: claimedIntent.recoveryCapability,
+                    serviceId,
+                    date,
+                    startsAt: selectedSlot.startsAt,
+                    serviceEndsAt: selectedSlot.serviceEndsAt,
+                };
+                if (!persistBookingIntent(slug, persisted))
+                    return { blocked: true as const, sharedIntent: null };
+                bookingIntent.current = claimedIntent;
+                return { blocked: false as const, claimedIntent };
+            });
+        } catch {
+            setBookingState('error');
+            setBookingMessage(
+                'Este navegador não oferece coordenação segura entre abas. Atualize o navegador para evitar reservas duplicadas.',
+            );
+            return;
         }
-        const intent = bookingIntent.current;
+        if (claim.blocked) {
+            if (claim.sharedIntent) {
+                adoptSharedIntent(claim.sharedIntent);
+                setBookingMessage(
+                    'Outra aba mantém uma intenção diferente sem resultado confirmado. Recupere-a antes de escolher outro horário.',
+                );
+                setRecoveryRefresh((current) => current + 1);
+            } else {
+                setBookingState('error');
+                setBookingMessage(
+                    'Não foi possível preservar a identidade desta intenção neste navegador. A reserva não foi enviada.',
+                );
+            }
+            return;
+        }
+        const intent = claim.claimedIntent;
+        const persistedIntent = {
+            idempotencyKey: intent.key,
+            recoveryCapability: intent.recoveryCapability,
+            serviceId,
+            date,
+            startsAt: selectedSlot.startsAt,
+            serviceEndsAt: selectedSlot.serviceEndsAt,
+        };
+        setStoredIntent(persistedIntent);
+        setRecoveryLookupFailed(false);
         const retryingUncertainIntent = bookingState === 'uncertain';
         bookingInFlight.current = true;
         setBookingState('submitting');
@@ -495,8 +829,9 @@ function PublicPageContent({
         try {
             const result = await createPublicBooking(
                 slug,
-                intent.body,
+                body,
                 intent.key,
+                intent.recoveryCapability,
                 apiBaseUrl,
             );
             setConfirmation(result);
@@ -508,14 +843,29 @@ function PublicPageContent({
         } catch (error: unknown) {
             if (error instanceof PublicBookingError) {
                 if (error.phase === 'csrf') {
-                    setBookingState('error');
+                    setBookingState(
+                        retryingUncertainIntent ? 'uncertain' : 'error',
+                    );
                     setBookingMessage(
-                        'Não foi possível iniciar a solicitação protegida. Tente novamente.',
+                        retryingUncertainIntent
+                            ? 'Não foi possível verificar a proteção. A intenção original permanece incerta; tente recuperar novamente.'
+                            : 'Não foi possível iniciar a solicitação protegida. Tente novamente.',
+                    );
+                } else if (error.code === 'IDEMPOTENCY_KEY_REUSED') {
+                    setBookingState('uncertain');
+                    setRecoveryNeedsDetails(false);
+                    setBookingMessage(
+                        'Esta chave já está vinculada a outro conteúdo. A intenção original foi preservada; não altere nem inicie outra reserva até recuperar o resultado.',
                     );
                 } else if (
                     error.status === 400 &&
                     error.code === 'INVALID_APPOINTMENT_TIME'
                 ) {
+                    const otherIntent = discardResolvedIntent();
+                    if (otherIntent) {
+                        adoptSharedIntent(otherIntent);
+                        return;
+                    }
                     setSelectedSlot(null);
                     setAvailability(null);
                     setAvailabilityState('loading');
@@ -525,6 +875,11 @@ function PublicPageContent({
                     );
                     setAvailabilityRefresh((current) => current + 1);
                 } else if (error.status === 400) {
+                    const otherIntent = discardResolvedIntent();
+                    if (otherIntent) {
+                        adoptSharedIntent(otherIntent);
+                        return;
+                    }
                     setBookingState('validation-error');
                     setBookingMessage(
                         'Confira o nome e o telefone e tente novamente.',
@@ -533,6 +888,11 @@ function PublicPageContent({
                     error.status === 409 &&
                     error.code === 'SLOT_NO_LONGER_AVAILABLE'
                 ) {
+                    const otherIntent = discardResolvedIntent();
+                    if (otherIntent) {
+                        adoptSharedIntent(otherIntent);
+                        return;
+                    }
                     setSelectedSlot(null);
                     setAvailability(null);
                     setAvailabilityState('loading');
@@ -542,11 +902,16 @@ function PublicPageContent({
                     );
                     setAvailabilityRefresh((current) => current + 1);
                 } else if (error.status === 404) {
-                    const outcome = unavailableBookingOutcome(
-                        retryingUncertainIntent,
-                    );
-                    setBookingState(outcome.state);
-                    setBookingMessage(outcome.message);
+                    if (retryingUncertainIntent || error.phase === 'prepare') {
+                        setBookingState('uncertain');
+                        setBookingMessage(
+                            'A página deixou de estar disponível e o resultado da intenção original não pôde ser verificado. Não inicie outra reserva.',
+                        );
+                    } else {
+                        const outcome = unavailableBookingOutcome(false);
+                        setBookingState(outcome.state);
+                        setBookingMessage(outcome.message);
+                    }
                 } else if (error.status === 503) {
                     setBookingState('unavailable');
                     setBookingMessage(
@@ -554,6 +919,8 @@ function PublicPageContent({
                     );
                 } else if (error.outcomeUnknown) {
                     setBookingState('uncertain');
+                    setRecoveryNeedsDetails(false);
+                    setRecoveryFromReload(false);
                     setBookingMessage(
                         'Não foi possível confirmar o resultado do envio. Seus dados e a chave da operação foram preservados. Tente novamente para consultar a mesma operação.',
                     );
@@ -563,6 +930,7 @@ function PublicPageContent({
                 }
             } else {
                 setBookingState('uncertain');
+                setRecoveryNeedsDetails(false);
                 setBookingMessage(
                     'Não foi possível confirmar o resultado do envio. Seus dados e a chave da operação foram preservados. Tente novamente para consultar a mesma operação.',
                 );
@@ -580,7 +948,8 @@ function PublicPageContent({
     const bookingControlsLocked =
         bookingState === 'submitting' ||
         bookingState === 'confirmed' ||
-        bookingState === 'uncertain';
+        bookingState === 'uncertain' ||
+        bookingState === 'recovery-unavailable';
 
     return (
         <main className="public-page">
@@ -607,6 +976,69 @@ function PublicPageContent({
                 {announcement ||
                     (servicesState === 'loading' ? 'Carregando página…' : '')}
             </output>
+
+            {recoveryFromReload && (
+                <section
+                    className="public-page__panel"
+                    aria-labelledby="recovery-heading"
+                    aria-live="polite"
+                >
+                    <h2 id="recovery-heading">Recuperação da reserva</h2>
+                    <output>{bookingMessage}</output>
+                    {recoveryLookupFailed && (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setBookingMessage('Consultando a intenção…');
+                                setRecoveryLookupFailed(false);
+                                setRecoveryRefresh((current) => current + 1);
+                            }}
+                        >
+                            Consultar novamente
+                        </button>
+                    )}
+                    {recoveryNeedsDetails && (
+                        <p>
+                            Por privacidade, nome e telefone não foram salvos.
+                            Reintroduza os mesmos dados para reenviar a mesma
+                            intenção.
+                        </p>
+                    )}
+                </section>
+            )}
+
+            {bookingState === 'confirmed' && confirmation && (
+                <section
+                    className="public-page__confirmation"
+                    aria-labelledby="booking-confirmed-heading"
+                    aria-live="polite"
+                >
+                    <h2 id="booking-confirmed-heading">Reserva confirmada</h2>
+                    <p>
+                        {confirmation.serviceName} em{' '}
+                        {formatDate(
+                            localDate(
+                                confirmation.startsAt,
+                                confirmation.timeZone,
+                            ),
+                            confirmation.timeZone,
+                        )}{' '}
+                        às{' '}
+                        {formatTime(
+                            confirmation.startsAt,
+                            confirmation.timeZone,
+                        )}{' '}
+                        · {confirmation.timeZone}.
+                    </p>
+                    <p>
+                        Código da reserva:{' '}
+                        <strong>{confirmation.appointmentId}</strong>
+                    </p>
+                    <button type="button" onClick={startAnotherBooking}>
+                        Fazer outra reserva
+                    </button>
+                </section>
+            )}
 
             {servicesState === 'loading' && (
                 <section className="public-page__panel" aria-busy="true">
@@ -858,7 +1290,10 @@ function PublicPageContent({
                                             );
                                             resetBookingFeedback();
                                         }}
-                                        disabled={bookingControlsLocked}
+                                        disabled={
+                                            bookingControlsLocked &&
+                                            !recoveryNeedsDetails
+                                        }
                                         aria-invalid={
                                             bookingState ===
                                                 'validation-error' &&
@@ -884,7 +1319,10 @@ function PublicPageContent({
                                             );
                                             resetBookingFeedback();
                                         }}
-                                        disabled={bookingControlsLocked}
+                                        disabled={
+                                            bookingControlsLocked &&
+                                            !recoveryNeedsDetails
+                                        }
                                         aria-invalid={
                                             bookingState ===
                                                 'validation-error' &&
@@ -899,6 +1337,7 @@ function PublicPageContent({
                                         telefone não verifica sua identidade.
                                     </p>
                                     {bookingMessage &&
+                                        !recoveryFromReload &&
                                         bookingState !== 'confirmed' && (
                                             <p
                                                 className="public-page__booking-message"
@@ -922,49 +1361,21 @@ function PublicPageContent({
                                         type="submit"
                                         disabled={
                                             bookingState === 'submitting' ||
-                                            bookingState === 'confirmed'
+                                            bookingState === 'confirmed' ||
+                                            bookingState ===
+                                                'recovery-unavailable' ||
+                                            recoveryLookupFailed
                                         }
                                     >
                                         {bookingState === 'submitting'
                                             ? 'Enviando…'
                                             : bookingState === 'uncertain'
-                                              ? 'Tentar novamente com segurança'
+                                              ? recoveryNeedsDetails
+                                                  ? 'Reenviar a mesma intenção'
+                                                  : 'Tentar novamente com segurança'
                                               : 'Confirmar reserva'}
                                     </button>
                                 </form>
-                            )}
-                            {bookingState === 'confirmed' && confirmation && (
-                                <section
-                                    className="public-page__confirmation"
-                                    aria-labelledby="booking-confirmed-heading"
-                                    aria-live="polite"
-                                >
-                                    <h3 id="booking-confirmed-heading">
-                                        Reserva confirmada
-                                    </h3>
-                                    <p>
-                                        {confirmation.serviceName} em{' '}
-                                        {formatDate(
-                                            localDate(
-                                                confirmation.startsAt,
-                                                confirmation.timeZone,
-                                            ),
-                                            confirmation.timeZone,
-                                        )}{' '}
-                                        às{' '}
-                                        {formatTime(
-                                            confirmation.startsAt,
-                                            confirmation.timeZone,
-                                        )}
-                                        .
-                                    </p>
-                                    <p>
-                                        Código da reserva:{' '}
-                                        <strong>
-                                            {confirmation.appointmentId}
-                                        </strong>
-                                    </p>
-                                </section>
                             )}
                         </section>
                     )}

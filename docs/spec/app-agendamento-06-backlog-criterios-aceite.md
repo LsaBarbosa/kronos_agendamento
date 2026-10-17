@@ -181,6 +181,13 @@ Critérios de aceite:
 - Timeout seguido de retry retorna o compromisso original quando confirmado.
 - Reutilização incompatível não é ocultada.
 - Operação em andamento possui estado consultável ou mensagem segura para aguardar.
+- A identidade e o vínculo de recuperação existem antes do envio que pode confirmar a reserva; perda da resposta do preparo não autoriza envio confirmador.
+- Reload recupera a mesma intenção sem PII no browser storage, URL, histórico ou telemetria; campos pessoais são reintroduzidos e validados contra o digest original.
+- Consulta da intenção é read-only, tenant-scoped e devolve somente estado/receipt mínimo; não é acesso autenticado do cliente nem consulta por telefone.
+- Estado sem receipt é incerto e nunca libera nova chave automaticamente; operação concorrente, timeout e falha da consulta mantêm ação segura.
+- Múltiplas abas/cliques da mesma intenção reutilizam chave/capability e produzem uma reserva, história, auditoria e evento lógico.
+- Digest de novos comandos públicos usa HMAC-SHA-256 e canonicalização versionada com keyId; configuração/keyring estáveis são obrigatórios, rotação mantém chaves históricas, e chave necessária ausente falha de modo seguro.
+- Digests legados SHA-256 permanecem replayáveis sem reescrever registros; teste prova compatibilidade. Segredos HMAC não aparecem em banco, logs, browser ou código de produção.
 
 ## 5. Incremento C — Operação administrativa e cliente
 

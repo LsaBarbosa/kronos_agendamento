@@ -68,9 +68,13 @@ public class SecurityConfiguration {
                         "/api/v1/public/*/services/*",
                         "/api/v1/public/*/availability")
                     .permitAll()
+                    .requestMatchers(HttpMethod.GET, "/api/v1/public/*/booking-intents/current")
+                    .permitAll()
                     .requestMatchers(HttpMethod.POST, "/api/v1/public/*/telemetry")
                     .permitAll()
                     .requestMatchers(HttpMethod.POST, "/api/v1/public/*/appointments")
+                    .permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/v1/public/*/booking-intents/current")
                     .permitAll()
                     .requestMatchers("/oauth2/**", "/login/**")
                     .permitAll()
