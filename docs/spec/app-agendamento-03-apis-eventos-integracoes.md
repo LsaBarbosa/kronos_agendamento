@@ -327,7 +327,7 @@ Somente `CONFIRMED` pode transitar. Replays revalidam autorização atual antes 
 
 **Pendente de decisão de produto (17/10/2026):** a especificação não fixa quando `COMPLETED` ou `NO_SHOW` se tornam elegíveis, inclusive igualdade no limite. Como proteção provisória e não aprovada, a implementação rejeita conclusão antes de `service_ends_at` e falta antes de `occupied_until`, permitindo igualdade; não existe tolerância de dez minutos. O critério temporal segue parcial até decisão explícita. Cancelamento não recebe essa barreira temporal.
 
-Cancelamento pelo cliente permanece sujeito à política, mas não há rota mutável nesta história: identidade verificada depende de AGD-024/025. Lembretes/notificações efetivos dependem de AGD-030/031; contagem/restrição automática por falta depende de AGD-032/033.
+Cancelamento pelo cliente permanece sujeito ao `cancellationCutoffHours`, mas não há rota mutável nesta história: identidade verificada depende de AGD-024/025. Como preparação de domínio, a política pura calcula elegibilidade somente antes do instante `startsAt - cancellationCutoffHours`; a igualdade é uma proposta conservadora não aprovada e continua em `OPEN-QUESTIONS.md`. Não liberar a rota nem interpretar telefone/capability como autenticação. Lembretes/notificações efetivos dependem de AGD-030/031; contagem/restrição automática por falta depende de AGD-032/033.
 
 #### Consulta administrativa da agenda (AGD-020)
 

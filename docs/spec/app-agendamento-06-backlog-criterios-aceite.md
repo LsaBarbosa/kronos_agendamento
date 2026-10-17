@@ -242,7 +242,7 @@ Critérios de aceite:
 - Retry do mesmo comando é idempotente.
 - Cancelamento libera ocupação apenas após commit.
 
-**Limite sem decisão de produto (17/10/2026):** a elegibilidade temporal de conclusão/falta e a igualdade nos limites não são definidos. A regra conservadora temporária está descrita no contrato de API e em `OPEN-QUESTIONS.md`; manter esse critério parcial até aprovação explícita. Cancelamento administrativo não exige serviço ativo. A rota de cancelamento pelo cliente depende de identidade verificada AGD-024/025.
+**Limite sem decisão de produto (17/10/2026):** a elegibilidade temporal de conclusão/falta e a igualdade nos limites não são definidos. A regra conservadora temporária está descrita no contrato de API e em `OPEN-QUESTIONS.md`; manter esse critério parcial até aprovação explícita. O domínio calcula a política de cancelamento pelo cutoff configurado, mas a igualdade também aguarda decisão e não há rota pública mutável. Cancelamento administrativo não exige serviço ativo. A rota de cancelamento pelo cliente depende de identidade verificada AGD-024/025.
 
 ### AGD-024 — Código de acesso por WhatsApp
 

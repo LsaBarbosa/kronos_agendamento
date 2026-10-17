@@ -134,6 +134,8 @@ A disponibilidade de um serviço é a interseção de:
 | Antecedência mínima | de 1 a 24 horas, configurável |
 | Janela máxima de reserva | 7, 30, 60 ou 90 dias |
 | Limite para cancelamento pelo cliente | de 2 a 24 horas antes do início |
+
+AGD-023 prepara uma política pura baseada no cutoff configurado. A igualdade com `startsAt - cancellationCutoffHours` ainda não foi decidida e a proposta conservadora de rejeitá-la não é regra aprovada. A rota de cancelamento continua fechada até identidade verificada em AGD-024/025.
 | Lembrete único | 2, 6, 12 ou 24 horas antes do início |
 
 ### 5.5 Horário de verão e relógio

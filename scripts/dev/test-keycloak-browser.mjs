@@ -485,9 +485,21 @@ try {
       document.querySelector('[data-appointment-id="${secondAppointmentId}"] button')?.click();
       [...document.querySelectorAll('button')].find(button => button.innerText === 'Fechar detalhes')?.click();
     })()`);
-    await waitUntil(() =>
-        evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('Visitante de demonstração') && [...document.querySelectorAll('[role=alert]')].some(alert => alert.innerText.includes('Resolva primeiro a remarcação'))`),
-    );
+    const guardedNavigation = await evaluate(`(() => ({
+      detail: document.querySelector('.admin-agenda__details')?.innerText,
+      closeDisabled: [...document.querySelectorAll('button')].find(button => button.innerText === 'Fechar detalhes')?.disabled,
+      periodDisabled: [...document.querySelectorAll('button')].find(button => button.innerText === 'Próximo período')?.disabled,
+    }))()`);
+    if (
+        !guardedNavigation.closeDisabled ||
+        !guardedNavigation.periodDisabled ||
+        !guardedNavigation.detail.includes('Visitante de demonstração') ||
+        guardedNavigation.detail.includes('Segundo visitante de demonstração')
+    ) {
+        throw new Error(
+            `A navegação alterou a associação durante o POST pendente: ${JSON.stringify(guardedNavigation)}`,
+        );
+    }
     await evaluate('window.__releaseRescheduleResponse?.()');
     await waitForText('A resposta não chegou; o resultado pode estar confirmado.', evaluate);
     const uncertainAssociation = await evaluate(`(() => ({
