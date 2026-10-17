@@ -33,7 +33,7 @@
 - O vínculo de recuperação e digest são persistidos antes do POST confirmador. Mutação, receipt idempotente, história, auditoria e outbox permanecem na transação AGD-015.
 - Retry exige mesmo tenant/slug, chave e digest; gates atuais são revalidados antes do replay. Uma consulta não muta, não cria cliente/reserva e não registra auditoria de sucesso.
 - Respostas e logs não incluem capability, chave bruta, cookies, nome, telefone, request ou chaves HMAC. A capability não aparece em URL/referrer.
-- A capability expira tecnicamente 30 dias após o prebind; após isso, o lookup retorna indisponível e não permite nova intenção automática. Essa validade é independente da retenção de negócio. Não há rotina de exclusão: vínculo, idempotência, auditoria, histórico, outbox e reserva não são apagados por esta expiração.
+- A capability expira tecnicamente 7 dias após o prebind, limite suficiente para retornar e reconciliar a mesma intenção após falha/reload sem mantê-la acessível por todo o horizonte de reservas. Após isso, o lookup retorna indisponível e não permite nova intenção automática. Essa validade é independente da retenção de negócio. Não há rotina de exclusão: vínculo, idempotência, auditoria, histórico, outbox e reserva não são apagados por esta expiração.
 
 ## Critérios verificáveis
 
@@ -51,7 +51,8 @@
 ## Estado e evidências
 
 - [x] Revisão e integração AGD-015 (PR #10) em merge commit `2ea1914820c533092fcb5429367c97f432ce89c9`; CI push/PR do head corrigido passou. A revisão final encontrou somente lacuna P2 de teste integrado específico do 404 após estado incerto.
-- [x] Schema/adapters/API de prebind e recovery com validade técnica de 30 dias, sem expurgo de registros de negócio.
+- [x] Schema/adapters/API de prebind e recovery com validade técnica de 7 dias; expiração é somente de acesso e não expurga registros de negócio.
+- [x] Revisão do prazo: sete dias cobrem retorno/reconciliação após falha de transporte sem manter a capability acessível durante todo o horizonte de reservas; o prazo limita acesso, não define retenção. A ameaça XSS permanece explícita porque a capability bearer é lida pelo JavaScript; CSP não foi encontrada na configuração atual.
 - [x] HMAC versionado, configuração validada e compatibilidade de replay legado.
 - [x] Recuperação após reload, corpo em memória apenas, reentrada segura de nome/telefone, sincronização entre abas e ação explícita para iniciar uma nova intenção após receipt confirmado.
 - [x] PostgreSQL real/Testcontainers: binding/recovery, read-only, isolamento por capability/slug, expiração lógica, digest legado/rotação, replay HMAC persistido depois da rotação e corrida compartilhada; Flyway V1–V14 fresh, V13→V14, validate/rerun e grants.
@@ -61,4 +62,4 @@
 
 ## Limites
 
-AGD-016 não remove risco de PII: cliente/reserva continuam dados pessoais no banco; recovery capability é bearer com privilégio restrito e validade de 30 dias. Expiração lógica não executa expurgo físico. Prontidão legal/comercial, HTTPS/staging, preflight hospedado, scan completo, retenção aprovada e integrações reais continuam pendentes. Não habilitar dados reais nem alterar os gates de publicação.
+AGD-016 não remove risco de PII: cliente/reserva continuam dados pessoais no banco; recovery capability é bearer acessível ao JavaScript, com privilégio restrito e validade técnica de 7 dias. XSS/browser comprometido ainda pode consultar o estado e receipt mínimo durante esse prazo; escaping React e ausência de HTML dinâmico reduzem superfícies, mas não substituem CSP/controles de deployment. Expiração lógica não executa expurgo físico. Prontidão legal/comercial, HTTPS/staging, preflight hospedado, scan completo, retenção aprovada e integrações reais continuam pendentes. Não habilitar dados reais nem alterar os gates de publicação.

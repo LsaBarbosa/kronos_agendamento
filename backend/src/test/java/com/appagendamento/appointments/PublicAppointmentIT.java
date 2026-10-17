@@ -277,6 +277,15 @@ class PublicAppointmentIT {
         .andExpect(status().isNoContent());
     recoveryCapabilities.put(key, capability);
 
+    double lifetimeSeconds =
+        appJdbc.queryForObject(
+            "SELECT extract(epoch FROM (expires_at - created_at)) FROM agendamento.public_booking_intent WHERE tenant_id = ? AND command_scope = ? AND key_digest = ?",
+            Double.class,
+            tenantId,
+            "appointments.public.create.v1",
+            com.appagendamento.idempotency.application.IdempotencyKey.digest(key));
+    assertThat(lifetimeSeconds).isBetween(604_790.0, 604_810.0);
+
     int appointmentsBefore = count("appointment", tenantId);
     int clientsBefore = count("client", tenantId);
     int historiesBefore = count("appointment_history", tenantId);
@@ -326,7 +335,7 @@ class PublicAppointmentIT {
                 .header("X-Booking-Recovery", "invalid"))
         .andExpect(status().isNotFound());
     migrationJdbc.update(
-        "UPDATE agendamento.public_booking_intent SET created_at = clock_timestamp() - interval '31 days', expires_at = clock_timestamp() - interval '1 second' WHERE tenant_id = ? AND command_scope = ? AND key_digest = ?",
+        "UPDATE agendamento.public_booking_intent SET created_at = clock_timestamp() - interval '8 days', expires_at = clock_timestamp() - interval '1 second' WHERE tenant_id = ? AND command_scope = ? AND key_digest = ?",
         tenantId,
         "appointments.public.create.v1",
         com.appagendamento.idempotency.application.IdempotencyKey.digest(key));

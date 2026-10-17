@@ -12,7 +12,7 @@ paths:
           type: string
     post:
       summary: Bind a recovery capability before creating the appointment
-      description: Requires CSRF. Capability expires 30 days after binding; expiration disables lookup but does not delete a booking or receipt. Persists only an HMAC digest and minimum intent references; never persists the request body or PII.
+      description: Requires CSRF. Capability expires 7 days after binding to allow recovery after a delayed return; expiration disables lookup but does not delete a booking or receipt or permit a new intent. Persists only an HMAC digest and minimum intent references; never persists the request body or PII.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/RecoveryCapability'

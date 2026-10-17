@@ -17,7 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class PreparePublicBookingIntent {
 
   static final String COMMAND_SCOPE = "appointments.public.create.v1";
-  private static final Duration CAPABILITY_LIFETIME = Duration.ofDays(30);
+  private static final Duration CAPABILITY_LIFETIME = Duration.ofDays(7);
 
   private final PublicBookingGate gate;
   private final ServiceAvailabilityQuery services;

@@ -1,6 +1,6 @@
 # ADR-0015 — Recuperação de intenção pública e digest HMAC
 
-- **Status:** Aceita; validade técnica de 30 dias para a capability, sem política de expurgo físico dos registros.
+- **Status:** Aceita; validade técnica de 7 dias para a capability, sem política de expurgo físico dos registros.
 - **Data:** 16/10/2026.
 - **Contexto:** o retry AGD-015 recupera resultado enquanto a página permanece montada, mas reload perde chave/corpo em memória. O SHA-256 sem chave do comando público permite enumeração offline de campos prováveis se o banco for copiado.
 
@@ -12,14 +12,14 @@
 4. `GET` de recovery é somente leitura. Se ainda não houver receipt visível, retorna estado de resultado incerto; não declara que a confirmação falhou, não autoriza nova chave e não confirma a reserva. Reenvio exige mesma chave e comando, e revalida gates atuais. Mismatch é explícito. Receipt concluído retorna DTO mínimo sem nome/telefone.
 5. Digest novo usa `HmacSHA256`, canonicalização `appointments.public.create.canonical.v2` length-prefixed e valor persistido `hmac-sha256:v2:<keyId>:<hex>`. Keyring vem de configuração externa validada: key id ativo presente, IDs únicos e chaves de pelo menos 256 bits. Falta/invalidade não permite startup/uso do fluxo, não há fallback nem segredo gerado a cada startup.
 6. Rotação troca keyId ativo e mantém as chaves anteriores necessárias para validar digests já persistidos. Digest contém versão/algoritmo/keyId. Chave antiga necessária mas ausente resulta em falha segura de disponibilidade, não conflito falso. Digests SHA v1 preexistentes são lidos pela canonicalização SHA v1 original com os dados fornecidos; nenhuma linha antiga é reescrita nem recomputada sem dados originais.
-7. V14 altera apenas tipo/constraint compatível de `idempotency_record.request_digest` e cria storage mínimo do vínculo de recovery; V1–V13 permanecem imutáveis. A capability expira 30 dias após o prebind; lookup após esse prazo é não revelador e não autoriza criar outra intenção automaticamente. Expiração lógica não apaga vínculo, idempotência, auditoria, reserva, história ou outbox. Não existe job de expurgo; retenção e exclusão física permanecem sujeitas a política aprovada.
+7. V14 altera apenas tipo/constraint compatível de `idempotency_record.request_digest` e cria storage mínimo do vínculo de recovery; V1–V13 permanecem imutáveis. A capability expira 7 dias após o prebind: esse teto cobre uma semana de retorno após falha de transporte/reload para reconciliar a mesma intenção, sem mantê-la acessível durante todo o horizonte de novas reservas. Depois, lookup é não revelador e não autoriza criar outra intenção automaticamente. Expiração lógica não apaga vínculo, idempotência, auditoria, reserva, história ou outbox. Não existe job de expurgo; retenção e exclusão física permanecem sujeitas a política aprovada.
 8. A operação pública e o replay continuam subordinados ao gate de publicação e aos gates de prontidão; OIDC administrativo não autentica visitante. Nenhum dado real ou fixture de prontidão é liberado por esta ADR.
 
 ## Consequências e trade-offs
 
 - O storage no browser mantém um identificador capability; XSS pode consultar somente o estado e resumo mínimo da reserva da intenção. Nenhum segredo de HMAC é enviado ao navegador.
 - Nome/telefone precisam ser reintroduzidos após reload. Digest determinístico valida equivalência e rejeita alterações sem persistir PII; diferenças de normalização/canonicalização exigem nova versão explícita.
-- Operação não confirmada pode ficar incerta após os 30 dias ou se a capability ficar indisponível; UI não deve transformar isso em reserva nova automaticamente.
+- Operação não confirmada pode ficar incerta após os 7 dias ou se a capability ficar indisponível; UI não deve transformar isso em reserva nova automaticamente. O prazo é um limite técnico de acesso, não retenção de dados nem SLA de suporte; deve ser revisto com evidência de uso antes de eventual mudança.
 - O HMAC reduz enumeração offline do digest sem chave, mas não remove PII de tabelas cliente/reserva nem protege contra comprometimento da aplicação, keyring ou browser.
 - A retenção atual de idempotência/auditoria segue pendente; chaves antigas podem precisar ser mantidas enquanto houver receipts replayáveis.
 
