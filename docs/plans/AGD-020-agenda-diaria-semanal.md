@@ -40,8 +40,8 @@
 
 - [x] Revisar e integrar PR #11 AGD-016: head `18904d1f35ff7737e941836e3d9250701c7fdab6`, merge `1ed82f6f844acf79fd6cb23f184fcbc8ed5f850e`; checks push/PR e pós-merge App CI/CodeQL passaram. Não foi inferida aprovação humana; status e regras consultados permitiram o merge autorizado.
 - [x] Implementar APIs, contratos e interface AGD-020.
-- [ ] Executar browser E2E real no CI. Backend `spotless:check verify` passou: 69 unitários/arquiteturais + 99 integrações PostgreSQL 16.13/Testcontainers; frontend passou Prettier/Oxlint, 23 Vitest, TypeScript/Vite build. Browser E2E real aguarda publicação do PR.
-- [ ] Publicar PR AGD-020 e registrar checks por SHA.
+- [x] Executar browser E2E real no CI. Backend `spotless:check verify` passou: 69 unitários/arquiteturais + 99 integrações PostgreSQL 16.13/Testcontainers; frontend passou Prettier/Oxlint, 23 Vitest, TypeScript/Vite build. Chrome/Keycloak/PostgreSQL E2E passou no SHA `5087d2d510c3c566b694cb923f69e0dc18cca665` em App CI push/PR.
+- [x] Publicar PR AGD-020 [#12](https://github.com/LsaBarbosa/kronos_agendamento/pull/12), branch `agd-020-agenda-diaria-semanal`, head validado `5087d2d510c3c566b694cb923f69e0dc18cca665`; App CI push/PR `39029288453`/`39029291785` e CodeQL push/PR `39029288460`/`39029291781` passaram. PR permanece aberto; não fazer merge/deploy nesta execução.
 
 ## Validação
 
@@ -51,8 +51,8 @@
 | Intervalo, filtros, paginação | Mesmo `verify` focal; métodos `administratorAgendaUsesStableKeysetPagesAndValidatesWindowLimits` e `administratorAgendaIncludesOccupancyThatStartsBeforeTheLocalDateWindow` | Passou em PostgreSQL real: limites/filtros/cursor keyset e inclusão de ocupação que começa antes da janela e nela intersecta. |
 | Snapshot e história | Mesmo `verify` focal; consulta HTTP após confirmação e alteração do catálogo | Passou: snapshot histórico preservado e `appointment_history` inicial consultada sem telefone/capability. |
 | Interface | `PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH npm run format:check && npm run lint && npm test -- --run && npm run check` (`frontend/`) | Passou em 17/10/2026: Prettier, Oxlint, 23 Vitest, TypeScript e Vite build. |
-| Browser E2E | `node --check scripts/dev/test-keycloak-browser.mjs`; job `oidc-browser-e2e` | Script ampliado para verificar reserva PostgreSQL na agenda diária/semanal, detalhe/história, reload e bloqueio; sintaxe Node validada, browser real aguarda execução do CI no PR. |
-| CI remoto | App CI e CodeQL em push/PR no head final | Checks obrigatórios aprovados | Pendente |
+| Browser E2E | `node --check scripts/dev/test-keycloak-browser.mjs`; job `oidc-browser-e2e` | Passou em Chrome/Keycloak/PostgreSQL no SHA `5087d2d510c3c566b694cb923f69e0dc18cca665`, push run `39029288453` e PR run `39029291785`: consulta real da reserva persistida, detalhe/história, snapshot/timezone/buffer, reload, bloqueio e estados de paginação/rede/401. |
+| CI remoto | App CI e CodeQL em push/PR no SHA final funcional | Todos concluíram sucesso: App CI push/PR `39029288453`/`39029291785`; CodeQL push/PR `39029288460`/`39029291781`. |
 
 ## Descobertas e decisões
 
@@ -64,4 +64,5 @@
 
 - Revisões independentes foram solicitadas, mas não puderam iniciar: limite de threads de subagentes atingido. O coordenador revisa sequencialmente; isso não equivale a parecer independente ou aprovação humana.
 - Não existe migration AGD-020: V13 já possui índices por tenant/início, tenant/serviço/início e tenant/reserva/história. Bloqueios reutilizam o contrato AGD-012; reservas têm limite e paginação keyset.
-- PR #11 foi integrado conforme autorizado; nenhuma migration publicada foi alterada. AGD-020 permanece parcial até suíte completa, browser E2E real e checks remotos.
+- PR #11 foi integrado conforme autorizado; nenhuma migration publicada foi alterada. PR #12 contém AGD-020 e permanece aberto, sem merge/deploy. Checks do head funcional passaram; homologação/staging e pendências gerais de negócio/infra permanecem nos registros globais.
+- Falhas intermediárias do browser E2E nos heads `cdad68e` e `888ae56` foram investigadas: primeiro o script consultava o controle antes de a agenda autenticada renderizar após reload; depois, o cenário de sessão 401 concorria com refresh automático. Esperas por estado carregado/refresh habilitado corrigiram o teste; o head `5087d2d` passou sem relaxar assertions.
