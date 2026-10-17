@@ -290,12 +290,27 @@ try {
     await waitForText('Não foi possível confirmar o resultado do envio.', evaluate);
     await waitForText('Recuperação da reserva', secondTab.evaluate);
     await waitForText('Reserva original recuperada.', secondTab.evaluate);
-    const appointmentIdInEachTab = await Promise.all([
-        evaluate("document.querySelector('.public-page__confirmation strong')?.textContent"),
-        secondTab.evaluate("document.querySelector('.public-page__confirmation strong')?.textContent"),
-    ]);
-    if (!appointmentIdInEachTab[0] || appointmentIdInEachTab[0] !== appointmentIdInEachTab[1]) {
-        throw new Error('Duas abas não recuperaram a mesma reserva original.');
+    let appointmentIdInEachTab = [null, null];
+    try {
+        await waitUntil(async () => {
+            appointmentIdInEachTab = await Promise.all([
+                evaluate("document.querySelector('.public-page__confirmation strong')?.textContent"),
+                secondTab.evaluate("document.querySelector('.public-page__confirmation strong')?.textContent"),
+            ]);
+            return Boolean(
+                appointmentIdInEachTab[0] &&
+                    appointmentIdInEachTab[0] === appointmentIdInEachTab[1],
+            );
+        }, 10000);
+    } catch (error) {
+        const tabStates = await Promise.all([
+            evaluate("JSON.stringify({heading:document.querySelector('h2')?.innerText, alerts:[...document.querySelectorAll('[role=alert]')].map(item=>item.innerText).slice(0,3)})"),
+            secondTab.evaluate("JSON.stringify({heading:document.querySelector('h2')?.innerText, alerts:[...document.querySelectorAll('[role=alert]')].map(item=>item.innerText).slice(0,3)})"),
+        ]);
+        throw new Error(
+            `Duas abas não recuperaram a mesma reserva original: ${JSON.stringify({appointmentIdInEachTab, tabStates})}`,
+            { cause: error },
+        );
     }
     const storedIntent = await evaluate(`(() => {
       const value = localStorage.getItem('kronos.public-booking.intent.' + ${JSON.stringify(publication.slug)});
