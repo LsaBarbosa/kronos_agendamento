@@ -391,8 +391,8 @@ try {
     await evaluate(
         "document.querySelectorAll('.public-page__slot:not(:disabled)')[document.querySelectorAll('.public-page__slot:not(:disabled)').length - 1].click()",
     );
-    await setFieldByLabel('Nome', 'Segundo visitante de demonstração', evaluate);
-    await setFieldByLabel('Telefone com código do país', '+5511999991235', evaluate);
+    await setFieldById('public-client-name', 'Segundo visitante de demonstração', evaluate);
+    await setFieldById('public-client-phone', '+5511999991235', evaluate);
     await clickButtonByText('Confirmar reserva', evaluate);
     await waitForText('Reserva confirmada', evaluate);
     const secondAppointmentId = queryPostgres(
