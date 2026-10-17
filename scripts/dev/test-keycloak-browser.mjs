@@ -514,6 +514,7 @@ try {
         `fetch('/api/v1/admin/blocked-periods?from=${conflictingDate}&to=${conflictingDate}', {credentials:'same-origin'}).then(response => response.json()).then(rows => rows.some(row => row.status === 'CANCELLED'))`,
     )));
     console.log('Browser: remarcação real preservou ID/snapshot, gravou história, trocou a disponibilidade; destino bloqueado foi rejeitado sem alterar a reserva.');
+    await setFieldByLabel('Data de referência', rescheduleDate, evaluate);
     await clickButtonByText('Dia', evaluate);
     await waitForText('Visitante de demonstração', evaluate);
     await command('Page.reload');
@@ -521,7 +522,7 @@ try {
     await waitUntil(async () => (await evaluate(
         "[...document.querySelectorAll('label')].some(label => label.childNodes[0]?.textContent?.trim() === 'Data de referência' && label.querySelector('input'))",
     )));
-    await setFieldByLabel('Data de referência', publicDate, evaluate);
+    await setFieldByLabel('Data de referência', rescheduleDate, evaluate);
     await waitForText('Visitante de demonstração', evaluate);
     if (!(await evaluate(`document.querySelector('[data-appointment-id="${appointmentIdInEachTab[0]}"]')?.innerText.includes('45 min')`))) {
         throw new Error('Reload não recuperou a reserva persistida na agenda administrativa.');
@@ -529,7 +530,7 @@ try {
     await setSelectByLabel('Serviço', publicService.serviceId, evaluate);
     await setSelectByLabel('Status', 'CONFIRMED', evaluate);
     await waitForText('Visitante de demonstração', evaluate);
-    const staleAgendaDate = new Date(new Date(publicDate + 'T12:00:00Z').getTime() + 86400000)
+    const staleAgendaDate = new Date(new Date(rescheduleDate + 'T12:00:00Z').getTime() + 86400000)
         .toISOString()
         .slice(0, 10);
     await evaluate(`(() => {
@@ -544,13 +545,13 @@ try {
           await new Promise(resolve => { window.__releaseStaleAgenda = resolve; });
         }
         const response = await originalFetch(...args);
-        if (url.includes('/v1/admin/appointments?from=${publicDate}')) window.__latestAgendaResponseSeen = true;
+        if (url.includes('/v1/admin/appointments?from=${rescheduleDate}')) window.__latestAgendaResponseSeen = true;
         return response;
       };
     })()`);
     await setFieldByLabel('Data de referência', staleAgendaDate, evaluate);
     await waitUntil(() => evaluate('window.__staleAgendaHeld === true'));
-    await setFieldByLabel('Data de referência', publicDate, evaluate);
+    await setFieldByLabel('Data de referência', rescheduleDate, evaluate);
     await waitUntil(() => evaluate('window.__latestAgendaResponseSeen === true'));
     await waitForText('Visitante de demonstração', evaluate);
     await evaluate('window.__releaseStaleAgenda?.(); window.fetch = window.__originalAgendaFetch');
@@ -620,7 +621,7 @@ try {
     await command('Page.reload');
     await waitForText('Sessão administrativa ativa.', evaluate);
     await waitForText('Agenda', evaluate);
-    await setFieldByLabel('Data de referência', publicDate, evaluate);
+    await setFieldByLabel('Data de referência', rescheduleDate, evaluate);
     await waitForText('Visitante de demonstração', evaluate);
     await clickButtonByText('Despublicar página', evaluate);
     await waitForText('Página pública despublicada.', evaluate);
