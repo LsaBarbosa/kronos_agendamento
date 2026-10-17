@@ -10,6 +10,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.appagendamento.appointments.application.AppointmentRepository;
+import com.appagendamento.appointments.application.CreateAdministrativeAppointment;
+import com.appagendamento.appointments.application.CreateAdministrativeAppointmentCommand;
 import com.appagendamento.appointments.application.CreatePublicAppointment;
 import com.appagendamento.appointments.application.PublicAppointmentReceipt;
 import com.appagendamento.appointments.domain.Appointment;
@@ -17,14 +19,19 @@ import com.appagendamento.appointments.domain.AppointmentStatus;
 import com.appagendamento.appointments.domain.SlotNoLongerAvailableException;
 import com.appagendamento.availability.application.CalculateAvailabilityForDateRange;
 import com.appagendamento.availability.application.ManageBlockedPeriods;
+import com.appagendamento.availability.application.ManageScheduleExceptions;
 import com.appagendamento.availability.application.ReplaceAvailabilityPolicy;
 import com.appagendamento.availability.application.ReplaceWeeklySchedule;
 import com.appagendamento.availability.domain.ConfirmedAppointmentConflictException;
+import com.appagendamento.availability.domain.ScheduleExceptionKind;
+import com.appagendamento.availability.domain.SpecialPeriod;
 import com.appagendamento.availability.domain.WeeklyPeriod;
 import com.appagendamento.catalog.application.CreateService;
 import com.appagendamento.catalog.application.SetServiceStatus;
 import com.appagendamento.catalog.application.UpdateService;
 import com.appagendamento.catalog.domain.ServiceStatus;
+import com.appagendamento.clients.api.ClientBookingRestrictionQuery;
+import com.appagendamento.clients.api.ClientBookingRestrictionStatus;
 import com.appagendamento.idempotency.api.IdempotentCommandResult;
 import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import com.appagendamento.publicpage.application.ChangePublicationStatus;
@@ -36,6 +43,7 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.temporal.TemporalAdjusters;
 import java.util.Base64;
 import java.util.List;
@@ -87,13 +95,17 @@ class PublicAppointmentIT {
   @Autowired private ChangePublicationStatus changePublicationStatus;
   @Autowired private CalculateAvailabilityForDateRange availability;
   @Autowired private ManageBlockedPeriods manageBlockedPeriods;
+  @Autowired private ManageScheduleExceptions manageScheduleExceptions;
   @Autowired private CreatePublicAppointment createAppointment;
+  @Autowired private CreateAdministrativeAppointment createAdministrativeAppointment;
   @Autowired private AppointmentRepository appointmentRepository;
   @Autowired private UpdateService updateService;
   @Autowired private SetServiceStatus setServiceStatus;
   @Autowired private MockMvc mvc;
   @Autowired private ObjectMapper objectMapper;
+  @Autowired private java.time.Clock clock;
   @MockitoBean private PublicationEvidence publicationEvidence;
+  @MockitoBean private ClientBookingRestrictionQuery clientRestrictions;
 
   private JdbcTemplate migrationJdbc;
   private UUID tenantId;
@@ -114,6 +126,10 @@ class PublicAppointmentIT {
     org.mockito.Mockito.when(
             publicationEvidence.unavailableEvidence(org.mockito.ArgumentMatchers.any()))
         .thenReturn(List.of());
+    org.mockito.Mockito.when(
+            clientRestrictions.status(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+        .thenReturn(ClientBookingRestrictionStatus.NOT_TRACKED);
     migrationJdbc = new JdbcTemplate(PostgresTestEnvironment.migrationDataSource());
     tenantId = UUID.randomUUID();
     UUID adminId = UUID.randomUUID();
@@ -343,6 +359,543 @@ class PublicAppointmentIT {
                 .with(authentication(principalToken(actor))))
         .andExpect(status().isNotFound())
         .andExpect(jsonPath("$.error.code").value("RESOURCE_NOT_FOUND"));
+  }
+
+  @Test
+  void administratorCreatesAndReplaysAnAppointmentWithoutDuplicatingEffects() throws Exception {
+    long revision =
+        appJdbc.queryForObject(
+            "SELECT revision FROM agendamento.schedule_revision WHERE tenant_id = ?",
+            Long.class,
+            tenantId);
+    var start = java.time.OffsetDateTime.parse(requestedStart);
+    String body =
+        "{\"serviceId\":\""
+            + serviceId
+            + "\",\"startsAt\":\""
+            + start
+            + "\",\"client\":{\"name\":\"Admin Client\",\"phone\":\"+55 (11) 99999-7777\"},"
+            + "\"overridePolicies\":[],\"expectedScheduleVersion\":"
+            + revision
+            + "}";
+    String key = "admin-create-" + UUID.randomUUID();
+    int beforeAudit = countByAction("APPOINTMENT_CONFIRMED");
+    int beforeOutbox = countByEvent("AppointmentConfirmed");
+
+    var first =
+        mvc.perform(
+                post("/api/v1/admin/appointments")
+                    .with(authentication(principalToken(actor)))
+                    .with(csrf())
+                    .header("Idempotency-Key", key)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(body))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.appointmentId").exists())
+            .andReturn();
+    String appointmentId =
+        objectMapper
+            .readTree(first.getResponse().getContentAsString())
+            .get("appointmentId")
+            .asText();
+
+    mvc.perform(
+            post("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isCreated())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.appointmentId").value(appointmentId));
+
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+    assertThat(countByAction("APPOINTMENT_CONFIRMED")).isEqualTo(beforeAudit + 1);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(beforeOutbox + 1);
+    mvc.perform(
+            get("/api/v1/admin/appointments/{id}/history", UUID.fromString(appointmentId))
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.items[0].actorType").value("ADMIN"))
+        .andExpect(jsonPath("$.items[0].reasonCode").value("ADMIN_BOOKING"))
+        .andExpect(jsonPath("$.items[0].reason").value(org.hamcrest.Matchers.nullValue()));
+  }
+
+  @Test
+  void administrativeBookingRequiresCsrfCurrentRevisionAndTenantOwnedReferences() throws Exception {
+    long revision =
+        appJdbc.queryForObject(
+            "SELECT revision FROM agendamento.schedule_revision WHERE tenant_id = ?",
+            Long.class,
+            tenantId);
+    var start = java.time.OffsetDateTime.parse(requestedStart);
+    String base =
+        "\"startsAt\":\""
+            + start
+            + "\",\"client\":{\"name\":\"Tenant Client\",\"phone\":\"+5511999997788\"},"
+            + "\"overridePolicies\":[],\"expectedScheduleVersion\":";
+
+    mvc.perform(
+            post("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .header("Idempotency-Key", "admin-no-csrf-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"serviceId\":\"" + serviceId + "\"," + base + revision + "}"))
+        .andExpect(status().isForbidden());
+
+    mvc.perform(
+            post("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "admin-stale-revision-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"serviceId\":\"" + serviceId + "\"," + base + (revision + 1) + "}"))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("VERSION_CONFLICT"));
+
+    UUID otherTenant = UUID.randomUUID();
+    UUID otherService = UUID.randomUUID();
+    UUID otherClient = UUID.randomUUID();
+    migrationJdbc.update(
+        "INSERT INTO agendamento.tenant (tenant_id, name, slug, timezone, status) VALUES (?, 'Private booking fixture', ?, 'UTC', 'ACTIVE')",
+        otherTenant,
+        "private-admin-booking-" + UUID.randomUUID().toString().substring(0, 8));
+    migrationJdbc.update(
+        "INSERT INTO agendamento.service (service_id, tenant_id, name, normalized_name, duration_minutes, buffer_after_minutes, status) VALUES (?, ?, 'Private', 'private', 30, 0, 'ACTIVE')",
+        otherService,
+        otherTenant);
+    migrationJdbc.update(
+        "INSERT INTO agendamento.client (client_id, tenant_id, display_name, normalized_phone) VALUES (?, ?, 'Private Client', '+5511999997799')",
+        otherClient,
+        otherTenant);
+
+    mvc.perform(
+            post("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "admin-foreign-service-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"serviceId\":\"" + otherService + "\"," + base + revision + "}"))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("ADMIN_BOOKING_POLICY_REJECTED"));
+
+    mvc.perform(
+            post("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "admin-foreign-client-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    "{\"serviceId\":\""
+                        + serviceId
+                        + "\",\"startsAt\":\""
+                        + start
+                        + "\",\"clientId\":\""
+                        + otherClient
+                        + "\",\"overridePolicies\":[],\"expectedScheduleVersion\":"
+                        + revision
+                        + "}"))
+        .andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.error.code").value("RESOURCE_NOT_FOUND"));
+
+    assertThat(count("appointment", tenantId)).isZero();
+    assertThat(count("client", tenantId)).isZero();
+    assertThat(countByAction("APPOINTMENT_CONFIRMED")).isZero();
+    assertThat(countByEvent("AppointmentConfirmed")).isZero();
+  }
+
+  @Test
+  void administrativeReplayIsDeniedAfterMembershipRevocation() throws Exception {
+    long revision =
+        appJdbc.queryForObject(
+            "SELECT revision FROM agendamento.schedule_revision WHERE tenant_id = ?",
+            Long.class,
+            tenantId);
+    var start = java.time.OffsetDateTime.parse(requestedStart);
+    String body =
+        "{\"serviceId\":\""
+            + serviceId
+            + "\",\"startsAt\":\""
+            + start
+            + "\",\"client\":{\"name\":\"Replay Client\",\"phone\":\"+5511999997789\"},"
+            + "\"overridePolicies\":[],\"expectedScheduleVersion\":"
+            + revision
+            + "}";
+    String key = "admin-revoked-replay-" + UUID.randomUUID();
+    mvc.perform(
+            post("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isCreated());
+
+    migrationJdbc.update(
+        "UPDATE agendamento.admin_tenant_membership SET status = 'DISABLED' WHERE tenant_id = ? AND user_id = ?",
+        tenantId,
+        actor.adminUserId());
+    mvc.perform(
+            post("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.error.code").value("ACTION_NOT_ALLOWED"));
+
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(1);
+    assertThat(countByAction("APPOINTMENT_CONFIRMED")).isEqualTo(1);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
+  }
+
+  @Test
+  void administrativeBookingCanUseAnExistingTenantClientWithoutReturningTheirPhone()
+      throws Exception {
+    UUID existingClient = UUID.randomUUID();
+    String phone = "+5511999996670";
+    migrationJdbc.update(
+        "INSERT INTO agendamento.client (client_id, tenant_id, display_name, normalized_phone) VALUES (?, ?, 'Cliente existente', ?)",
+        existingClient,
+        tenantId,
+        phone);
+    long revision = currentScheduleRevision();
+    String body =
+        "{\"serviceId\":\""
+            + serviceId
+            + "\",\"startsAt\":\""
+            + requestedStart
+            + "\",\"clientId\":\""
+            + existingClient
+            + "\",\"overridePolicies\":[],\"expectedScheduleVersion\":"
+            + revision
+            + "}";
+
+    var response =
+        mvc.perform(
+                post("/api/v1/admin/appointments")
+                    .with(authentication(principalToken(actor)))
+                    .with(csrf())
+                    .header("Idempotency-Key", "admin-existing-client-" + UUID.randomUUID())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(body))
+            .andExpect(status().isCreated())
+            .andReturn();
+
+    UUID appointmentId =
+        UUID.fromString(
+            objectMapper
+                .readTree(response.getResponse().getContentAsString())
+                .get("appointmentId")
+                .asText());
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT client_id FROM agendamento.appointment WHERE appointment_id = ?",
+                UUID.class,
+                appointmentId))
+        .isEqualTo(existingClient);
+    assertThat(count("client", tenantId)).isEqualTo(1);
+    assertThat(response.getResponse().getContentAsString()).doesNotContain(phone);
+
+    var search =
+        mvc.perform(
+                get("/api/v1/admin/clients")
+                    .with(authentication(principalToken(actor)))
+                    .param("query", "Cliente exist"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].clientId").value(existingClient.toString()))
+            .andExpect(jsonPath("$[0].displayName").value("Cliente existente"))
+            .andReturn();
+    assertThat(search.getResponse().getContentAsString()).doesNotContain(phone);
+  }
+
+  @Test
+  void controlledRestrictionAdapterAllowsAdminBookingAndRecordsRestrictedResult() throws Exception {
+    UUID restrictedClient = UUID.randomUUID();
+    migrationJdbc.update(
+        "INSERT INTO agendamento.client (client_id, tenant_id, display_name, normalized_phone) VALUES (?, ?, 'Cliente com restrição', '+5511999996671')",
+        restrictedClient,
+        tenantId);
+    org.mockito.Mockito.when(clientRestrictions.status(tenantId, restrictedClient))
+        .thenReturn(ClientBookingRestrictionStatus.RESTRICTED);
+    long revision = currentScheduleRevision();
+    String body =
+        "{\"serviceId\":\""
+            + serviceId
+            + "\",\"startsAt\":\""
+            + requestedStart
+            + "\",\"clientId\":\""
+            + restrictedClient
+            + "\",\"overridePolicies\":[],\"expectedScheduleVersion\":"
+            + revision
+            + "}";
+
+    var response =
+        mvc.perform(
+                post("/api/v1/admin/appointments")
+                    .with(authentication(principalToken(actor)))
+                    .with(csrf())
+                    .header("Idempotency-Key", "admin-restricted-client-" + UUID.randomUUID())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(body))
+            .andExpect(status().isCreated())
+            .andReturn();
+    UUID appointmentId =
+        UUID.fromString(
+            objectMapper
+                .readTree(response.getResponse().getContentAsString())
+                .get("appointmentId")
+                .asText());
+
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT details->>'client_restriction_status' FROM agendamento.audit_event WHERE target_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("RESTRICTED");
+    org.mockito.Mockito.verify(clientRestrictions).status(tenantId, restrictedClient);
+  }
+
+  @Test
+  void administrativeEncaixeRequiresReasonAndNeverIgnoresOverlap() throws Exception {
+    long revision =
+        appJdbc.queryForObject(
+            "SELECT revision FROM agendamento.schedule_revision WHERE tenant_id = ?",
+            Long.class,
+            tenantId);
+    var outside = bookingDate.atTime(8, 0).atZone(ZONE).toOffsetDateTime();
+    String body =
+        "{\"serviceId\":\""
+            + serviceId
+            + "\",\"startsAt\":\""
+            + outside
+            + "\",\"client\":{\"name\":\"Encaixe\",\"phone\":\"+5511999996666\"},"
+            + "\"overridePolicies\":[\"OUTSIDE_WEEKLY_SCHEDULE\"],\"reason\":\"Solicitação administrativa\","
+            + "\"expectedScheduleVersion\":"
+            + revision
+            + "}";
+    mvc.perform(
+            post("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "admin-encaixe-no-reason-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body.replace(",\"reason\":\"Solicitação administrativa\"", "")))
+        .andExpect(status().isBadRequest());
+    mvc.perform(
+            post("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "admin-encaixe-unknown-policy-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body.replace("OUTSIDE_WEEKLY_SCHEDULE", "HORIZON")))
+        .andExpect(status().isBadRequest());
+    assertThat(count("appointment", tenantId)).isZero();
+
+    var accepted =
+        mvc.perform(
+                post("/api/v1/admin/appointments")
+                    .with(authentication(principalToken(actor)))
+                    .with(csrf())
+                    .header("Idempotency-Key", "admin-encaixe-" + UUID.randomUUID())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(body))
+            .andExpect(status().isCreated())
+            .andReturn();
+    UUID appointmentId =
+        UUID.fromString(
+            objectMapper
+                .readTree(accepted.getResponse().getContentAsString())
+                .get("appointmentId")
+                .asText());
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT reason_code FROM agendamento.appointment_history WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("ADMIN_BOOKING_OVERRIDE");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT reason FROM agendamento.appointment_history WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("Solicitação administrativa");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT details->'override_policies' FROM agendamento.audit_event WHERE target_id = ?",
+                String.class,
+                appointmentId))
+        .contains("OUTSIDE_WEEKLY_SCHEDULE");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT payload::text FROM agendamento.outbox_event WHERE aggregate_id = ?",
+                String.class,
+                appointmentId))
+        .doesNotContain("Solicitação administrativa", "+5511999996666");
+
+    String overlapBody = body.replace("+5511999996666", "+5511999996667");
+    mvc.perform(
+            post("/api/v1/admin/appointments")
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "admin-overlap-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(overlapBody))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("SLOT_NO_LONGER_AVAILABLE"));
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+  }
+
+  @Test
+  void administrativeOutsideScheduleOverrideDoesNotReopenClosedDate() {
+    manageScheduleExceptions.create(
+        actor,
+        "admin-closed-" + UUID.randomUUID(),
+        bookingDate,
+        ScheduleExceptionKind.CLOSED,
+        List.of(),
+        "Fechamento de teste");
+    long revision = currentScheduleRevision();
+    int appointmentsBefore = count("appointment", tenantId);
+    int clientsBefore = count("client", tenantId);
+    int historyBefore = count("appointment_history", tenantId);
+    int auditBefore = countByAction("APPOINTMENT_CONFIRMED");
+    int outboxBefore = countByEvent("AppointmentConfirmed");
+
+    int status =
+        submitAdministrativeBooking(
+            "admin-closed-rejected-" + UUID.randomUUID(),
+            bookingDate.atTime(8, 0).atZone(ZONE).toOffsetDateTime().toString(),
+            revision,
+            List.of("OUTSIDE_WEEKLY_SCHEDULE"),
+            "Exceção explicitamente solicitada",
+            "+5511999996101");
+
+    assertThat(status).isEqualTo(409);
+    assertThat(currentScheduleRevision()).isEqualTo(revision);
+    assertThat(count("appointment", tenantId)).isEqualTo(appointmentsBefore);
+    assertThat(count("client", tenantId)).isEqualTo(clientsBefore);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historyBefore);
+    assertThat(countByAction("APPOINTMENT_CONFIRMED")).isEqualTo(auditBefore);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(outboxBefore);
+  }
+
+  @Test
+  void specialPeriodsAreFinalAndMustContainTheCompleteOccupiedInterval() {
+    LocalDate specialDate = bookingDate.plusWeeks(1);
+    manageScheduleExceptions.create(
+        actor,
+        "admin-special-" + UUID.randomUUID(),
+        specialDate,
+        ScheduleExceptionKind.SPECIAL,
+        List.of(new SpecialPeriod(LocalTime.of(9, 0), LocalTime.of(11, 0))),
+        "Período especial de teste");
+    long revision = currentScheduleRevision();
+
+    int acceptedStatus =
+        submitAdministrativeBooking(
+            "admin-special-inside-" + UUID.randomUUID(),
+            specialDate.atTime(10, 0).atZone(ZONE).toOffsetDateTime().toString(),
+            revision,
+            List.of(),
+            null,
+            "+5511999996102");
+    assertThat(acceptedStatus).isEqualTo(201);
+    int appointmentsAfterAccepted = count("appointment", tenantId);
+    int clientsAfterAccepted = count("client", tenantId);
+    int historyAfterAccepted = count("appointment_history", tenantId);
+    int auditAfterAccepted = countByAction("APPOINTMENT_CONFIRMED");
+    int outboxAfterAccepted = countByEvent("AppointmentConfirmed");
+
+    int outsideStatus =
+        submitAdministrativeBooking(
+            "admin-special-outside-" + UUID.randomUUID(),
+            specialDate.atTime(8, 0).atZone(ZONE).toOffsetDateTime().toString(),
+            revision,
+            List.of("OUTSIDE_WEEKLY_SCHEDULE"),
+            "Não ultrapassar SPECIAL",
+            "+5511999996103");
+    assertThat(outsideStatus).isEqualTo(409);
+    assertThat(currentScheduleRevision()).isEqualTo(revision);
+
+    LocalDate bufferDate = specialDate.plusWeeks(1);
+    manageScheduleExceptions.create(
+        actor,
+        "admin-special-buffer-" + UUID.randomUUID(),
+        bufferDate,
+        ScheduleExceptionKind.SPECIAL,
+        List.of(new SpecialPeriod(LocalTime.of(9, 0), LocalTime.of(10, 30))),
+        "Limite de buffer de teste");
+    long bufferRevision = currentScheduleRevision();
+    int bufferStatus =
+        submitAdministrativeBooking(
+            "admin-special-buffer-rejected-" + UUID.randomUUID(),
+            bufferDate.atTime(10, 0).atZone(ZONE).toOffsetDateTime().toString(),
+            bufferRevision,
+            List.of(),
+            null,
+            "+5511999996104");
+
+    assertThat(bufferStatus).isEqualTo(409);
+    assertThat(currentScheduleRevision()).isEqualTo(bufferRevision);
+    assertThat(count("appointment", tenantId)).isEqualTo(appointmentsAfterAccepted);
+    assertThat(count("client", tenantId)).isEqualTo(clientsAfterAccepted);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historyAfterAccepted);
+    assertThat(countByAction("APPOINTMENT_CONFIRMED")).isEqualTo(auditAfterAccepted);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(outboxAfterAccepted);
+  }
+
+  @Test
+  void minimumNoticeCanBeOverriddenInsideSpecialAndReplayDoesNotRepeatEffects() {
+    ZonedDateTime now = clock.instant().atZone(ZONE).withSecond(0).withNano(0);
+    int minuteRemainder = now.getMinute() % 30;
+    ZonedDateTime candidate = now.plusMinutes(minuteRemainder == 0 ? 30 : 30 - minuteRemainder);
+    if (candidate.toLocalTime().plusMinutes(45).isAfter(LocalTime.of(23, 45))) {
+      candidate = candidate.toLocalDate().plusDays(1).atStartOfDay(ZONE);
+    }
+    LocalDate specialDate = candidate.toLocalDate();
+    manageScheduleExceptions.create(
+        actor,
+        "admin-special-notice-" + UUID.randomUUID(),
+        specialDate,
+        ScheduleExceptionKind.SPECIAL,
+        List.of(new SpecialPeriod(LocalTime.MIDNIGHT, LocalTime.of(23, 45))),
+        "Janela especial de teste");
+    long revision = currentScheduleRevision();
+    String start = candidate.toOffsetDateTime().toString();
+    String key = "admin-special-notice-replay-" + UUID.randomUUID();
+    int appointmentsBefore = count("appointment", tenantId);
+    int historyBefore = count("appointment_history", tenantId);
+    int auditBefore = countByAction("APPOINTMENT_CONFIRMED");
+    int outboxBefore = countByEvent("AppointmentConfirmed");
+
+    assertThat(
+            submitAdministrativeBooking(
+                key,
+                start,
+                revision,
+                List.of("MIN_NOTICE"),
+                "Solicitação com antecedência curta",
+                "+5511999996105"))
+        .isEqualTo(201);
+    assertThat(
+            submitAdministrativeBooking(
+                key,
+                start,
+                revision,
+                List.of("MIN_NOTICE"),
+                "Solicitação com antecedência curta",
+                "+5511999996105"))
+        .isEqualTo(201);
+
+    assertThat(count("appointment", tenantId)).isEqualTo(appointmentsBefore + 1);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(historyBefore + 1);
+    assertThat(countByAction("APPOINTMENT_CONFIRMED")).isEqualTo(auditBefore + 1);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(outboxBefore + 1);
+    assertThat(currentScheduleRevision()).isEqualTo(revision);
   }
 
   @Test
@@ -827,6 +1380,66 @@ class PublicAppointmentIT {
   }
 
   @Test
+  void administrativeHistoryAuditAndOutboxFailuresRollBackAllBookingEffects() {
+    int auditEventsBefore = count("audit_event", tenantId);
+    int outboxEventsBefore = count("outbox_event", tenantId);
+    for (String table : List.of("appointment_history", "audit_event", "outbox_event")) {
+      String trigger = "reject_admin_booking_" + table;
+      String key = "admin-rollback-" + table + "-" + UUID.randomUUID();
+      migrationJdbc.execute(
+          "CREATE FUNCTION agendamento."
+              + trigger
+              + "() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF "
+              + switch (table) {
+                case "appointment_history" ->
+                    "NEW.actor_type = 'ADMIN' AND NEW.reason_code IN ('ADMIN_BOOKING', 'ADMIN_BOOKING_OVERRIDE')";
+                case "audit_event" ->
+                    "NEW.action = 'APPOINTMENT_CONFIRMED' AND NEW.actor_type = 'ADMIN'";
+                default -> "NEW.event_type = 'AppointmentConfirmed'";
+              }
+              + " THEN RAISE EXCEPTION 'injected administrative booking write failure' USING ERRCODE = '23514'; END IF; RETURN NEW; END $$");
+      migrationJdbc.execute(
+          "CREATE TRIGGER "
+              + trigger
+              + " BEFORE INSERT ON agendamento."
+              + table
+              + " FOR EACH ROW EXECUTE FUNCTION agendamento."
+              + trigger
+              + "()");
+      try {
+        var command =
+            new CreateAdministrativeAppointmentCommand(
+                serviceId,
+                java.time.OffsetDateTime.parse(requestedStart),
+                null,
+                "Admin rollback",
+                "+5511999996680",
+                List.of(),
+                null,
+                currentScheduleRevision());
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> createAdministrativeAppointment.execute(actor, key, command))
+            .isInstanceOf(RuntimeException.class);
+      } finally {
+        migrationJdbc.execute("DROP TRIGGER " + trigger + " ON agendamento." + table);
+        migrationJdbc.execute("DROP FUNCTION agendamento." + trigger + "()");
+      }
+      assertThat(count("client", tenantId)).isZero();
+      assertThat(count("appointment", tenantId)).isZero();
+      assertThat(count("appointment_history", tenantId)).isZero();
+      assertThat(count("audit_event", tenantId)).isEqualTo(auditEventsBefore);
+      assertThat(count("outbox_event", tenantId)).isEqualTo(outboxEventsBefore);
+      assertThat(
+              appJdbc.queryForObject(
+                  "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope = 'appointments.admin.create.v1' AND key_digest = ?",
+                  Integer.class,
+                  tenantId,
+                  com.appagendamento.idempotency.application.IdempotencyKey.digest(key)))
+          .isZero();
+    }
+  }
+
+  @Test
   void reservationWinningSharedLockMakesConcurrentBlockFail() throws Exception {
     installPauseTrigger("appointment");
     try (ExecutorService commands = Executors.newFixedThreadPool(2)) {
@@ -865,6 +1478,165 @@ class PublicAppointmentIT {
     }
     assertThat(count("appointment", tenantId)).isZero();
     assertThat(count("blocked_period", tenantId)).isEqualTo(1);
+  }
+
+  @Test
+  void administrativeReservationAndBlockedPeriodUseTheSharedLockInBothOrders() throws Exception {
+    long initialRevision = currentScheduleRevision();
+    installPauseTrigger("appointment");
+    try (ExecutorService commands = Executors.newFixedThreadPool(2)) {
+      var reservation =
+          commands.submit(
+              () ->
+                  submitAdministrativeBooking(
+                      "admin-lock-reservation-first-" + UUID.randomUUID(),
+                      requestedStart,
+                      initialRevision,
+                      List.of(),
+                      null,
+                      "+5511999997810"));
+      awaitInsertInProgress("appointment");
+      var block = commands.submit(this::createConflictingBlock);
+      assertThat(reservation.get()).isEqualTo(201);
+      assertThat(block.get()).isFalse();
+    } finally {
+      removePauseTrigger("appointment");
+    }
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+    assertThat(count("blocked_period", tenantId)).isZero();
+  }
+
+  @Test
+  void blockedPeriodWinsSharedLockBeforeAdministrativeReservation() throws Exception {
+    long revisionBeforeBlock = currentScheduleRevision();
+    installPauseTrigger("blocked_period");
+    try (ExecutorService commands = Executors.newFixedThreadPool(2)) {
+      var block = commands.submit(this::createConflictingBlock);
+      awaitInsertInProgress("blocked_period");
+      var reservation =
+          commands.submit(
+              () ->
+                  submitAdministrativeBooking(
+                      "admin-lock-block-first-" + UUID.randomUUID(),
+                      requestedStart,
+                      revisionBeforeBlock,
+                      List.of(),
+                      null,
+                      "+5511999997811"));
+      assertThat(block.get()).isTrue();
+      assertThat(reservation.get()).isEqualTo(409);
+    } finally {
+      removePauseTrigger("blocked_period");
+    }
+    assertThat(count("appointment", tenantId)).isZero();
+    assertThat(count("blocked_period", tenantId)).isEqualTo(1);
+  }
+
+  @Test
+  void administrativeReservationWinningSharedLockRejectsConcurrentPublicBooking() throws Exception {
+    long revision = currentScheduleRevision();
+    installPauseTrigger("appointment");
+    try (ExecutorService commands = Executors.newFixedThreadPool(2)) {
+      var administrative =
+          commands.submit(
+              () ->
+                  submitAdministrativeBooking(
+                      "admin-wins-public-race-" + UUID.randomUUID(),
+                      requestedStart,
+                      revision,
+                      List.of(),
+                      null,
+                      "+5511999997812"));
+      awaitInsertInProgress("appointment");
+      var publicBooking =
+          commands.submit(() -> reserve("public-loses-admin-race-" + UUID.randomUUID()));
+      assertThat(administrative.get()).isEqualTo(201);
+      assertThat(publicBooking.get()).isFalse();
+    } finally {
+      removePauseTrigger("appointment");
+    }
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(1);
+    assertThat(countByAction("APPOINTMENT_CONFIRMED")).isEqualTo(1);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
+  }
+
+  @Test
+  void publicBookingWinningSharedLockRejectsConcurrentAdministrativeReservation() throws Exception {
+    long revision = currentScheduleRevision();
+    installPauseTrigger("appointment");
+    try (ExecutorService commands = Executors.newFixedThreadPool(2)) {
+      var publicBooking =
+          commands.submit(() -> reserve("public-wins-admin-race-" + UUID.randomUUID()));
+      awaitInsertInProgress("appointment");
+      var administrative =
+          commands.submit(
+              () ->
+                  submitAdministrativeBooking(
+                      "admin-loses-public-race-" + UUID.randomUUID(),
+                      requestedStart,
+                      revision,
+                      List.of(),
+                      null,
+                      "+5511999997813"));
+      assertThat(publicBooking.get()).isTrue();
+      assertThat(administrative.get()).isEqualTo(409);
+    } finally {
+      removePauseTrigger("appointment");
+    }
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(1);
+    assertThat(countByAction("APPOINTMENT_CONFIRMED")).isEqualTo(1);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
+  }
+
+  private long currentScheduleRevision() {
+    return appJdbc.queryForObject(
+        "SELECT revision FROM agendamento.schedule_revision WHERE tenant_id = ?",
+        Long.class,
+        tenantId);
+  }
+
+  private int submitAdministrativeBooking(
+      String key,
+      String startsAt,
+      long revision,
+      List<String> overrides,
+      String reason,
+      String phone) {
+    String policies =
+        overrides.stream()
+            .map(value -> "\"" + value + "\"")
+            .collect(java.util.stream.Collectors.joining(","));
+    String reasonJson = reason == null ? "" : ",\"reason\":\"" + reason + "\"";
+    String body =
+        "{\"serviceId\":\""
+            + serviceId
+            + "\",\"startsAt\":\""
+            + startsAt
+            + "\",\"client\":{\"name\":\"Admin race\",\"phone\":\""
+            + phone
+            + "\"},\"overridePolicies\":["
+            + policies
+            + "]"
+            + reasonJson
+            + ",\"expectedScheduleVersion\":"
+            + revision
+            + "}";
+    try {
+      return mvc.perform(
+              post("/api/v1/admin/appointments")
+                  .with(authentication(principalToken(actor)))
+                  .with(csrf())
+                  .header("Idempotency-Key", key)
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(body))
+          .andReturn()
+          .getResponse()
+          .getStatus();
+    } catch (Exception exception) {
+      throw new IllegalStateException(exception);
+    }
   }
 
   private boolean concurrentCreate(CyclicBarrier barrier, String key, String phone) {

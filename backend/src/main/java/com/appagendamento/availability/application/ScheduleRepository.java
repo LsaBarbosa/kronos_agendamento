@@ -21,6 +21,10 @@ public interface ScheduleRepository {
 
   long nextScheduleRevision(UUID tenantId);
 
+  long currentScheduleRevision(UUID tenantId);
+
+  boolean lockScheduleRevision(UUID tenantId, long expectedRevision);
+
   List<ScheduleException> findScheduleExceptions(UUID tenantId, LocalDate from, LocalDate to);
 
   Optional<ScheduleException> findScheduleException(UUID tenantId, UUID exceptionId);

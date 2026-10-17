@@ -5,6 +5,7 @@ import com.appagendamento.appointments.api.AppointmentOccupancyQuery;
 import com.appagendamento.appointments.api.ConfirmedAppointmentConflictProbe;
 import com.appagendamento.appointments.api.TenantAgendaLock;
 import com.appagendamento.appointments.application.AdminAppointmentView;
+import com.appagendamento.appointments.application.AppointmentCreationContext;
 import com.appagendamento.appointments.application.AppointmentHistoryEntry;
 import com.appagendamento.appointments.application.AppointmentRepository;
 import com.appagendamento.appointments.domain.Appointment;
@@ -88,6 +89,15 @@ public class PostgresAppointmentRepository
 
   @Override
   public void insertConfirmed(Appointment appointment, String operationId, String traceId) {
+    insertConfirmed(appointment, operationId, traceId, AppointmentCreationContext.publicBooking());
+  }
+
+  @Override
+  public void insertConfirmed(
+      Appointment appointment,
+      String operationId,
+      String traceId,
+      com.appagendamento.appointments.application.AppointmentCreationContext context) {
     try {
       jdbc.update(
           """
@@ -119,13 +129,16 @@ public class PostgresAppointmentRepository
           """
           INSERT INTO agendamento.appointment_history (
             history_id, tenant_id, appointment_id, from_status, to_status,
-            actor_type, actor_ref, reason_code, occurred_at
-          ) VALUES (?, ?, ?, NULL, 'CONFIRMED', 'PUBLIC', 'PUBLIC_BOOKING',
-                    'APPOINTMENT_CREATED', clock_timestamp())
+            actor_type, actor_ref, reason_code, reason, occurred_at
+          ) VALUES (?, ?, ?, NULL, 'CONFIRMED', ?, ?, ?, ?, clock_timestamp())
           """,
           UUID.randomUUID(),
           appointment.tenantId(),
-          appointment.appointmentId());
+          appointment.appointmentId(),
+          context.actorType(),
+          context.actorReference(),
+          context.reasonCode(),
+          context.reason());
     } catch (DataIntegrityViolationException exception) {
       if (isAppointmentExclusionViolation(exception)) {
         throw new com.appagendamento.appointments.domain.SlotNoLongerAvailableException();
@@ -241,7 +254,7 @@ public class PostgresAppointmentRepository
     try {
       return jdbc.query(
           """
-          SELECT from_status, to_status, actor_type, actor_ref, reason_code, occurred_at
+          SELECT from_status, to_status, actor_type, actor_ref, reason_code, reason, occurred_at
           FROM agendamento.appointment_history
           WHERE tenant_id = ? AND appointment_id = ?
           ORDER BY occurred_at ASC, history_id ASC
@@ -253,6 +266,7 @@ public class PostgresAppointmentRepository
                   row.getString("actor_type"),
                   row.getString("actor_ref"),
                   row.getString("reason_code"),
+                  row.getString("reason"),
                   row.getTimestamp("occurred_at").toInstant()),
           tenantId,
           appointmentId);

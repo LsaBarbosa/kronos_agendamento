@@ -344,6 +344,20 @@ Comandos de encaixe incluem:
 
 `OVERLAP` não é uma política ignorável no MVP.
 
+#### Reserva administrativa (AGD-021)
+
+`POST /admin/appointments` exige sessão OIDC atual, associação ativa, CSRF e `Idempotency-Key`. O servidor deriva ator e tenant; `clientId` deve pertencer ao tenant. Alternativamente, `client: {name, phone}` cria/reutiliza cliente por telefone E.164 tenant-scoped. As duas formas são mutuamente exclusivas. A resposta contém apenas referências, snapshot do serviço e horários; não devolve telefone.
+
+O comando usa `expectedScheduleVersion` como revisão monotônica global `schedule_revision`, retornada por `GET /admin/schedule/weekly-periods` em `scheduleRevision`. Ela não é soma nem substitui as versões independentes de grade, política, exceções e bloqueios. Durante a criação, o servidor trava a revisão em compartilhamento e lê novamente os dados; alteração concorrente causa `409 VERSION_CONFLICT`. O lock da agenda do tenant precede a revisão e a leitura/trava do serviço, com ordem compatível com reserva pública e criação de bloqueio.
+
+A allowlist de `overridePolicies` é exatamente `OUTSIDE_WEEKLY_SCHEDULE` e `MIN_NOTICE`. Cada política só pode ser selecionada quando a avaliação atual do servidor detectar a violação; o motivo normalizado (1–500 caracteres) é obrigatório se qualquer override for usado e proibido sem override. `OUTSIDE_WEEKLY_SCHEDULE` ignora somente a grade semanal e só se aplica quando não existe exceção para a data. `CLOSED` continua fechado. `SPECIAL` substitui a grade semanal e é a configuração final: a ocupação, incluindo buffer, precisa caber integralmente em um único período especial; o override não pode contornar seus limites. `MIN_NOTICE` é independente e pode ser ignorada dentro de um período `SPECIAL`, com motivo. Horizonte, falta de configuração, serviço inativo, bloqueios, ocupações e `OVERLAP` não são ignoráveis. Políticas desconhecidas ou incompatíveis são rejeitadas. Serviço e buffer vêm do catálogo no servidor, e a ocupação continua `[startsAt, occupiedUntil)`.
+
+Uma exceção `CLOSED` significa data sem atendimento; uma `SPECIAL` substitui a grade semanal por seus períodos. Portanto, encaixe fora da grade só é permitido sem exceção por data; `SPECIAL` aceita início compatível com sua âncora e passo, desde que serviço e buffer caibam em um período. O comando não cria, remove nem amplia exceções/grade. A decisão de produto está registrada na ADR-0016.
+
+Reserva, história, auditoria, resultado idempotente e `AppointmentConfirmed` compartilham a transação PostgreSQL. Motivo é preservado na história administrativa; detalhes de auditoria contêm apenas políticas permitidas, indicação booleana de motivo e estado da fronteira de restrições de cliente. Outbox não recebe motivo, telefone, nome ou payload de request. `AppointmentConfirmed` solicita processamento, não comprova envio de WhatsApp. Busca mínima de clientes exige query com 2–80 caracteres, retorna até 20 IDs/nomes ativos do tenant e nunca retorna telefone.
+
+Encaixe não ignora bloqueios nem conflito com reservas. AGD-032/033 ainda não fornecem fonte persistida de faltas/restrições; `NOT_TRACKED` é estado explícito da fronteira, não prova de cliente sem restrição. O requisito de cliente realmente bloqueado permanece pendente de integração futura.
+
 ### Clientes e restrições
 
 | Método | Endpoint | Uso |

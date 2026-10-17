@@ -20,6 +20,7 @@ public record AdminAppointmentHistoryResponse(String timeZone, List<Entry> items
                         item.actorType(),
                         item.actorRef(),
                         item.reasonCode(),
+                        item.reason(),
                         item.occurredAt().atZone(zone).toOffsetDateTime()))
             .toList());
   }
@@ -30,5 +31,6 @@ public record AdminAppointmentHistoryResponse(String timeZone, List<Entry> items
       String actorType,
       String actorRef,
       String reasonCode,
+      String reason,
       OffsetDateTime occurredAt) {}
 }

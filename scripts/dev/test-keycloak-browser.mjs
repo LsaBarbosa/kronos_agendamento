@@ -624,6 +624,63 @@ try {
     await clickButtonByText('Atualizar', evaluate);
     await waitUntil(() => evaluate("document.querySelector('.admin-agenda__block--cancelled')?.innerText.includes('Manutenção E2E')"));
     console.log('Browser: exceção fechada, horário especial, restauração e bloqueio cancelado persistem após reload.');
+    await clickButtonByText('Nova reserva', evaluate);
+    await setSelectByLabel('Serviço ativo', publicService.serviceId, evaluate);
+    await evaluate(`(() => {
+      const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
+      const label = [...form.querySelectorAll('label')].find(item => item.innerText.includes('Novo cliente'));
+      label?.querySelector('input')?.click();
+    })()`);
+    await setAdminAppointmentField('Nome', 'Reserva administrativa E2E', evaluate);
+    await setAdminAppointmentField('Telefone para cadastro', '+5511999998310', evaluate);
+    await setAdminAppointmentField('Data local', publicDate, evaluate);
+    await setAdminAppointmentField('Horário local', '10:00', evaluate);
+    await waitUntil(() => evaluate(
+        "document.querySelector('form[aria-label=\\\"Criar reserva administrativa\\\"] button[type=submit]') && !document.querySelector('form[aria-label=\\\"Criar reserva administrativa\\\"] button[type=submit]').disabled",
+    ));
+    await clickButtonByText('Confirmar reserva', evaluate);
+    await waitForText('Reserva confirmada e persistida.', evaluate);
+    await waitForText('Reserva administrativa E2E', evaluate);
+    const administrativeBookingCount = Number(queryPostgres(
+        `SELECT count(*) FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) JOIN agendamento.client c USING (tenant_id, client_id) WHERE t.slug = '${publication.slug}' AND c.display_name = 'Reserva administrativa E2E' AND a.status = 'CONFIRMED'`,
+        appEnvironment,
+    ));
+    if (administrativeBookingCount !== 1) throw new Error('Reserva administrativa comum não foi persistida uma única vez.');
+
+    await setAdminAppointmentField('Horário local', '08:00', evaluate);
+    await waitUntil(() => evaluate(`(() => {
+      const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
+      const label = [...form.querySelectorAll('label')].find(item => item.innerText.includes('Ignorar somente a grade semanal'));
+      return Boolean(label && !label.querySelector('input')?.disabled);
+    })()`));
+    await evaluate(`(() => {
+      const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
+      [...form.querySelectorAll('label')].find(item => item.innerText.includes('Ignorar somente a grade semanal'))?.querySelector('input')?.click();
+    })()`);
+    await setAdminAppointmentField('Nome', 'Encaixe administrativo E2E', evaluate);
+    await setAdminAppointmentField('Telefone para cadastro', '+5511999998311', evaluate);
+    await setAdminAppointmentTextarea('Motivo obrigatório', 'Encaixe E2E autorizado', evaluate);
+    await clickButtonByText('Confirmar reserva', evaluate);
+    await waitForText('Reserva confirmada e persistida.', evaluate);
+    await waitForText('Encaixe administrativo E2E', evaluate);
+    await waitForText('Motivo: Encaixe E2E autorizado', evaluate);
+    const administrativeOverrideCount = Number(queryPostgres(
+        `SELECT count(*) FROM agendamento.appointment_history h JOIN agendamento.appointment a USING (tenant_id, appointment_id) JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND h.reason_code = 'ADMIN_BOOKING_OVERRIDE' AND h.reason = 'Encaixe E2E autorizado'`,
+        appEnvironment,
+    ));
+    if (administrativeOverrideCount !== 1) throw new Error('Encaixe administrativo não persistiu história e motivo.');
+
+    await setAdminAppointmentField('Nome', 'Encaixe conflitante E2E', evaluate);
+    await setAdminAppointmentField('Telefone para cadastro', '+5511999998312', evaluate);
+    await setAdminAppointmentTextarea('Motivo obrigatório', 'Tentativa conflitante E2E', evaluate);
+    await clickButtonByText('Confirmar reserva', evaluate);
+    await waitForText('O horário conflita com um bloqueio ou atendimento existente.', evaluate);
+    const conflictingBookingCount = Number(queryPostgres(
+        `SELECT count(*) FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.starts_at = '${publicDate} 08:00:00-03' AND a.status = 'CONFIRMED'`,
+        appEnvironment,
+    ));
+    if (conflictingBookingCount !== 1) throw new Error('Tentativa sobreposta alterou a agenda persistida.');
+    console.log('Browser: reserva administrativa comum e encaixe real persistidos; motivo aparece na história e a sobreposição é recusada.');
     await setFieldByAriaLabel('Segunda-feira início 1', '08:00', evaluate);
     const concurrentUpdateStatus = await evaluate(`(async () => {
       const [currentResponse, csrfResponse] = await Promise.all([
@@ -919,6 +976,32 @@ async function setFieldByAriaLabel(label, value, evaluate) {
       const field = [...document.querySelectorAll('[aria-label]')].find(item => item.getAttribute('aria-label') === ${JSON.stringify(label)});
       if (!field) throw new Error('Schedule field not found: ' + ${JSON.stringify(label)});
       const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+      descriptor.set.call(field, ${JSON.stringify(value)});
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      field.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+}
+
+async function setAdminAppointmentField(label, value, evaluate) {
+    await evaluate(`(() => {
+      const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
+      const wrapper = [...form.querySelectorAll('label')].find(item => item.innerText.trim().startsWith(${JSON.stringify(label)}));
+      const field = wrapper?.querySelector('input');
+      if (!field) throw new Error('Administrative appointment field not found: ' + ${JSON.stringify(label)});
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+      descriptor.set.call(field, ${JSON.stringify(value)});
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      field.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+}
+
+async function setAdminAppointmentTextarea(label, value, evaluate) {
+    await evaluate(`(() => {
+      const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
+      const wrapper = [...form.querySelectorAll('label')].find(item => item.innerText.trim().startsWith(${JSON.stringify(label)}));
+      const field = wrapper?.querySelector('textarea');
+      if (!field) throw new Error('Administrative appointment textarea not found: ' + ${JSON.stringify(label)});
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
       descriptor.set.call(field, ${JSON.stringify(value)});
       field.dispatchEvent(new Event('input', { bubbles: true }));
       field.dispatchEvent(new Event('change', { bubbles: true }));

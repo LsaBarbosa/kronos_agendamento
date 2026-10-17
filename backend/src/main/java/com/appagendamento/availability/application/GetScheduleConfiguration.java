@@ -29,6 +29,11 @@ public class GetScheduleConfiguration {
     return schedules.findAvailabilityPolicy(actor.tenantId());
   }
 
+  public long scheduleRevision(AuthenticatedAdmin actor) {
+    requireCurrent(actor);
+    return schedules.currentScheduleRevision(actor.tenantId());
+  }
+
   private void requireCurrent(AuthenticatedAdmin actor) {
     if (!accessPolicy.isCurrent(actor)) {
       throw new ScheduleAccessDeniedException();

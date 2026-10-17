@@ -37,7 +37,9 @@ public class AdminScheduleController {
       @AuthenticationPrincipal AuthenticatedAdmin admin) {
     return ResponseEntity.ok()
         .cacheControl(CacheControl.noStore())
-        .body(WeeklyScheduleResponse.from(getConfiguration.weeklySchedule(admin)));
+        .body(
+            WeeklyScheduleResponse.from(
+                getConfiguration.weeklySchedule(admin), getConfiguration.scheduleRevision(admin)));
   }
 
   @PutMapping("/api/v1/admin/schedule/weekly-periods")
@@ -53,7 +55,8 @@ public class AdminScheduleController {
         .cacheControl(CacheControl.noStore())
         .header("Idempotency-Replayed", Boolean.toString(result.replayed()))
         .header("X-Operation-Id", result.operationId().toString())
-        .body(WeeklyScheduleResponse.from(result.value()));
+        .body(
+            WeeklyScheduleResponse.from(result.value(), getConfiguration.scheduleRevision(admin)));
   }
 
   @GetMapping("/api/v1/admin/availability-policy")

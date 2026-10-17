@@ -2,13 +2,19 @@ package com.appagendamento.appointments.api;
 
 import com.appagendamento.appointments.domain.AdminAppointmentAccessDeniedException;
 import com.appagendamento.appointments.domain.AdminAppointmentNotFoundException;
+import com.appagendamento.appointments.domain.AdministrativeScheduleConflictException;
+import com.appagendamento.appointments.domain.AdministrativeScheduleVersionConflictException;
 import com.appagendamento.appointments.domain.AppointmentDataUnavailableException;
 import com.appagendamento.appointments.domain.InvalidAdminAgendaQueryException;
+import com.appagendamento.appointments.domain.SlotNoLongerAvailableException;
 import com.appagendamento.audit.api.AuditCorrelationId;
+import com.appagendamento.idempotency.application.IdempotencyKeyReusedException;
+import com.appagendamento.idempotency.application.OperationInProgressException;
 import com.appagendamento.platform.api.ApiErrorResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -28,6 +34,57 @@ public class AdminAppointmentExceptionHandler {
         HttpStatus.BAD_REQUEST,
         "VALIDATION_ERROR",
         "Informe datas, filtros, cursor e limite válidos (até 366 datas e 100 itens por página).");
+  }
+
+  @ExceptionHandler({IllegalArgumentException.class, MethodArgumentNotValidException.class})
+  ResponseEntity<ApiErrorResponse> invalidCommand(Exception exception, HttpServletRequest request) {
+    return error(
+        HttpStatus.BAD_REQUEST,
+        "VALIDATION_ERROR",
+        "Confira cliente, motivo, exceções e os campos informados.");
+  }
+
+  @ExceptionHandler(AdministrativeScheduleVersionConflictException.class)
+  ResponseEntity<ApiErrorResponse> scheduleConflict(
+      AdministrativeScheduleVersionConflictException exception, HttpServletRequest request) {
+    return error(
+        HttpStatus.CONFLICT,
+        "VERSION_CONFLICT",
+        "A agenda mudou. Recarregue os dados e confirme novamente as exceções.");
+  }
+
+  @ExceptionHandler(SlotNoLongerAvailableException.class)
+  ResponseEntity<ApiErrorResponse> slotConflict(
+      SlotNoLongerAvailableException exception, HttpServletRequest request) {
+    return error(
+        HttpStatus.CONFLICT,
+        "SLOT_NO_LONGER_AVAILABLE",
+        "O horário conflita com um bloqueio ou atendimento existente.");
+  }
+
+  @ExceptionHandler(AdministrativeScheduleConflictException.class)
+  ResponseEntity<ApiErrorResponse> scheduleRejected(
+      AdministrativeScheduleConflictException exception, HttpServletRequest request) {
+    return error(
+        HttpStatus.CONFLICT,
+        "ADMIN_BOOKING_POLICY_REJECTED",
+        "Uma regra não ignorável impede a reserva. Atualize a agenda e revise a decisão.");
+  }
+
+  @ExceptionHandler(IdempotencyKeyReusedException.class)
+  ResponseEntity<ApiErrorResponse> idempotencyConflict(
+      IdempotencyKeyReusedException exception, HttpServletRequest request) {
+    return error(
+        HttpStatus.CONFLICT, "IDEMPOTENCY_KEY_REUSED", "A chave já foi usada com outro comando.");
+  }
+
+  @ExceptionHandler(OperationInProgressException.class)
+  ResponseEntity<ApiErrorResponse> inProgress(
+      OperationInProgressException exception, HttpServletRequest request) {
+    return error(
+        HttpStatus.CONFLICT,
+        "OPERATION_IN_PROGRESS",
+        "O resultado ainda está sendo confirmado. Aguarde e repita o mesmo comando.");
   }
 
   @ExceptionHandler(AdminAppointmentNotFoundException.class)

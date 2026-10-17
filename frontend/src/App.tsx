@@ -523,6 +523,7 @@ function AdminApp() {
                 />
                 <AdminAgendaPanel
                     enabled={Boolean(session)}
+                    csrf={csrf}
                     onSessionInvalid={(responseStatus) => {
                         setSession(null);
                         setCsrf(null);

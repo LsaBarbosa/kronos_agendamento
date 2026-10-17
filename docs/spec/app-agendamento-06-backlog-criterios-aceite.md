@@ -211,6 +211,7 @@ Critérios de aceite:
 
 - Administrador cria reserva para cliente existente ou novo.
 - Pode ignorar grade/antecedência explicitamente, com motivo.
+- `OUTSIDE_WEEKLY_SCHEDULE` ignora somente a grade semanal quando não há exceção na data; `CLOSED` permanece fechado e `SPECIAL` restringe a ocupação completa, incluindo buffer, aos períodos finais. `MIN_NOTICE` pode ser ignorada independentemente, inclusive em período `SPECIAL`.
 - Não pode ignorar sobreposição.
 - Pode reservar para cliente bloqueado, com auditoria.
 - UI lista as políticas excepcionalmente ignoradas.

@@ -1,7 +1,10 @@
 package com.appagendamento.appointments.api;
 
+import com.appagendamento.appointments.application.CreateAdministrativeAppointment;
 import com.appagendamento.appointments.application.GetAdminAppointments;
 import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
 import java.util.UUID;
 import org.springframework.http.CacheControl;
@@ -9,6 +12,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -16,9 +22,25 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminAppointmentController {
 
   private final GetAdminAppointments appointments;
+  private final CreateAdministrativeAppointment createAppointment;
 
-  public AdminAppointmentController(GetAdminAppointments appointments) {
+  public AdminAppointmentController(
+      GetAdminAppointments appointments, CreateAdministrativeAppointment createAppointment) {
     this.appointments = appointments;
+    this.createAppointment = createAppointment;
+  }
+
+  @PostMapping("/api/v1/admin/appointments")
+  ResponseEntity<AdministrativeAppointmentResponse> create(
+      @AuthenticationPrincipal AuthenticatedAdmin actor,
+      @RequestHeader("Idempotency-Key") @Size(min = 16, max = 128) String key,
+      @Valid @RequestBody CreateAdministrativeAppointmentRequest request) {
+    var result = createAppointment.execute(actor, key, request.toCommand());
+    return ResponseEntity.status(org.springframework.http.HttpStatus.CREATED)
+        .cacheControl(CacheControl.noStore())
+        .header("Idempotency-Replayed", Boolean.toString(result.replayed()))
+        .header("X-Operation-Id", result.operationId().toString())
+        .body(AdministrativeAppointmentResponse.from(result.value()));
   }
 
   @GetMapping("/api/v1/admin/appointments")

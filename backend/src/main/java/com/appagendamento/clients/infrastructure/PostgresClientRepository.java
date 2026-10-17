@@ -1,5 +1,6 @@
 package com.appagendamento.clients.infrastructure;
 
+import com.appagendamento.clients.api.AdministrativeClientRegistry;
 import com.appagendamento.clients.application.ClientRepository;
 import com.appagendamento.clients.domain.ClientName;
 import com.appagendamento.clients.domain.E164Phone;
@@ -9,7 +10,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public class PostgresClientRepository implements ClientRepository {
+public class PostgresClientRepository implements ClientRepository, AdministrativeClientRegistry {
 
   private final JdbcTemplate jdbc;
 
@@ -47,5 +48,52 @@ public class PostgresClientRepository implements ClientRepository {
         UUID.class,
         tenantId,
         normalizedPhone.value());
+  }
+
+  @Override
+  public java.util.Optional<AdministrativeClientView> find(UUID tenantId, UUID clientId) {
+    return jdbc
+        .query(
+            """
+            SELECT client_id, tenant_id, display_name, status
+            FROM agendamento.client
+            WHERE tenant_id = ? AND client_id = ?
+            """,
+            (row, index) ->
+                new AdministrativeClientView(
+                    row.getObject("client_id", UUID.class),
+                    row.getObject("tenant_id", UUID.class),
+                    row.getString("display_name"),
+                    row.getString("status")),
+            tenantId,
+            clientId)
+        .stream()
+        .findFirst();
+  }
+
+  @Override
+  public UUID findOrCreate(UUID tenantId, String name, String phone) {
+    return findOrCreate(tenantId, ClientName.of(name), E164Phone.fromNormalized(phone));
+  }
+
+  @Override
+  public List<AdministrativeClientView> search(UUID tenantId, String query, int limit) {
+    return jdbc.query(
+        """
+        SELECT client_id, tenant_id, display_name, status
+        FROM agendamento.client
+        WHERE tenant_id = ? AND status = 'ACTIVE' AND display_name ILIKE ?
+        ORDER BY display_name, client_id
+        LIMIT ?
+        """,
+        (row, index) ->
+            new AdministrativeClientView(
+                row.getObject("client_id", UUID.class),
+                row.getObject("tenant_id", UUID.class),
+                row.getString("display_name"),
+                row.getString("status")),
+        tenantId,
+        "%" + query.replace("%", "\\%").replace("_", "\\_") + "%",
+        limit);
   }
 }
