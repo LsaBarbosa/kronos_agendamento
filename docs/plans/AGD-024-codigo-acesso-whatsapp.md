@@ -27,7 +27,8 @@
 - [x] Gates locais backend/PostgreSQL, frontend e sintaxe do E2E (17/10/2026): 73 testes unitários/arquiteturais + 152 integrações, Prettier/Oxlint, 23 Vitest, TypeScript/Vite e sintaxe Node; associar ao SHA após commit.
 - [x] Publicação do PR #16 e browser E2E/CI no head `73fb5fcbb4320fdc2f614e82e51a26b5a158af5c`.
 - [x] App CI/CodeQL push e PR no SHA de código `a95d3118ad50c801d49cefcc7ad5da4e9cc26c10`; o commit documental `fb6eb9b` também passou em push/PR, incluindo E2E.
-- [x] Investigação do App CI vermelho no head documental `eea67ee`: falha reproduzida e explicada por fixture de AGD-021 próximo da meia-noite; o intervalo de 45 minutos cruzava o fim do período SPECIAL. Fixado `Clock` de teste em 10:03, sem relaxar validações; teste direcionado e suíte completa passaram localmente em PostgreSQL real. Checks do SHA corrigido pendentes.
+- [x] Investigação do App CI vermelho no head documental `eea67ee`: falha reproduzida e explicada por fixture de AGD-021 próximo da meia-noite; o intervalo de 45 minutos cruzava o fim do período SPECIAL. Fixado `Clock` de teste em 10:03, sem relaxar validações; teste direcionado e suíte completa passaram localmente em PostgreSQL real, e os checks do SHA corrigido passaram.
+- [x] No head `2648b27c04496bb379b7cf1de3d811f92a40515f`, App CI push [39089264596](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39089264596)/PR [39089267746](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39089267746) e CodeQL push [39089264593](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39089264593)/PR [39089267650](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39089267650) passaram; E2E Chrome/Keycloak/PostgreSQL passou em ambos eventos.
 
 ## Validação
 | Critério | Comando | Resultado observado |
