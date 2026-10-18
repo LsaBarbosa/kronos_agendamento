@@ -1421,6 +1421,8 @@ class PublicAppointmentIT {
 
   @Test
   void minimumNoticeCanBeOverriddenInsideSpecialAndReplayDoesNotRepeatEffects() {
+    Instant fixedNow = LocalDate.now(ZONE).atTime(10, 3).atZone(ZONE).toInstant();
+    org.mockito.Mockito.when(clock.instant()).thenReturn(fixedNow);
     ZonedDateTime now = clock.instant().atZone(ZONE).withSecond(0).withNano(0);
     int minuteRemainder = now.getMinute() % 30;
     ZonedDateTime candidate = now.plusMinutes(minuteRemainder == 0 ? 30 : 30 - minuteRemainder);
