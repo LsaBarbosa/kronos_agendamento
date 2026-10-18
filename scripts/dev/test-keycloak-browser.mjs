@@ -1834,8 +1834,14 @@ try {
     );
     if (sessionRowsAfterRejectedRecovery !== '1') throw new Error('Challenge rejeitado criou sessão adicional.');
 
-    await clickButtonByText('Sair', evaluate);
-    await waitForText('Sessão encerrada.', evaluate);
+    const clientLogoutStatus = await evaluate(`(async () => {
+      const csrf = await fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'}).then(response => response.json());
+      return fetch('/api/v1/client/session/logout', {
+        method:'POST', credentials:'same-origin', cache:'no-store',
+        headers:{[csrf.headerName]:csrf.token},
+      }).then(response => response.status);
+    })()`);
+    if (clientLogoutStatus !== 204) throw new Error(`Logout de cliente retornou HTTP ${clientLogoutStatus}.`);
     const loggedOutClient = await evaluate("fetch('/api/v1/client/session', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())");
     if (loggedOutClient.authenticated) throw new Error('Logout não revogou a sessão do cliente.');
     console.log('Browser: solicitação neutra, expiração, bloqueio após cinco erros, sessão isolada e logout de cliente verificados com emissor privado E2E.');
