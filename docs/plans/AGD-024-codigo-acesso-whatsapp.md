@@ -26,7 +26,7 @@
 - [x] Interface e browser E2E restrito ao profile de teste.
 - [x] Gates locais backend/PostgreSQL, frontend e sintaxe do E2E (17/10/2026): 73 testes unitários/arquiteturais + 152 integrações, Prettier/Oxlint, 23 Vitest, TypeScript/Vite e sintaxe Node; associar ao SHA após commit.
 - [x] Publicação do PR #16 e browser E2E/CI no head `73fb5fcbb4320fdc2f614e82e51a26b5a158af5c`.
-- [x] App CI/CodeQL push e PR no SHA de código `a95d3118ad50c801d49cefcc7ad5da4e9cc26c10`; atualização documental posterior terá checks próprios.
+- [x] App CI/CodeQL push e PR no SHA de código `a95d3118ad50c801d49cefcc7ad5da4e9cc26c10`; o commit documental `fb6eb9b` também passou em push/PR, incluindo E2E.
 
 ## Validação
 | Critério | Comando | Resultado observado |
@@ -35,7 +35,7 @@
 | Frontend | `PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH npm run format:check && npm run lint && npm test -- --run && npm run check` em `frontend/` | Passou em 17/10/2026: Prettier, Oxlint, 23 testes Vitest, TypeScript e build Vite. |
 | Browser E2E | `node --check scripts/dev/test-keycloak-browser.mjs`; execução por App CI | Sintaxe passou. E2E real Chrome/Keycloak/PostgreSQL passou em push e PR no head `73fb5fc`: solicitação, verificação, challenge expirado/bloqueado, sessão segregada, cookie/logout, CSRF recente e ausência de PII em URL/storage/logs. Local não executado para preservar Compose compartilhado. Falhas anteriores foram investigadas: fixture não era causa; 403 `ACTION_NOT_ALLOWED` coincidiu com token CSRF divergente, corrigido por refresh antes de cada mutação. Uma tentativa de push também encontrou uma asserção de reload do fluxo público anterior, não relacionada ao novo módulo; o E2E PR passou no mesmo SHA. |
 | Diff/script | `git diff --check`; `node --check scripts/dev/test-keycloak-browser.mjs` | Passaram antes da atualização documental atual. |
-| Push/PR | App CI e CodeQL no SHA de código | App CI push [39088050744](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39088050744)/PR [39088053109](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39088053109) e CodeQL push [39088050747](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39088050747)/PR [39088053135](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39088053135) passaram em todos os jobs, incluindo browser E2E. SHA `a95d3118ad50c801d49cefcc7ad5da4e9cc26c10`; o commit documental posterior requer checks próprios; sem merge/deploy. |
+| Push/PR | App CI e CodeQL | App CI push [39088050744](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39088050744)/PR [39088053109](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39088053109) e CodeQL push [39088050747](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39088050747)/PR [39088053135](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39088053135) passaram no SHA de código; App CI push [39088286472](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39088286472)/PR [39088288839](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39088288839) e CodeQL push [39088286359](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39088286359)/PR [39088288838](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39088288838) passaram no commit documental `fb6eb9b`, incluindo E2E. |
 
 ## Decisões e retomada
 - ADR-0019 documenta separação de sessões, segredos, transporte e replay seguro.
