@@ -1568,7 +1568,7 @@ try {
     console.log('Browser: logout local/CSRF validado.');
     await command('Network.clearBrowserCookies');
 
-    const clientPhone = `+55119${Date.now().toString().slice(-8)}`;
+    const clientPhone = '+5511999991122';
     const demoTenantSlug = queryPostgres(
         `SELECT slug FROM agendamento.tenant WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
         appEnvironment,
