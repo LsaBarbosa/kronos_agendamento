@@ -1636,7 +1636,7 @@ try {
     await clickButtonByText('Solicitar código', evaluate);
     await waitForText('Mantenha os dados e repita a mesma solicitação', evaluate);
     await clickButtonByText('Repetir mesma solicitação', evaluate);
-    await waitUntil(() => evaluate('Boolean(window.__clientAccessRequestResult)'));
+    await waitUntil(() => evaluate('window.__clientAccessRequestAttempts.length === 3'));
     const clientAccessRequestResult = await evaluate('window.__clientAccessRequestResult');
     if (!clientAccessRequestResult.hasChallengeId) {
         throw new Error(`Solicitação neutra sem challengeId para fixture E2E: HTTP ${clientAccessRequestResult.status}, accepted=${clientAccessRequestResult.challengeAccepted}, error=${clientAccessRequestResult.errorCode}, csrfHeader=${clientAccessRequestResult.csrfHeaderPresent}, csrfMatches=${clientAccessRequestResult.csrfMatchesLatestResponse}.`);
