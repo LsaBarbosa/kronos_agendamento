@@ -1584,8 +1584,15 @@ try {
       const originalFetch = window.fetch.bind(window);
       window.fetch = async (...args) => {
         const response = await originalFetch(...args);
-        if (String(args[0]).includes('/access-challenges') && !String(args[0]).endsWith('/verify') && args[1]?.method === 'POST') {
+        const requestUrl = args[0] instanceof Request ? args[0].url : String(args[0]);
+        const requestMethod = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
+        if (requestUrl.includes('/access-challenges') && !requestUrl.endsWith('/verify') && requestMethod.toUpperCase() === 'POST') {
           const result = await response.clone().json();
+          window.__clientAccessRequestResult = {
+            status: response.status,
+            challengeAccepted: result.challengeAccepted,
+            hasChallengeId: Boolean(result.challengeId),
+          };
           window.__clientAccessChallengeId = result.challengeId;
         }
         return response;
@@ -1593,7 +1600,11 @@ try {
     })()`);
     await setFieldById('client-phone', clientPhone, evaluate);
     await clickButtonByText('Solicitar código', evaluate);
-    await waitUntil(() => evaluate('Boolean(window.__clientAccessChallengeId)'));
+    await waitUntil(() => evaluate('Boolean(window.__clientAccessRequestResult)'));
+    const clientAccessRequestResult = await evaluate('window.__clientAccessRequestResult');
+    if (!clientAccessRequestResult.hasChallengeId) {
+        throw new Error(`Solicitação neutra sem challengeId para fixture E2E: HTTP ${clientAccessRequestResult.status}, accepted=${clientAccessRequestResult.challengeAccepted}.`);
+    }
     const expiredChallengeId = await evaluate('window.__clientAccessChallengeId');
     const emitterSecret = 'e2e-only-synthetic-emitter-secret-000000000000';
     const appPort = appEnvironment.APP_PORT || '8080';
