@@ -26,7 +26,7 @@
 - [x] Interface e browser E2E restrito ao profile de teste.
 - [x] Gates locais backend/PostgreSQL, frontend e sintaxe do E2E (17/10/2026): 73 testes unitários/arquiteturais + 152 integrações, Prettier/Oxlint, 23 Vitest, TypeScript/Vite e sintaxe Node; associar ao SHA após commit.
 - [x] Publicação do PR #16 e browser E2E/CI no head `73fb5fcbb4320fdc2f614e82e51a26b5a158af5c`.
-- [ ] App CI/CodeQL no próximo SHA documental do PR; manter o PR aberto para revisão.
+- [x] App CI/CodeQL push e PR no SHA final `d678069d41f8872e7c646d4b4345afdf96be27eb`; PR permanece aberto para revisão.
 
 ## Validação
 | Critério | Comando | Resultado observado |
@@ -35,7 +35,7 @@
 | Frontend | `PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH npm run format:check && npm run lint && npm test -- --run && npm run check` em `frontend/` | Passou em 17/10/2026: Prettier, Oxlint, 23 testes Vitest, TypeScript e build Vite. |
 | Browser E2E | `node --check scripts/dev/test-keycloak-browser.mjs`; execução por App CI | Sintaxe passou. E2E real Chrome/Keycloak/PostgreSQL passou em push e PR no head `73fb5fc`: solicitação, verificação, challenge expirado/bloqueado, sessão segregada, cookie/logout, CSRF recente e ausência de PII em URL/storage/logs. Local não executado para preservar Compose compartilhado. Falhas anteriores foram investigadas: fixture não era causa; 403 `ACTION_NOT_ALLOWED` coincidiu com token CSRF divergente, corrigido por refresh antes de cada mutação. Uma tentativa de push também encontrou uma asserção de reload do fluxo público anterior, não relacionada ao novo módulo; o E2E PR passou no mesmo SHA. |
 | Diff/script | `git diff --check`; `node --check scripts/dev/test-keycloak-browser.mjs` | Passaram antes da atualização documental atual. |
-| Push/PR | App CI e CodeQL no head `73fb5fc` | App CI push [39087508093](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39087508093)/PR [39087511181](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39087511181) e CodeQL push [39087508097](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39087508097)/PR [39087511188](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39087511188) passaram. O head resultante da atualização dos registros continua pendente de CI. |
+| Push/PR | App CI e CodeQL no head final | App CI push [39087819372](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39087819372)/PR [39087821951](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39087821951) e CodeQL push [39087819422](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39087819422)/PR [39087822009](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39087822009) passaram em todos os jobs, incluindo browser E2E. Head `d678069d41f8872e7c646d4b4345afdf96be27eb`; sem merge/deploy. |
 
 ## Decisões e retomada
 - ADR-0019 documenta separação de sessões, segredos, transporte e replay seguro.
