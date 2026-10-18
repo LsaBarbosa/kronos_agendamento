@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -56,10 +57,18 @@ public class ClientAccessController {
 
   @GetMapping("/api/v1/client/session")
   ResponseEntity<ClientAccessSessionView> session(
-      @RequestHeader(value = HttpHeaders.COOKIE, required = false) String cookie) {
+      @RequestHeader(value = HttpHeaders.COOKIE, required = false) String cookie,
+      @RequestParam(value = "slug", required = false) String slug,
+      @RequestParam(value = "challengeId", required = false) UUID challengeId) {
+    boolean authenticated =
+        slug == null && challengeId == null
+            ? service.isAuthenticated(cookie)
+            : slug != null
+                && challengeId != null
+                && service.isAuthenticatedForChallenge(cookie, slug, challengeId);
     return ResponseEntity.ok()
         .cacheControl(CacheControl.noStore())
-        .body(new ClientAccessSessionView(service.isAuthenticated(cookie)));
+        .body(new ClientAccessSessionView(authenticated));
   }
 
   @PostMapping("/api/v1/client/session/logout")

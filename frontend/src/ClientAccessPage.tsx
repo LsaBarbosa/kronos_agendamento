@@ -107,7 +107,24 @@ export function ClientAccessPage({ slug }: { slug: string }) {
                     body: JSON.stringify({ phone }),
                 },
             );
-            if (!response.ok) throw new Error('request');
+            if (!response.ok) {
+                if (response.status === 400) {
+                    const failure = (await response
+                        .json()
+                        .catch(() => null)) as {
+                        error?: { code?: string };
+                    } | null;
+                    if (failure?.error?.code === 'INVALID_PHONE') {
+                        requestIntent.current = null;
+                        setUncertain(false);
+                        setMessage(
+                            'Telefone inválido. Informe o número completo com código do país e tente novamente.',
+                        );
+                        return;
+                    }
+                }
+                throw new Error('request');
+            }
             const result = (await response.json()) as {
                 challengeAccepted: boolean;
                 expiresInSeconds: number;
@@ -174,7 +191,11 @@ export function ClientAccessPage({ slug }: { slug: string }) {
             if (!response.ok) {
                 if (wasUncertain) {
                     const sessionResponse = await fetch(
-                        apiBaseUrl + '/v1/client/session',
+                        apiBaseUrl +
+                            '/v1/client/session?slug=' +
+                            encodeURIComponent(slug) +
+                            '&challengeId=' +
+                            encodeURIComponent(challengeId),
                         { credentials: 'same-origin', cache: 'no-store' },
                     ).catch(() => null);
                     if (sessionResponse?.ok) {

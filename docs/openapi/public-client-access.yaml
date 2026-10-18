@@ -46,7 +46,18 @@ paths:
                     type: [string, 'null']
                     format: uuid
                     description: Opaque, tenant-bound handle; null if secure challenge configuration is unavailable.
-        '400': { description: Invalid phone representation }
+        '400':
+          description: Definitive phone syntax rejection; the user may correct the input and submit a new intention.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: object
+                    properties:
+                      code: { type: string, const: INVALID_PHONE }
+                      message: { type: string }
         '403': { description: CSRF validation failed }
         '409': { description: Idempotency key reused with different command }
   /api/v1/public/{slug}/access-challenges/{challengeId}/verify:
@@ -85,11 +96,22 @@ paths:
         '403': { description: CSRF validation failed }
   /api/v1/client/session:
     get:
-      summary: Read only whether the client cookie is currently valid
+      summary: Read client session state, optionally bound to a consumed challenge
+      parameters:
+        - name: slug
+          in: query
+          required: false
+          schema: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+          description: Tenant is resolved server-side; required together with challengeId for verification recovery.
+        - name: challengeId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+          description: Restricts true to the session created by this consumed challenge.
       security: [{ clientCookie: [] }]
       responses:
         '200':
-          description: Does not expose tenant, phone, or appointments.
+          description: Read-only; challenge-bound recovery returns true only for the active session issued by that verified challenge. Does not expose tenant, phone, challenge secret, or appointments. Supplying only one query parameter returns authenticated=false.
           content:
             application/json:
               schema:

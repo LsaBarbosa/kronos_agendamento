@@ -1582,6 +1582,8 @@ try {
     await waitUntil(() => evaluate("!document.querySelector('button[type=submit]')?.disabled"));
     await evaluate(`(() => {
       const originalFetch = window.fetch.bind(window);
+      window.__clientAccessRequestAttempts = [];
+      window.__clientAccessDropNextRequestResponse = true;
       window.fetch = async (...args) => {
         const response = await originalFetch(...args);
         const requestUrl = args[0] instanceof Request ? args[0].url : String(args[0]);
@@ -1591,9 +1593,15 @@ try {
           window.__clientAccessLatestCsrf = {headerName: csrf.headerName, token: csrf.token};
         }
         if (requestUrl.includes('/access-challenges') && !requestUrl.endsWith('/verify') && requestMethod.toUpperCase() === 'POST') {
-          const result = await response.clone().json();
           const requestHeaders = new Headers(args[1]?.headers ?? (args[0] instanceof Request ? args[0].headers : undefined));
+          const result = await response.clone().json();
           const csrf = window.__clientAccessLatestCsrf;
+          window.__clientAccessRequestAttempts.push({
+            body: args[1]?.body ?? null,
+            idempotencyKey: requestHeaders.get('Idempotency-Key'),
+            status: response.status,
+            challengeId: result.challengeId ?? null,
+          });
           window.__clientAccessRequestResult = {
             status: response.status,
             challengeAccepted: result.challengeAccepted,
@@ -1603,16 +1611,47 @@ try {
             csrfMatchesLatestResponse: Boolean(csrf && requestHeaders.get(csrf.headerName) === csrf.token),
           };
           window.__clientAccessChallengeId = result.challengeId;
+          if (response.ok && window.__clientAccessDropNextRequestResponse) {
+            window.__clientAccessDropNextRequestResponse = false;
+            window.__clientAccessRequestResponseLost = true;
+            throw new TypeError('Simulated lost access request response');
+          }
         }
         return response;
       };
     })()`);
+    await setFieldById('client-phone', 'not-a-phone', evaluate);
+    await clickButtonByText('Solicitar código', evaluate);
+    await waitForText('Telefone inválido.', evaluate);
+    const invalidPhoneState = await evaluate(`(() => ({
+      disabled: document.querySelector('#client-phone')?.disabled,
+      retry: document.querySelector('button[type=submit]')?.textContent,
+      errorCode: window.__clientAccessRequestResult?.errorCode,
+    }))()`);
+    if (invalidPhoneState.disabled || invalidPhoneState.errorCode !== 'INVALID_PHONE') {
+        throw new Error(`Telefone inválido foi tratado como resultado incerto: ${JSON.stringify(invalidPhoneState)}`);
+    }
+    await evaluate('window.__clientAccessRequestResult = null; window.__clientAccessChallengeId = null');
     await setFieldById('client-phone', clientPhone, evaluate);
     await clickButtonByText('Solicitar código', evaluate);
+    await waitForText('Mantenha os dados e repita a mesma solicitação', evaluate);
+    await clickButtonByText('Repetir mesma solicitação', evaluate);
     await waitUntil(() => evaluate('Boolean(window.__clientAccessRequestResult)'));
     const clientAccessRequestResult = await evaluate('window.__clientAccessRequestResult');
     if (!clientAccessRequestResult.hasChallengeId) {
         throw new Error(`Solicitação neutra sem challengeId para fixture E2E: HTTP ${clientAccessRequestResult.status}, accepted=${clientAccessRequestResult.challengeAccepted}, error=${clientAccessRequestResult.errorCode}, csrfHeader=${clientAccessRequestResult.csrfHeaderPresent}, csrfMatches=${clientAccessRequestResult.csrfMatchesLatestResponse}.`);
+    }
+    const requestRetryEvidence = await evaluate(`(() => ({
+      responseLost: window.__clientAccessRequestResponseLost === true,
+      attempts: window.__clientAccessRequestAttempts,
+      challengeId: window.__clientAccessChallengeId,
+    }))()`);
+    if (!requestRetryEvidence.responseLost || requestRetryEvidence.attempts.length !== 3 ||
+        requestRetryEvidence.attempts[1].body !== requestRetryEvidence.attempts[2].body ||
+        requestRetryEvidence.attempts[1].idempotencyKey !== requestRetryEvidence.attempts[2].idempotencyKey ||
+        requestRetryEvidence.attempts[1].challengeId !== requestRetryEvidence.attempts[2].challengeId ||
+        requestRetryEvidence.attempts[1].challengeId !== requestRetryEvidence.challengeId) {
+        throw new Error(`Retry após resposta perdida da solicitação mudou a intenção original: ${JSON.stringify(requestRetryEvidence)}`);
     }
     const expiredChallengeId = await evaluate('window.__clientAccessChallengeId');
     const emitterSecret = 'e2e-only-synthetic-emitter-secret-000000000000';
@@ -1691,12 +1730,15 @@ try {
     await setFieldById('client-code', validCode, evaluate);
     await evaluate(`(() => {
       const originalFetch = window.fetch.bind(window);
+      window.__clientVerifyAttempts = [];
       window.fetch = async (...args) => {
         const response = await originalFetch(...args);
-        if (String(args[0]).endsWith('/verify') && args[1]?.method === 'POST' && response.ok) {
-          window.fetch = originalFetch;
-          window.__clientVerifyResponseLost = true;
-          throw new TypeError('Simulated lost verification response after session commit');
+        if (String(args[0]).endsWith('/verify') && args[1]?.method === 'POST') {
+          window.__clientVerifyAttempts.push({url: String(args[0]), body: args[1]?.body ?? null});
+          if (response.ok && !window.__clientVerifyResponseLost) {
+            window.__clientVerifyResponseLost = true;
+            throw new TypeError('Simulated lost verification response after session commit');
+          }
         }
         return response;
       };
@@ -1713,8 +1755,12 @@ try {
         throw new Error('Cookie de cliente não tem escopo e atributos esperados.');
     }
     const clientSession = await evaluate("fetch('/api/v1/client/session', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())");
+    const boundRecovery = await evaluate(`fetch('/api/v1/client/session?slug=' + encodeURIComponent(${JSON.stringify(demoTenantSlug)}) + '&challengeId=' + encodeURIComponent(${JSON.stringify(validChallengeId)}), {credentials:'same-origin', cache:'no-store'}).then(response => response.json())`);
     const adminSessionStatus = await evaluate("fetch('/api/v1/admin/session', {credentials:'same-origin', cache:'no-store'}).then(response => response.status)");
-    if (!clientSession.authenticated || adminSessionStatus !== 401) {
+    const verificationRetry = await evaluate('window.__clientVerifyAttempts');
+    if (!clientSession.authenticated || !boundRecovery.authenticated || adminSessionStatus !== 401 ||
+        verificationRetry.length !== 2 || verificationRetry[0].url !== verificationRetry[1].url ||
+        verificationRetry[0].body !== verificationRetry[1].body) {
         throw new Error('Sessão de cliente não está isolada da autoridade administrativa.');
     }
     const clientEffects = queryPostgres(
@@ -1728,6 +1774,66 @@ try {
     if (clientEffects !== '1' || consumedChallengeStatus !== 'VERIFIED') {
         throw new Error('Retry de verificação duplicou a sessão ou não consumiu o challenge uma única vez.');
     }
+
+    const differentPhone = '+5511999991133';
+    queryPostgres(
+        `INSERT INTO agendamento.client(client_id, tenant_id, display_name, normalized_phone) VALUES ('${randomUUID()}', '${credentials.DEMO_TENANT_ID}', 'Cliente E2E outro telefone', '${differentPhone}')`,
+        appEnvironment,
+    );
+    await navigate(`http://localhost:5173/client-access/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
+    await waitForText('Entre com seu telefone', evaluate);
+    await setFieldById('client-phone', differentPhone, evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__oldSessionVerifyResponseLost = false;
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const requestUrl = args[0] instanceof Request ? args[0].url : String(args[0]);
+        const requestMethod = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
+        if (requestUrl.includes('/access-challenges') && !requestUrl.endsWith('/verify') && requestMethod.toUpperCase() === 'POST') {
+          window.__clientAccessChallengeId = (await response.clone().json()).challengeId;
+        }
+        if (requestUrl.endsWith('/verify') && requestMethod.toUpperCase() === 'POST' && response.status === 401 && !window.__oldSessionVerifyResponseLost) {
+          window.__oldSessionVerifyResponseLost = true;
+          throw new TypeError('Simulated lost rejected verification response');
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Solicitar código', evaluate);
+    await waitUntil(() => evaluate("Boolean(document.querySelector('#client-code'))"));
+    const rejectedChallengeId = await evaluate('window.__clientAccessChallengeId ?? null');
+    if (!rejectedChallengeId) {
+        throw new Error('E2E não capturou o challenge para testar sessão antiga.');
+    }
+    const rejectedCodeResponse = await fetch(`http://localhost:${appPort}/internal/e2e/access-challenges/${rejectedChallengeId}/code`, {
+        headers: { 'X-E2E-Emitter-Secret': emitterSecret },
+        cache: 'no-store',
+    });
+    if (!rejectedCodeResponse.ok) throw new Error('Emissor E2E não retornou código para o challenge de sessão antiga.');
+    const rejectedCode = (await rejectedCodeResponse.json()).code;
+    const rejectedWrongCode = rejectedCode === '000000' ? '000001' : '000000';
+    await setFieldById('client-code', rejectedWrongCode, evaluate);
+    await clickButtonByText('Verificar código', evaluate);
+    await waitForText('Não foi possível confirmar o resultado.', evaluate);
+    await clickButtonByText('Tentar novamente', evaluate);
+    await waitForText('Código inválido, expirado ou temporariamente bloqueado.', evaluate);
+    const oldSessionDom = await evaluate(`(async () => ({
+      rejectedResponseLost: window.__oldSessionVerifyResponseLost,
+      successVisible: document.body.innerText.includes('Acesso verificado neste tenant.'),
+      rejectionVisible: document.body.innerText.includes('Código inválido, expirado ou temporariamente bloqueado.'),
+      session: await fetch('/api/v1/client/session?slug=${encodeURIComponent(demoTenantSlug)}&challengeId=${rejectedChallengeId}', {credentials:'same-origin', cache:'no-store'}).then(response => response.json()),
+    }))()`);
+    if (!oldSessionDom.rejectedResponseLost || oldSessionDom.successVisible || !oldSessionDom.rejectionVisible ||
+        oldSessionDom.session.authenticated) {
+        throw new Error(`Sessão anterior confirmou indevidamente challenge de outro telefone: ${JSON.stringify(oldSessionDom)}`);
+    }
+    const sessionRowsAfterRejectedRecovery = queryPostgres(
+        `SELECT count(*) FROM agendamento.client_access_session WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
+        appEnvironment,
+    );
+    if (sessionRowsAfterRejectedRecovery !== '1') throw new Error('Challenge rejeitado criou sessão adicional.');
+
     await clickButtonByText('Sair', evaluate);
     await waitForText('Sessão encerrada.', evaluate);
     const loggedOutClient = await evaluate("fetch('/api/v1/client/session', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())");
@@ -1743,9 +1849,11 @@ try {
     await waitForText('ADMIN_ACCESS_DENIED', evaluate);
     assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, credentials, [
         clientPhone,
+        differentPhone,
         expiredCode,
         blockedCode,
         validCode,
+        rejectedCode,
     ]);
     console.log(
         'Browser E2E passed: OIDC login, tenant, 30-minute idle expiry, SSO reauthentication, revocation, CSRF logout, unlinked denial, no test credentials in backend logs.',

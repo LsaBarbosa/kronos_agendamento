@@ -8,6 +8,14 @@ AGD-024 está implementada na branch `agd-024-codigo-acesso-whatsapp`, derivada 
 
 Histórico dos diagnósticos do PR #16: em `541bfa2` e `e563158`, E2E push/PR divergiram no challengeId; telefone fixo não resolveu e a hipótese de fixture inválida foi descartada como causa comprovada. Em `4d29627`, o push retornou 403; no SHA de diagnóstico `43b7280`, o erro foi `ACTION_NOT_ALLOWED`, com header CSRF presente, mas diferente da resposta CSRF mais recente. A mesma tentativa também teve um retry de push que falhou antes do cenário AGD-024, numa asserção de reload da intenção pública já existente; o E2E PR no mesmo SHA passou. Corrigimos a página de cliente para buscar token CSRF fresco imediatamente antes de cada mutação, sem desativar CSRF; o E2E compara presença/correspondência do token sem registrá-lo.
 
+### Correções de revisão PR #16 — head-base `981622dcc7c9cd30aa2f7fc936ffcf412e4db1b9`
+
+- Backend completo: `env JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` (`backend/`) — `BUILD SUCCESS`, 73 unitários/arquiteturais e 155 integrações PostgreSQL 16.13/Testcontainers; `ClientAccessIT` 14/14 e `TenantPersistenceIT` 21/21.
+- Migration: instalação limpa V1–V20 e upgrade V19→V20 com sessão legada `challenge_id NULL`, Flyway validate/rerun e grants runtime aprovados no PostgreSQL real.
+- Frontend: `export PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH; npm run format:check && npm run lint && npm test -- --run && npm run check` (`frontend/`) — format/lint, 23 Vitest, TypeScript e Vite build aprovados. `node --check scripts/dev/test-keycloak-browser.mjs` e `git diff --check` também passaram.
+- Browser E2E local não executado: a consulta ao Compose com `.env.keycloak` explicitamente carregado falhou porque o `.env` local não fornece `POSTGRES_PASSWORD` e `APP_DB_PASSWORD`. Os arquivos ignorados foram preservados; não foram sobrescritos nem regenerados. O App CI deverá provar os novos cenários Chrome/Keycloak/PostgreSQL no SHA publicado.
+- Os primeiros testes direcionados encontraram apenas fixture/métrica incorretos no teste de migration; foram corrigidos. Reexecução focada e gate completo passaram sem relaxar assertions. Checks remotos para a correção ainda pendentes.
+
 ### AGD-024 — gates locais
 
 - Backend: `env JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` passou em PostgreSQL 16.13/Testcontainers: 73 unitários/arquiteturais + 152 integrações, zero falhas/erros. `ClientAccessIT` passou 12 testes; a suíte cobriu instalação/upgrade/rerun V19 e grants runtime. Execução JDK 25 anterior foi corretamente recusada pelo Maven Enforcer; a execução válida usou JDK 21. Um teste de fronteira inicial esperava 403, mas o contrato de erro anônimo existente responde 401; a expectativa foi alinhada ao handler e o teste focado + suite completa passaram.

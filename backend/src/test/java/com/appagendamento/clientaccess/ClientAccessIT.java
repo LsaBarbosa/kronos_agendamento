@@ -24,8 +24,10 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -55,7 +57,7 @@ class ClientAccessIT {
   private UUID tenantId;
   private String slug;
   private static final String PHONE = "+5511999991122";
-  private Instant now;
+  private volatile Instant now;
   private final Map<UUID, String> sentCodes = new ConcurrentHashMap<>();
 
   @DynamicPropertySource
@@ -419,6 +421,128 @@ class ClientAccessIT {
   }
 
   @Test
+  void challengeBoundRecoveryRejectsAnOlderSessionForAnotherPhoneOrTenant() throws Exception {
+    UUID firstChallenge =
+        requestChallenge(slug, PHONE, "access-recovery-session-" + UUID.randomUUID());
+    String firstCode = sentCodes.get(firstChallenge);
+    MvcResult verified =
+        mvc.perform(
+                post(verifyPath(firstChallenge))
+                    .with(csrf())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"code\":\"" + firstCode + "\"}"))
+            .andExpect(status().isNoContent())
+            .andReturn();
+    String token =
+        verified
+            .getResponse()
+            .getHeader("Set-Cookie")
+            .substring(
+                "AGDCLIENT=".length(), verified.getResponse().getHeader("Set-Cookie").indexOf(';'));
+    String cookie = "AGDCLIENT=" + token;
+
+    String otherPhone = "+5511999991125";
+    ownerJdbc.update(
+        "INSERT INTO agendamento.client(client_id, tenant_id, display_name, normalized_phone) VALUES (?, ?, 'Other phone', ?)",
+        UUID.randomUUID(),
+        tenantId,
+        otherPhone);
+    UUID sameTenantChallenge =
+        requestChallenge(slug, otherPhone, "access-recovery-other-phone-" + UUID.randomUUID());
+    rejectWithWrongCode(sameTenantChallenge, slug);
+    assertBoundSession(cookie, slug, sameTenantChallenge, false);
+    mvc.perform(get("/api/v1/client/session").param("slug", slug).header("Cookie", cookie))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.authenticated").value(false));
+    mvc.perform(
+            get("/api/v1/client/session")
+                .param("challengeId", sameTenantChallenge.toString())
+                .header("Cookie", cookie))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.authenticated").value(false));
+
+    UUID otherTenantId = UUID.randomUUID();
+    String otherSlug = "client-access-recovery-" + UUID.randomUUID().toString().substring(0, 8);
+    ownerJdbc.update(
+        "INSERT INTO agendamento.tenant(tenant_id, name, slug, timezone, status) VALUES (?, 'Other recovery fixture', ?, 'UTC', 'ACTIVE')",
+        otherTenantId,
+        otherSlug);
+    String otherTenantPhone = "+5511999991126";
+    ownerJdbc.update(
+        "INSERT INTO agendamento.client(client_id, tenant_id, display_name, normalized_phone) VALUES (?, ?, 'Other tenant phone', ?)",
+        UUID.randomUUID(),
+        otherTenantId,
+        otherTenantPhone);
+    UUID otherTenantChallenge =
+        requestChallenge(
+            otherSlug, otherTenantPhone, "access-recovery-other-tenant-" + UUID.randomUUID());
+    rejectWithWrongCode(otherTenantChallenge, otherSlug);
+    assertBoundSession(cookie, otherSlug, otherTenantChallenge, false);
+
+    mvc.perform(get("/api/v1/client/session").header("Cookie", cookie))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.authenticated").value(true));
+    assertThat(count("client_access_session")).isEqualTo(1);
+  }
+
+  @Test
+  void verificationUsesClockInstantAfterWaitingForChallengeRowLock() throws Exception {
+    UUID challengeId = requestChallenge(slug, PHONE, "access-expiry-lock-" + UUID.randomUUID());
+    String code = sentCodes.get(challengeId);
+    Instant expiresAt = now.plusSeconds(300);
+    ownerJdbc.update(
+        "UPDATE agendamento.client_access_challenge SET expires_at = ? WHERE tenant_id = ? AND challenge_id = ?",
+        java.sql.Timestamp.from(expiresAt),
+        tenantId,
+        challengeId);
+
+    try (var lockConnection = PostgresTestEnvironment.migrationDataSource().getConnection();
+        var executor = Executors.newSingleThreadExecutor()) {
+      lockConnection.setAutoCommit(false);
+      try (var lock =
+          lockConnection.prepareStatement(
+              "SELECT challenge_id FROM agendamento.client_access_challenge WHERE tenant_id = ? AND challenge_id = ? FOR UPDATE")) {
+        lock.setObject(1, tenantId);
+        lock.setObject(2, challengeId);
+        lock.executeQuery().close();
+      }
+
+      CountDownLatch verifyStarted = new CountDownLatch(1);
+      Future<?> verification =
+          executor.submit(
+              () -> {
+                verifyStarted.countDown();
+                service.verify(slug, challengeId, code);
+              });
+      assertThat(verifyStarted.await(5, TimeUnit.SECONDS)).isTrue();
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+      boolean waitingForLock = false;
+      while (System.nanoTime() < deadline && !waitingForLock) {
+        waitingForLock =
+            Boolean.TRUE.equals(
+                ownerJdbc.queryForObject(
+                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE '%client_access_challenge%FOR UPDATE%')",
+                    Boolean.class));
+        if (!waitingForLock) Thread.sleep(20);
+      }
+      assertThat(waitingForLock).as("verify must wait on the locked challenge row").isTrue();
+      now = expiresAt;
+      lockConnection.commit();
+
+      assertThatThrownBy(verification::get)
+          .hasCauseInstanceOf(AccessChallengeInvalidException.class);
+    }
+    assertThat(
+            ownerJdbc.queryForObject(
+                "SELECT status FROM agendamento.client_access_challenge WHERE tenant_id = ? AND challenge_id = ?",
+                String.class,
+                tenantId,
+                challengeId))
+        .isEqualTo("EXPIRED");
+    assertThat(count("client_access_session")).isZero();
+  }
+
+  @Test
   void csrfIsRequiredForChallengeMutation() throws Exception {
     mvc.perform(
             post("/api/v1/public/" + slug + "/access-challenges")
@@ -454,8 +578,12 @@ class ClientAccessIT {
   }
 
   private MvcResult request(String phone, String key) throws Exception {
+    return request(slug, phone, key);
+  }
+
+  private MvcResult request(String requestSlug, String phone, String key) throws Exception {
     return mvc.perform(
-            post("/api/v1/public/" + slug + "/access-challenges")
+            post("/api/v1/public/" + requestSlug + "/access-challenges")
                 .with(csrf())
                 .header("Idempotency-Key", key)
                 .contentType(MediaType.APPLICATION_JSON)
@@ -463,6 +591,36 @@ class ClientAccessIT {
         .andExpect(status().isAccepted())
         .andExpect(jsonPath("$.challengeAccepted").value(true))
         .andReturn();
+  }
+
+  private UUID requestChallenge(String requestSlug, String phone, String key) throws Exception {
+    return mapper
+        .readValue(
+            request(requestSlug, phone, key).getResponse().getContentAsString(),
+            AccessChallengeAccepted.class)
+        .challengeId();
+  }
+
+  private void rejectWithWrongCode(UUID challengeId, String requestSlug) throws Exception {
+    String actual = sentCodes.get(challengeId);
+    String wrong = "000000".equals(actual) ? "000001" : "000000";
+    mvc.perform(
+            post("/api/v1/public/" + requestSlug + "/access-challenges/" + challengeId + "/verify")
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"code\":\"" + wrong + "\"}"))
+        .andExpect(status().isUnauthorized());
+  }
+
+  private void assertBoundSession(
+      String cookie, String requestSlug, UUID challengeId, boolean expected) throws Exception {
+    mvc.perform(
+            get("/api/v1/client/session")
+                .param("slug", requestSlug)
+                .param("challengeId", challengeId.toString())
+                .header("Cookie", cookie))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.authenticated").value(expected));
   }
 
   private String verifyPath(UUID challengeId) {

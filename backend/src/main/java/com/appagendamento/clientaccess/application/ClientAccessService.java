@@ -215,7 +215,6 @@ public class ClientAccessService {
       throw new AccessChallengeInvalidException();
     }
     String token = crypto.newSessionToken();
-    Instant now = clock.instant();
     VerificationResult result =
         transaction.execute(
             status -> {
@@ -240,6 +239,7 @@ public class ClientAccessService {
                       challengeId);
               if (rows.isEmpty()) return VerificationResult.rejected();
               VerificationRow row = rows.getFirst();
+              Instant now = clock.instant();
               if (!"ISSUED".equals(row.status())
                   || !now.isBefore(row.expiresAt())
                   || row.blockedUntil() != null && now.isBefore(row.blockedUntil())) {
@@ -296,13 +296,14 @@ public class ClientAccessService {
                       phone);
               if (!clientStillExists) return VerificationResult.rejected();
               jdbc.update(
-                  "INSERT INTO agendamento.client_access_session(session_digest, tenant_id, phone_ciphertext, phone_key_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+                  "INSERT INTO agendamento.client_access_session(session_digest, tenant_id, phone_ciphertext, phone_key_id, created_at, expires_at, challenge_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
                   crypto.sessionDigest(token),
                   tenantId,
                   crypto.encryptPhone(phone),
                   crypto.phoneKeyId(),
                   Timestamp.from(now),
-                  Timestamp.from(now.plusSeconds(sessionTtlSeconds)));
+                  Timestamp.from(now.plusSeconds(sessionTtlSeconds)),
+                  challengeId);
               return VerificationResult.accepted(token);
             });
     if (result == null || !result.accepted()) throw new AccessChallengeInvalidException();
@@ -319,6 +320,27 @@ public class ClientAccessService {
             "SELECT EXISTS(SELECT 1 FROM agendamento.client_access_session WHERE session_digest = ? AND revoked_at IS NULL AND expires_at > ?)",
             Boolean.class,
             digest,
+            Timestamp.from(now)));
+  }
+
+  public boolean isAuthenticatedForChallenge(
+      String rawCookieHeader, String slug, UUID challengeId) {
+    String token = cookieValue(rawCookieHeader);
+    if (token == null) return false;
+    UUID tenantId;
+    try {
+      tenantId = resolveTenant(slug);
+    } catch (AccessChallengeInvalidException exception) {
+      return false;
+    }
+    Instant now = clock.instant();
+    return Boolean.TRUE.equals(
+        jdbc.queryForObject(
+            "SELECT EXISTS(SELECT 1 FROM agendamento.client_access_session s JOIN agendamento.client_access_challenge c ON c.tenant_id = s.tenant_id AND c.challenge_id = s.challenge_id WHERE s.session_digest = ? AND s.tenant_id = ? AND s.challenge_id = ? AND c.status = 'VERIFIED' AND s.revoked_at IS NULL AND s.expires_at > ?)",
+            Boolean.class,
+            crypto.sessionDigest(token),
+            tenantId,
+            challengeId,
             Timestamp.from(now)));
   }
 
