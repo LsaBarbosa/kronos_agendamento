@@ -12,6 +12,7 @@ AGD-024 autentica telefone verificado por desafio de uso único. A solução dev
 - Código é CSPRNG; apenas salt/verificador com pepper externo e versão são persistidos. Telefone cifrado; fingerprint usa segredo externo de propósito e versão próprios, com `fingerprint_key_id` persistido. Verificador e cifra usam identificadores ativos e keyrings separados (`CLIENT_ACCESS_VERIFIER_*` e `CLIENT_ACCESS_PHONE_ENCRYPTION_*`), sem reutilizar automaticamente chaves entre finalidades. O protocolo recusa novos desafios se a configuração ativa de fingerprint divergir de registros existentes: não pode resetar limites por rotação unilateral. Rotação do fingerprint depende de uma estratégia de retenção/migração aprovada; não se presume descarte.
 - Transporte é fora da transação. Sem integração/segredos de produção, falha de forma segura e preserva resposta neutra.
 - Sessão/cookie de cliente é separado de `AGDSESSION`, do principal OIDC e da capability AGD-016. Só fornece autoridade sob `/api/v1/client`; nenhuma rota de reservas é entregue em AGD-024.
+- Mutação da interface obtém token CSRF imediatamente antes do POST; CSRF permanece habilitado e não é substituído por CORS ou exceção de rota.
 - Emissor sintético existe somente no profile `e2e`, com segredo sintético explícito.
 
 ## Parâmetros de produto pendentes
