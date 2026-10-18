@@ -1580,25 +1580,27 @@ try {
     await navigate(`http://localhost:5173/client-access/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
     await waitForText('Entre com seu telefone', evaluate);
     await waitUntil(() => evaluate("!document.querySelector('button[type=submit]')?.disabled"));
-    const freshClientAccessCsrf = await evaluate(
-        "fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())",
-    );
     await evaluate(`(() => {
       const originalFetch = window.fetch.bind(window);
       window.fetch = async (...args) => {
         const response = await originalFetch(...args);
         const requestUrl = args[0] instanceof Request ? args[0].url : String(args[0]);
         const requestMethod = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
+        if (requestUrl.endsWith('/api/v1/csrf') && requestMethod.toUpperCase() === 'GET' && response.ok) {
+          const csrf = await response.clone().json();
+          window.__clientAccessLatestCsrf = {headerName: csrf.headerName, token: csrf.token};
+        }
         if (requestUrl.includes('/access-challenges') && !requestUrl.endsWith('/verify') && requestMethod.toUpperCase() === 'POST') {
           const result = await response.clone().json();
           const requestHeaders = new Headers(args[1]?.headers ?? (args[0] instanceof Request ? args[0].headers : undefined));
+          const csrf = window.__clientAccessLatestCsrf;
           window.__clientAccessRequestResult = {
             status: response.status,
             challengeAccepted: result.challengeAccepted,
             hasChallengeId: Boolean(result.challengeId),
             errorCode: typeof result.error?.code === 'string' ? result.error.code : null,
-            csrfHeaderPresent: requestHeaders.has(${JSON.stringify(freshClientAccessCsrf.headerName)}),
-            csrfMatchesFreshToken: requestHeaders.get(${JSON.stringify(freshClientAccessCsrf.headerName)}) === ${JSON.stringify(freshClientAccessCsrf.token)},
+            csrfHeaderPresent: Boolean(csrf && requestHeaders.has(csrf.headerName)),
+            csrfMatchesLatestResponse: Boolean(csrf && requestHeaders.get(csrf.headerName) === csrf.token),
           };
           window.__clientAccessChallengeId = result.challengeId;
         }
@@ -1610,7 +1612,7 @@ try {
     await waitUntil(() => evaluate('Boolean(window.__clientAccessRequestResult)'));
     const clientAccessRequestResult = await evaluate('window.__clientAccessRequestResult');
     if (!clientAccessRequestResult.hasChallengeId) {
-        throw new Error(`Solicitação neutra sem challengeId para fixture E2E: HTTP ${clientAccessRequestResult.status}, accepted=${clientAccessRequestResult.challengeAccepted}, error=${clientAccessRequestResult.errorCode}, csrfHeader=${clientAccessRequestResult.csrfHeaderPresent}, csrfMatches=${clientAccessRequestResult.csrfMatchesFreshToken}.`);
+        throw new Error(`Solicitação neutra sem challengeId para fixture E2E: HTTP ${clientAccessRequestResult.status}, accepted=${clientAccessRequestResult.challengeAccepted}, error=${clientAccessRequestResult.errorCode}, csrfHeader=${clientAccessRequestResult.csrfHeaderPresent}, csrfMatches=${clientAccessRequestResult.csrfMatchesLatestResponse}.`);
     }
     const expiredChallengeId = await evaluate('window.__clientAccessChallengeId');
     const emitterSecret = 'e2e-only-synthetic-emitter-secret-000000000000';

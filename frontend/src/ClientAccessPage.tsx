@@ -20,6 +20,32 @@ export function ClientAccessPage({ slug }: { slug: string }) {
     const [verifyRejected, setVerifyRejected] = useState(false);
     const requestIntent = useRef<{ phone: string; key: string } | null>(null);
 
+    async function loadCsrfForMutation(): Promise<Csrf | null> {
+        try {
+            const response = await fetch(apiBaseUrl + '/v1/csrf', {
+                credentials: 'same-origin',
+                cache: 'no-store',
+            });
+            if (!response.ok) return null;
+            const value = (await response.json()) as Partial<Csrf>;
+            if (
+                typeof value.headerName !== 'string' ||
+                typeof value.token !== 'string' ||
+                !value.token
+            ) {
+                return null;
+            }
+            const current = {
+                headerName: value.headerName,
+                token: value.token,
+            };
+            setCsrf(current);
+            return current;
+        } catch {
+            return null;
+        }
+    }
+
     useEffect(() => {
         let active = true;
         void fetch(apiBaseUrl + '/v1/csrf', {
@@ -55,6 +81,14 @@ export function ClientAccessPage({ slug }: { slug: string }) {
         }
         setBusy(true);
         setMessage('Se os dados forem elegíveis, enviaremos um código.');
+        const requestCsrf = await loadCsrfForMutation();
+        if (!requestCsrf) {
+            setMessage(
+                'Não foi possível preparar a proteção da sessão. Tente novamente.',
+            );
+            setBusy(false);
+            return;
+        }
         try {
             const response = await fetch(
                 apiBaseUrl +
@@ -67,7 +101,7 @@ export function ClientAccessPage({ slug }: { slug: string }) {
                     cache: 'no-store',
                     headers: {
                         'Content-Type': 'application/json',
-                        [csrf.headerName]: csrf.token,
+                        [requestCsrf.headerName]: requestCsrf.token,
                         'Idempotency-Key': requestIntent.current.key,
                     },
                     body: JSON.stringify({ phone }),
@@ -110,6 +144,14 @@ export function ClientAccessPage({ slug }: { slug: string }) {
         const wasUncertain = verifyUncertain;
         setBusy(true);
         setMessage('Verificando código…');
+        const requestCsrf = await loadCsrfForMutation();
+        if (!requestCsrf) {
+            setMessage(
+                'Não foi possível preparar a proteção da sessão. Tente novamente.',
+            );
+            setBusy(false);
+            return;
+        }
         try {
             const response = await fetch(
                 apiBaseUrl +
@@ -124,7 +166,7 @@ export function ClientAccessPage({ slug }: { slug: string }) {
                     cache: 'no-store',
                     headers: {
                         'Content-Type': 'application/json',
-                        [csrf.headerName]: csrf.token,
+                        [requestCsrf.headerName]: requestCsrf.token,
                     },
                     body: JSON.stringify({ code }),
                 },
@@ -176,12 +218,25 @@ export function ClientAccessPage({ slug }: { slug: string }) {
     async function logout() {
         if (!csrf) return;
         setBusy(true);
+        const requestCsrf = await loadCsrfForMutation();
+        if (!requestCsrf) {
+            setMessage(
+                'Não foi possível preparar a proteção da sessão. Tente novamente.',
+            );
+            setBusy(false);
+            return;
+        }
         try {
-            await fetch(apiBaseUrl + '/v1/client/session/logout', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { [csrf.headerName]: csrf.token },
-            });
+            const response = await fetch(
+                apiBaseUrl + '/v1/client/session/logout',
+                {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    headers: { [requestCsrf.headerName]: requestCsrf.token },
+                },
+            );
+            if (!response.ok) throw new Error('logout');
             setPhase('phone');
             setChallengeId('');
             setCode('');
