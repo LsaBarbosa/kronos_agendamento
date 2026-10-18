@@ -231,6 +231,8 @@ O `challengeId` pode ser devolvido quando não facilitar enumeração; alternati
 
 Resposta cria sessão limitada via cookie `HttpOnly`, `Secure`, `SameSite` adequado ou token de curta duração protegido contra exfiltração.
 
+O challengeId, quando retornado, é opaco e sempre consultado junto do tenant resolvido pelo slug; ele não é uma credencial de sessão. A verificação aceita somente o código no body e emite cookie de cliente separado da sessão OIDC administrativa, restrito a `/api/v1/client`. `GET /api/v1/client/session` retorna apenas estado booleano; `POST /api/v1/client/session/logout` revoga a sessão. CSRF continua ativo para mutações autenticadas por cookie. O contrato OpenAPI versionado está em `docs/openapi/public-client-access.yaml`. TTL/renovação da sessão e comprimento do OTP não estão definidos pela especificação e permanecem decisões de produto pendentes; não inferir valores das sessões administrativa ou da capability de AGD-016.
+
 ### Reservas do cliente
 
 | Método | Endpoint | Descrição |

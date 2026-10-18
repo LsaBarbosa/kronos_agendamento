@@ -61,6 +61,7 @@ class ModularArchitectureTest {
             "subscriptions",
             "exports",
             "identityaccess",
+            "clientaccess",
             "audit",
             "publicpage");
     for (String module : modules) {

@@ -1,0 +1,123 @@
+openapi: 3.1.0
+info:
+  title: Kronos client access
+  version: 1.0.0
+  description: >-
+    Public OTP challenge contract for AGD-024. The challenge does not establish
+    access to appointment routes, which remain out of scope until AGD-025.
+servers:
+  - url: /
+paths:
+  /api/v1/public/{slug}/access-challenges:
+    post:
+      summary: Request a neutral client access challenge
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              additionalProperties: false
+              properties:
+                phone:
+                  type: string
+                  maxLength: 32
+                  description: Explicit international number; country is never inferred.
+                  example: '+5511999999999'
+      responses:
+        '202':
+          description: Same neutral result whether or not a client can receive a message.
+          headers:
+            Cache-Control:
+              schema: { type: string, example: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [challengeAccepted, expiresInSeconds, challengeId]
+                properties:
+                  challengeAccepted: { type: boolean, const: true }
+                  expiresInSeconds: { type: integer, const: 300 }
+                  challengeId:
+                    type: [string, 'null']
+                    format: uuid
+                    description: Opaque, tenant-bound handle; null if secure challenge configuration is unavailable.
+        '400': { description: Invalid phone representation }
+        '403': { description: CSRF validation failed }
+        '409': { description: Idempotency key reused with different command }
+  /api/v1/public/{slug}/access-challenges/{challengeId}/verify:
+    post:
+      summary: Verify and atomically consume a client challenge
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - name: challengeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              additionalProperties: false
+              properties:
+                code:
+                  type: string
+                  pattern: '^[0-9]{6}$'
+                  writeOnly: true
+      responses:
+        '204':
+          description: Verified; sets a restricted AGDCLIENT cookie, no appointment authority.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                description: HttpOnly, SameSite=Lax, scoped to /api/v1/client; Secure in HTTPS.
+            Cache-Control:
+              schema: { type: string, example: no-store }
+        '401': { description: Generic invalid, expired, blocked, consumed, or foreign challenge }
+        '403': { description: CSRF validation failed }
+  /api/v1/client/session:
+    get:
+      summary: Read only whether the client cookie is currently valid
+      security: [{ clientCookie: [] }]
+      responses:
+        '200':
+          description: Does not expose tenant, phone, or appointments.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authenticated]
+                properties:
+                  authenticated: { type: boolean }
+  /api/v1/client/session/logout:
+    post:
+      summary: Revoke the current client access session
+      security: [{ clientCookie: [] }]
+      responses:
+        '204': { description: Session revoked; cookie cleared }
+        '403': { description: CSRF validation failed }
+components:
+  parameters:
+    Slug:
+      name: slug
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 16, maxLength: 128 }
+  securitySchemes:
+    clientCookie:
+      type: apiKey
+      in: cookie
+      name: AGDCLIENT

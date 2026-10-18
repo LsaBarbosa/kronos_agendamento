@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 
 const chromePath = process.env.CHROME_BIN || '/usr/bin/google-chrome';
@@ -1566,13 +1567,166 @@ try {
     }
     console.log('Browser: logout local/CSRF validado.');
     await command('Network.clearBrowserCookies');
+
+    const clientPhone = `+55119${Date.now().toString().slice(-8)}`;
+    const demoTenantSlug = queryPostgres(
+        `SELECT slug FROM agendamento.tenant WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
+        appEnvironment,
+    );
+    queryPostgres(
+        `INSERT INTO agendamento.client(client_id, tenant_id, display_name, normalized_phone) VALUES ('${randomUUID()}', '${credentials.DEMO_TENANT_ID}', 'Cliente E2E acesso', '${clientPhone}')`,
+        appEnvironment,
+    );
+    await navigate(`http://localhost:5173/client-access/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
+    await waitForText('Entre com seu telefone', evaluate);
+    await waitUntil(() => evaluate("!document.querySelector('button[type=submit]')?.disabled"));
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        if (String(args[0]).includes('/access-challenges') && !String(args[0]).endsWith('/verify') && args[1]?.method === 'POST') {
+          const result = await response.clone().json();
+          window.__clientAccessChallengeId = result.challengeId;
+        }
+        return response;
+      };
+    })()`);
+    await setFieldById('client-phone', clientPhone, evaluate);
+    await clickButtonByText('Solicitar código', evaluate);
+    await waitUntil(() => evaluate('Boolean(window.__clientAccessChallengeId)'));
+    const expiredChallengeId = await evaluate('window.__clientAccessChallengeId');
+    const emitterSecret = 'e2e-only-synthetic-emitter-secret-000000000000';
+    const appPort = appEnvironment.APP_PORT || '8080';
+    const expiredCodeResponse = await fetch(`http://localhost:${appPort}/internal/e2e/access-challenges/${expiredChallengeId}/code`, {
+        headers: { 'X-E2E-Emitter-Secret': emitterSecret },
+        cache: 'no-store',
+    });
+    if (!expiredCodeResponse.ok) throw new Error('Emissor privado E2E não retornou o código do desafio.');
+    const expiredCode = (await expiredCodeResponse.json()).code;
+    queryPostgres(
+        `UPDATE agendamento.client_access_challenge SET expires_at = clock_timestamp() WHERE challenge_id = '${expiredChallengeId}'`,
+        appEnvironment,
+    );
+    await setFieldById('client-code', expiredCode, evaluate);
+    const clientAccessStorageSafe = await evaluate(`(() => {
+      const storedValues = [localStorage, sessionStorage].flatMap(store => Array.from({length: store.length}, (_, index) => store.getItem(store.key(index))));
+      const persisted = [location.href, JSON.stringify(history.state), ...storedValues].join('|');
+      return !persisted.includes(${JSON.stringify(clientPhone)}) && !persisted.includes(${JSON.stringify(expiredCode)});
+    })()`);
+    if (!clientAccessStorageSafe) throw new Error('Telefone ou código apareceu em URL, histórico ou storage do navegador.');
+    await clickButtonByText('Verificar código', evaluate);
+    await waitForText('Código inválido, expirado ou temporariamente bloqueado.', evaluate);
+    if (await cookies(command).then((items) => items.some((cookie) => cookie.name === 'AGDCLIENT'))) {
+        throw new Error('Desafio expirado emitiu cookie de cliente.');
+    }
+
+    await clickButtonByText('Solicitar novo código', evaluate);
+    await evaluate('window.__clientAccessChallengeId = null');
+    await clickButtonByText('Solicitar código', evaluate);
+    await waitUntil(() => evaluate('Boolean(window.__clientAccessChallengeId)'));
+    const blockedChallengeId = await evaluate('window.__clientAccessChallengeId');
+    const blockedCodeResponse = await fetch(`http://localhost:${appPort}/internal/e2e/access-challenges/${blockedChallengeId}/code`, {
+        headers: { 'X-E2E-Emitter-Secret': emitterSecret },
+        cache: 'no-store',
+    });
+    if (!blockedCodeResponse.ok) throw new Error('Emissor privado E2E não retornou o código para o teste de tentativas.');
+    const blockedCode = (await blockedCodeResponse.json()).code;
+    const wrongCode = blockedCode === '000000' ? '000001' : '000000';
+    await setFieldById('client-code', wrongCode, evaluate);
+    await clickButtonByText('Verificar código', evaluate);
+    await waitForText('Código inválido, expirado ou temporariamente bloqueado.', evaluate);
+    const csrf = await evaluate("fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())");
+    const lockoutStatuses = await evaluate(`(async () => {
+      const statuses = [];
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const response = await fetch(${JSON.stringify(`/api/v1/public/${demoTenantSlug}/access-challenges/${blockedChallengeId}/verify`)}, {
+          method: 'POST', credentials: 'same-origin', cache: 'no-store',
+          headers: {'Content-Type':'application/json', [${JSON.stringify(csrf.headerName)}]:${JSON.stringify(csrf.token)}},
+          body: JSON.stringify({code:${JSON.stringify(wrongCode)}})
+        });
+        statuses.push(response.status);
+      }
+      return statuses;
+    })()`);
+    if (lockoutStatuses.some((status) => status !== 401)) {
+        throw new Error(`As tentativas inválidas não produziram o bloqueio esperado: ${JSON.stringify(lockoutStatuses)}`);
+    }
+    const challengeStatus = queryPostgres(
+        `SELECT status FROM agendamento.client_access_challenge WHERE challenge_id = '${blockedChallengeId}'`,
+        appEnvironment,
+    );
+    if (challengeStatus !== 'BLOCKED') throw new Error('Quinto erro não bloqueou o desafio no PostgreSQL.');
+
+    await clickButtonByText('Solicitar novo código', evaluate);
+    await evaluate('window.__clientAccessChallengeId = null');
+    await clickButtonByText('Solicitar código', evaluate);
+    await waitUntil(() => evaluate('Boolean(window.__clientAccessChallengeId)'));
+    const validChallengeId = await evaluate('window.__clientAccessChallengeId');
+    const validCodeResponse = await fetch(`http://localhost:${appPort}/internal/e2e/access-challenges/${validChallengeId}/code`, {
+        headers: { 'X-E2E-Emitter-Secret': emitterSecret },
+        cache: 'no-store',
+    });
+    if (!validCodeResponse.ok) throw new Error('Emissor privado E2E não retornou código para verificação válida.');
+    const validCode = (await validCodeResponse.json()).code;
+    await setFieldById('client-code', validCode, evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        if (String(args[0]).endsWith('/verify') && args[1]?.method === 'POST' && response.ok) {
+          window.fetch = originalFetch;
+          window.__clientVerifyResponseLost = true;
+          throw new TypeError('Simulated lost verification response after session commit');
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Verificar código', evaluate);
+    await waitForText('Não foi possível confirmar o resultado. Mantenha o mesmo código', evaluate);
+    await clickButtonByText('Tentar novamente', evaluate);
+    await waitForText('Acesso verificado neste tenant.', evaluate);
+    if (!(await evaluate('window.__clientVerifyResponseLost === true'))) {
+        throw new Error('A resposta perdida da verificação não foi simulada.');
+    }
+    const clientCookie = (await cookies(command)).find((cookie) => cookie.name === 'AGDCLIENT');
+    if (!clientCookie || !clientCookie.httpOnly || clientCookie.sameSite !== 'Lax' || clientCookie.path !== '/api/v1/client') {
+        throw new Error('Cookie de cliente não tem escopo e atributos esperados.');
+    }
+    const clientSession = await evaluate("fetch('/api/v1/client/session', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())");
+    const adminSessionStatus = await evaluate("fetch('/api/v1/admin/session', {credentials:'same-origin', cache:'no-store'}).then(response => response.status)");
+    if (!clientSession.authenticated || adminSessionStatus !== 401) {
+        throw new Error('Sessão de cliente não está isolada da autoridade administrativa.');
+    }
+    const clientEffects = queryPostgres(
+        `SELECT count(*) FROM agendamento.client_access_session WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
+        appEnvironment,
+    );
+    const consumedChallengeStatus = queryPostgres(
+        `SELECT status FROM agendamento.client_access_challenge WHERE challenge_id = '${validChallengeId}'`,
+        appEnvironment,
+    );
+    if (clientEffects !== '1' || consumedChallengeStatus !== 'VERIFIED') {
+        throw new Error('Retry de verificação duplicou a sessão ou não consumiu o challenge uma única vez.');
+    }
+    await clickButtonByText('Sair', evaluate);
+    await waitForText('Sessão encerrada.', evaluate);
+    const loggedOutClient = await evaluate("fetch('/api/v1/client/session', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())");
+    if (loggedOutClient.authenticated) throw new Error('Logout não revogou a sessão do cliente.');
+    console.log('Browser: solicitação neutra, expiração, bloqueio após cinco erros, sessão isolada e logout de cliente verificados com emissor privado E2E.');
+
+    await command('Network.clearBrowserCookies');
     await navigate('http://localhost:5173/admin', command, evaluate);
     await waitForText('Entrar como administrador', evaluate);
     await evaluate("document.querySelector('a[href*=oauth2]').click()");
     await waitForText('username', evaluate, true);
     await submitLogin(credentials.KEYCLOAK_UNLINKED_USERNAME, credentials.KEYCLOAK_UNLINKED_PASSWORD, evaluate);
     await waitForText('ADMIN_ACCESS_DENIED', evaluate);
-    assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, credentials);
+    assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, credentials, [
+        clientPhone,
+        expiredCode,
+        blockedCode,
+        validCode,
+    ]);
     console.log(
         'Browser E2E passed: OIDC login, tenant, 30-minute idle expiry, SSO reauthentication, revocation, CSRF logout, unlinked denial, no test credentials in backend logs.',
     );
@@ -1885,7 +2039,7 @@ function queryPostgres(query, environment) {
     ).trim();
 }
 
-function assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, credentials) {
+function assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, credentials, sensitiveValues = []) {
     const logs = execFileSync(
         'docker',
         [
@@ -1916,6 +2070,7 @@ function assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, c
         keycloakEnvironment.OIDC_CLIENT_SECRET,
         credentials.KEYCLOAK_DEMO_PASSWORD,
         credentials.KEYCLOAK_UNLINKED_PASSWORD,
+        ...sensitiveValues,
     ].filter(Boolean);
     if (secretValues.some((secret) => logs.includes(secret))) {
         throw new Error('Log do backend contém uma credencial de teste.');

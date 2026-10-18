@@ -56,6 +56,8 @@
 
 ## Encerramento ou retomada
 
+**Integração atualizada em 17/10/2026:** PR #15 foi integrado a `main` pelo merge commit `139d59ec47f3e38f46789b59a77f60148f9bf0ca`, com head `a36c2da25bc6a3d823236dff914a446ef32273d1`. App CI e CodeQL passaram nos checks do head e pós-merge (runs pós-merge `39075648599` e `39075648623`). AGD-023 permanece parcial: sessão/rota de cancelamento de cliente depende de AGD-024/025; notificações/jobs de lembrete, restrições automáticas de faltas, homologação, retenção e prontidão legal/comercial seguem em suas histórias/decisões. Sem deploy.
+
 - Atualizar este plano, STATUS, VALIDATION e TRACEABILITY somente com comandos/resultados observados.
 - Manter AGD-023 parcial pelas integrações futuras aplicáveis: identidade/rota de cancelamento do cliente (AGD-024/025), jobs/lembretes e fornecedores reais (AGD-030/031), contagem/restrição automática (AGD-032/033), além das pendências operacionais globais. As regras temporais foram decididas nesta instrução e não são mais uma pendência de produto.
 - Próximo trabalho não iniciado nesta execução.

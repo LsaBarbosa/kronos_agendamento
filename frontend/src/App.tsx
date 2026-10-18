@@ -7,6 +7,7 @@ import { ScheduleExceptionsPanel } from './ScheduleExceptionsPanel';
 import { PublicPage } from './PublicPage';
 import { PublicPublicationPanel } from './PublicPublicationPanel';
 import { AdminAgendaPanel } from './AdminAgendaPanel';
+import { ClientAccessPage } from './ClientAccessPage';
 
 type Session = { authenticated: boolean; tenantId: string; role: string };
 type Csrf = { headerName: string; token: string };
@@ -556,6 +557,18 @@ function AdminApp() {
 }
 
 export function App() {
+    const clientAccessMatch = /^\/client-access\/([^/]+)\/?$/.exec(
+        window.location.pathname,
+    );
+    if (clientAccessMatch) {
+        let slug = clientAccessMatch[1];
+        try {
+            slug = decodeURIComponent(slug);
+        } catch {
+            slug = '';
+        }
+        return <ClientAccessPage slug={slug} />;
+    }
     const match = /^\/public\/([^/]+)\/?$/.exec(window.location.pathname);
     if (match) {
         let slug = match[1];

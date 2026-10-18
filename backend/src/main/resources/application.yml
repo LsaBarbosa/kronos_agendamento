@@ -71,6 +71,19 @@ app:
     digest:
       active-key-id: ${PUBLIC_BOOKING_HMAC_ACTIVE_KEY_ID:}
       keys: ${PUBLIC_BOOKING_HMAC_KEYS:}
+  client-access:
+    keys:
+      verifier-active-id: ${CLIENT_ACCESS_VERIFIER_ACTIVE_KEY_ID:}
+      phone-encryption-active-id: ${CLIENT_ACCESS_PHONE_ENCRYPTION_ACTIVE_KEY_ID:}
+      fingerprint-id: ${CLIENT_ACCESS_FINGERPRINT_KEY_ID:}
+      verifier-ring: ${CLIENT_ACCESS_VERIFIER_KEY_RING:}
+      fingerprint: ${CLIENT_ACCESS_FINGERPRINT_KEY:}
+      phone-encryption-ring: ${CLIENT_ACCESS_PHONE_ENCRYPTION_KEY_RING:}
+    session:
+      ttl-seconds: ${CLIENT_ACCESS_SESSION_TTL_SECONDS:0}
+      cookie-secure: ${CLIENT_ACCESS_COOKIE_SECURE:true}
+    e2e-emitter-enabled: ${CLIENT_ACCESS_E2E_EMITTER_ENABLED:false}
+    e2e-emitter-secret: ${CLIENT_ACCESS_E2E_EMITTER_SECRET:}
   outbox:
     worker:
       enabled: ${OUTBOX_WORKER_ENABLED:false}

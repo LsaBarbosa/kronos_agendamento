@@ -27,6 +27,7 @@ import com.appagendamento.catalog.application.GetService;
 import com.appagendamento.catalog.application.ListServices;
 import com.appagendamento.catalog.application.SetServiceStatus;
 import com.appagendamento.catalog.application.UpdateService;
+import com.appagendamento.clientaccess.application.ClientAccessService;
 import com.appagendamento.clients.application.SearchAdministrativeClients;
 import com.appagendamento.platform.infrastructure.web.CorrelationIdFilter;
 import com.appagendamento.publicpage.application.ChangePublicationStatus;
@@ -89,6 +90,7 @@ class SecurityBoundaryTest {
   @MockitoBean private GetPublicService getPublicService;
   @MockitoBean private CalculateAvailabilityForDateRange calculateAvailability;
   @MockitoBean private MeterRegistry meterRegistry;
+  @MockitoBean private ClientAccessService clientAccessService;
 
   @Test
   void anonymousBusinessRequestReceivesConsistentError() throws Exception {
@@ -105,6 +107,15 @@ class SecurityBoundaryTest {
     mvc.perform(get("/api/v1/admin/appointments").with(user("test-user")))
         .andExpect(status().isForbidden())
         .andExpect(jsonPath("$.error.code").value("ACTION_NOT_ALLOWED"));
+  }
+
+  @Test
+  void e2eCodeEmitterAndClientAppointmentRoutesStayClosedOutsideTheirContracts() throws Exception {
+    mvc.perform(
+            get("/internal/e2e/access-challenges/" + UUID.randomUUID() + "/code")
+                .header("X-E2E-Emitter-Secret", "synthetic-secret"))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(get("/api/v1/client/appointments")).andExpect(status().isUnauthorized());
   }
 
   @Test
