@@ -1585,7 +1585,12 @@ try {
     await navigate(`http://localhost:5173/public/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
     await waitForText(catalogName + ' Editado', evaluate);
     await setSelectById('public-service', publicService.serviceId, evaluate);
-    await setFieldById('public-date', publicDate, evaluate);
+    const clientBookingDate = await evaluate(`(() => {
+      const nextWeeklyOccurrence = new Date(${JSON.stringify(publicDate)} + 'T00:00:00Z');
+      nextWeeklyOccurrence.setUTCDate(nextWeeklyOccurrence.getUTCDate() + 7);
+      return nextWeeklyOccurrence.toISOString().slice(0, 10);
+    })()`);
+    await setFieldById('public-date', clientBookingDate, evaluate);
     await waitUntil(() => evaluate("[...document.querySelectorAll('.public-page__slot')].some(button => !button.disabled)"));
     await evaluate("[...document.querySelectorAll('.public-page__slot')].find(button => !button.disabled)?.click()");
     await setFieldById('public-client-name', 'Cliente da área E2E', evaluate);
