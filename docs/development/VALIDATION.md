@@ -2,7 +2,7 @@
 
 ## AGD-032 — validação local pré-publicação
 
-- Base `de4be40aa99e1b9db64527f25cb02552f786dc46`; branch `agd-032-faltas-janela-movel`; SHA desta rodada será preenchido após commit. V1–V25 preservadas; V26 adiciona somente a política opcional de limite por tenant.
+- Base `de4be40aa99e1b9db64527f25cb02552f786dc46`; código validado no commit `d39700f`; branch `agd-032-faltas-janela-movel`. V1–V25 preservadas; V26 adiciona somente a política opcional de limite por tenant.
 - Backend: `cd backend && export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH && ./mvnw -B -ntp spotless:check verify` — `BUILD SUCCESS`, JDK 21, PostgreSQL 16.13/Testcontainers; 77 testes unitários/arquiteturais e 203 integrações, sem falhas. `ClientNoShowPolicyIT` 5/5 e `TenantPersistenceIT` 25/25; migration limpa/upgrade V25→V26, Flyway validate/rerun, grants e constraint 1–5 cobertos.
 - Frontend: `cd frontend && npm run format:check && npm run lint && npm test -- --run && npm run check` — passou; 23 Vitest, TypeScript e build Vite.
 - Script: `node --check scripts/dev/test-keycloak-browser.mjs` passou. O roteiro foi estendido para configurar/reler o limite e conferir `NOT_TRACKED`; corrigiu-se o seletor do tenant para mirar o parágrafo rotulado, sem depender do primeiro `p code` global.
