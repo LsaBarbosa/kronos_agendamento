@@ -483,6 +483,12 @@ Eventos são fatos no passado, imutáveis e versionados.
 | `ExportAvailable` | objeto confirmado | UI/aviso |
 | `ExportExpired` | janela encerrou | limpeza |
 
+### Pipeline AGD-030 — estado incremental
+
+O consumidor local de `AppointmentConfirmed`, `AppointmentRescheduled` e `AppointmentCancelled` cria intenção tenant-scoped, deduplicada por tenant, reserva, versão, tipo e destinatário. Receipt e intenção são confirmados na mesma transação. O worker valida novamente estado/versão, usa lease/fencing, chama o adapter fora da transação e separa retry comprovadamente sem efeito, falha final e resultado desconhecido. Resultado de notificação não altera a reserva.
+
+As consultas administrativas minimizadas estão descritas em `docs/openapi/admin-notifications.yaml`. Sem fornecedor, template e protocolo aprovados, não há transport de produção nem endpoint de webhook ativo; a porta de verificação/admissão é exercitada apenas com adapter de teste. O adapter não comprova autenticidade nem entrega real. Falta de configuração de envio mantém o worker sem claim/tentativas. Timeout após possível aceite permanece desconhecido e não é reenviado cegamente. Retenção continua sem política aprovada. AGD-031 é separada: este pipeline não cria, invalida nem confirma envio de lembretes.
+
 ### Envelope
 
 ```json

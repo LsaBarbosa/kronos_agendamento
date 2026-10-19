@@ -1,0 +1,138 @@
+openapi: 3.1.0
+info:
+  title: App Agendamento — notificações administrativas
+  version: 1.0.0
+  description: Consulta tenant-scoped e minimizada do pipeline de notificações.
+servers:
+  - url: /
+paths:
+  /api/v1/admin/notifications/summary:
+    get:
+      operationId: getAdminNotificationSummary
+      summary: Consultar contagem operacional por estado
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: Contagem da fila do tenant autenticado
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [states]
+                properties:
+                  states:
+                    type: array
+                    items: { $ref: '#/components/schemas/NotificationSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/notifications:
+    get:
+      operationId: listAdminNotifications
+      summary: Listar intenções recentes do tenant autenticado
+      security:
+        - adminSession: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: Lista minimizada, limitada a 100 registros
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [notifications]
+                properties:
+                  notifications:
+                    type: array
+                    items: { $ref: '#/components/schemas/Notification' }
+        '400': { $ref: '#/components/responses/InvalidQuery' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/admin/notifications/{notificationId}:
+    get:
+      operationId: getAdminNotification
+      summary: Consultar intenção e tentativas do tenant autenticado
+      security:
+        - adminSession: []
+      parameters:
+        - $ref: '#/components/parameters/NotificationId'
+      responses:
+        '200':
+          description: Intenção minimizada e suas tentativas
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [notification, attempts]
+                properties:
+                  notification: { $ref: '#/components/schemas/Notification' }
+                  attempts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Attempt' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+components:
+  securitySchemes:
+    adminSession:
+      type: apiKey
+      in: cookie
+      name: AGDSESSION
+  parameters:
+    NotificationId:
+      name: notificationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  schemas:
+    NotificationSummary:
+      type: object
+      required: [state, count]
+      properties:
+        state: { type: string, enum: [PENDING, CLAIMED, RETRY, ACCEPTED, DELIVERED, DELIVERY_FAILED, FAILED_FINAL, OUTCOME_UNKNOWN, OBSOLETE] }
+        count: { type: integer, minimum: 0 }
+        oldestPendingSeconds: { type: integer, minimum: 0, nullable: true }
+    Notification:
+      type: object
+      required: [notificationId, appointmentId, appointmentVersion, type, state, attemptCount, createdAt]
+      properties:
+        notificationId: { type: string, format: uuid }
+        appointmentId: { type: string, format: uuid }
+        appointmentVersion: { type: integer, minimum: 1 }
+        type: { type: string, enum: [APPOINTMENT_CONFIRMED, APPOINTMENT_RESCHEDULED, APPOINTMENT_CANCELLED] }
+        state: { type: string, enum: [PENDING, CLAIMED, RETRY, ACCEPTED, DELIVERED, DELIVERY_FAILED, FAILED_FINAL, OUTCOME_UNKNOWN, OBSOLETE] }
+        attemptCount: { type: integer, minimum: 0 }
+        nextAttemptAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        lastErrorCode: { type: string, nullable: true }
+    Attempt:
+      type: object
+      required: [attemptNumber, state, startedAt]
+      properties:
+        attemptNumber: { type: integer, minimum: 1 }
+        state: { type: string }
+        errorCode: { type: string, nullable: true }
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, nullable: true }
+  responses:
+    Unauthorized:
+      description: Sessão administrativa ausente ou expirada
+    Forbidden:
+      description: Associação ou papel administrativo não autorizado
+    NotFound:
+      description: Intenção inexistente ou de outro tenant
+    InvalidQuery:
+      description: Limite fora do intervalo permitido

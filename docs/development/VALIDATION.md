@@ -1,5 +1,13 @@
 # Evidências de validação — AGD-001
 
+## AGD-030 — Pipeline de notificações (validação local concluída)
+
+- Base da história: PR #17/AGD-025 integrado em `cb2fdbee705dbd8277bc4d943e3672b7f92ff74c`; App CI [39289175761](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39289175761) e CodeQL [39289175672](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39289175672) passaram em todos os jobs pós-merge.
+- `backend/`: `./mvnw -B -ntp spotless:check verify` em Java 21 com PostgreSQL 16.13/Testcontainers — `BUILD SUCCESS` em 19/10/2026: 73 testes unitários/arquiteturais e 178 integrações; `NotificationPipelineIT` 11/11, `TenantPersistenceIT` 21/21. Incluiu instalação limpa e upgrades Flyway, validate/rerun e grants runtime para V22.
+- Diagnóstico preservado: rodadas direcionadas iniciais descobriram binding SQL incorreto, fixtures removendo receipts, CHECK sem estado `OBSOLETE` e atualização de estado incompatível com evidência atrasada. Houve ainda sete falhas no primeiro gate completo por expectativas antigas de contagem/histórico V21. Corrigidos código/fixtures/expectativas e repetido o gate completo, que passou sem reduzir assertions; as falhas iniciais permanecem registradas aqui.
+- Frontend não foi alterado; browser E2E de UI não se aplica. Não houve envio real, homologação WhatsApp nem webhook de fornecedor; adapters sintéticos comprovam somente composição.
+- Revisão sequencial do diff concluída; subagentes não disponíveis por limite de threads, sem alegação de revisão independente ou aprovação humana. CI push/PR e CodeQL do head de entrega aguardam publicação. AGD-030 permanece parcial por fornecedor/templates/segredos/protocolo e homologação.
+
 ## Follow-up P2 AGD-025 — PR #17
 
 Base do follow-up: head `e3000721fa9910847ade1928d8817be8312c839a`; PR #17 permanece aberto e sem merge/deploy. Head de código validado `d753ad0680b3b9dbf4962e6fcd90e1103404b956`. Sem migration nova; V1–V21 preservadas.

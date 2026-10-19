@@ -1,5 +1,16 @@
 # Rastreabilidade inicial
 
+## AGD-030 — Pipeline de notificações
+
+| Critério | Implementação | Evidência/limite |
+|---|---|---|
+| Intenções para confirmação, remarcação e cancelamento sem duplicação | `NotificationEventConsumer`, `JdbcOutboxEventFeed`, `JdbcIdempotentEventConsumer`, `PostgresNotificationRepository`; V22 identidade única por tenant/reserva/versão/tipo/destinatário | `NotificationPipelineIT` PostgreSQL: redelivery, eventos concorrentes, rollback de receipt+intent e evento de versão/estado obsoleto; sem PII em outbox/intenção. |
+| Worker, retries e resultados incertos | `NotificationWorker`; `FOR UPDATE SKIP LOCKED`, lease, claim token, identidade externa persistida; transport invocado fora da transação | `NotificationPipelineIT`: providerless não reclama; adapter controlado cobre retry conhecido sem efeito e chave estável, falha terminal/ambígua, lease vencida e worker antigo. Sem exatamente-uma-vez externo; unknown requer reconciliação operacional. |
+| Evidência de transporte | `NotificationWebhookAdmission` + porta `ProviderWebhookVerifier`; evidência normalizada V22, evento deduplicado e sequência monotônica | Teste sintético comprova rejeição sem verifier/assinatura inválida, dedupe e evento atrasado admitido sem regressão. Não há rota/verifier de produção nem protocolo de fornecedor habilitado. |
+| Consulta operacional mínima | `AdminNotificationController`, `GetNotificationOperations`, filtro pelo tenant OIDC/associação atual e respostas `no-store` minimizadas; `docs/openapi/admin-notifications.yaml` | `NotificationPipelineIT` verifica isolamento entre tenants e ausência de telefone/nome/referência de provedor no DTO. Sem UI nesta história. |
+| Migrations e runtime | `V22__persist_notification_pipeline.sql`; grants runtime mínimos nas tabelas do pipeline | `spotless:check verify` passou em PostgreSQL 16.13/Testcontainers: instalação limpa, upgrades, validate/rerun e grants runtime. V1–V21 preservadas; retenção/TTL não definido. |
+| Entrega por fornecedor | Nenhum transport/verifier de produção configurado; configuração ausente permanece fechada | Pendente de escolha e homologação de fornecedor, template aprovado, segredos, protocolo autenticado/anti-replay e credenciais. Nenhuma mensagem real declarada. AGD-031 (lembretes) não implementada. |
+
 ## Follow-up P2 AGD-025 — PR #17
 
 - **Cursor keyset:** `GetClientAppointments` grava no cursor a fronteira originalmente emitida `(startsAt, appointmentId)` e o vínculo tenant/cliente autenticados; valida o marcador sob essa identidade sem reconstruir o timestamp a partir do estado atual. `ClientAccessIT` usa PostgreSQL real, 20 de 21 reservas, desloca a reserva marcadora para depois e antes do restante, confirma que o item remanescente não é omitido e rejeita cursor de outro cliente. Nenhuma migration; V1–V21 preservadas.
