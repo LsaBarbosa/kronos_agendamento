@@ -2,6 +2,8 @@
 
 ## Decisões resolvidas
 
+| Política temporal de lembrete | AGD-031; documentos 01 §11, 02 §eventos e 03 AGD-031; ADR-0021 | Sem política explícita não criar lembrete nem inventar offset; job atrasado só é elegível se CONFIRMED, versão atual e início estritamente futuro; evento consumido após `due_at` pode ser processado imediatamente enquanto futuro; `due_at` usa política vigente no consumo e não é recalculado por alteração posterior, mas eventos não consumidos e nova versão usam política corrente no processamento. | Aprovado pelo usuário em 19/10/2026 nesta instrução. Regras registradas nos requisitos, contrato e ADR-0021; fornecedor, templates, segredos e homologação continuam pendentes. |
+
 | AGD-024: comprimento OTP e TTL de sessão cliente | Documentos 01–03/06 | Challenge expira em 5 min; comprimento não especificado, proposta 6 dígitos. Sessão curta sem TTL/renovação definida; proposta 15 min absolutos sem renovação. Valores não são decisões aprovadas; produção exige configuração explícita. | ADR-0019; requer decisão antes da habilitação real. |
 | AGD-024: fornecedor/template WhatsApp | AGD-024/030 | Não há fornecedor, template, credenciais ou hospedagem aprovados; não contratar nem enviar implicitamente. | Pendente; emissor E2E controlado não comprova entrega. |
 | AGD-024: abuso por IP/dispositivo | Documento 01 §7.2 | Política e origem confiável ainda não definidas; não confiar em forwarded headers por padrão. | Limite obrigatório por telefone/tenant no PostgreSQL; dimensões adicionais pendentes. |

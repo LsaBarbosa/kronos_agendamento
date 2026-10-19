@@ -230,6 +230,8 @@ O estado `SENT` significa que o provedor aceitou a mensagem, não necessariament
 
 Antes de enviar lembrete, o worker compara `appointment_version` e estado corrente. Divergência torna a intenção obsoleta.
 
+AGD-031 persiste uma intenção lógica `APPOINTMENT_REMINDER` por tenant, reserva, versão e destinatário. `due_at` preserva o instante UTC original calculado a partir do início e do offset explicitamente configurado quando o evento é consumido; `next_attempt_at` pode avançar por backoff sem alterar `due_at`. Política ausente não cria intenção. Um job atrasado pode prosseguir somente se a reserva continua `CONFIRMED`, na mesma versão e com `starts_at` estritamente posterior ao instante do preflight; igualdade ou início passado obsoleta a intenção, sem tolerância. Reserva criada após `due_at` pode ser processada imediatamente se ainda futura. Alteração posterior da política não recalcula intenções materializadas; eventos ainda não consumidos e versões novas usam a política vigente no consumo. Remarcação invalida versões anteriores; cancelamento, conclusão e falta invalidam lembretes inelegíveis, preservando o resultado de qualquer transporte já iniciado conforme ADR-0021.
+
 ## 9. Máquina de estados do código de acesso
 
 ```mermaid

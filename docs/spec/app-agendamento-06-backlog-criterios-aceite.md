@@ -228,7 +228,7 @@ Critérios de aceite:
 - Versão é incrementada e história registra antes/depois.
 - Lembrete antigo é invalidado e nova notificação é solicitada.
 
-**Nota de evidência:** a base ainda não possui pipeline/intenção persistida de lembretes. AGD-022 pode registrar `AppointmentRescheduled` na mesma transação, mas isso não comprova invalidação do lembrete obsoleto nem solicitação entregue. O subcritério permanece pendente até a integração versionada prevista em AGD-030/031; não alegar envio por fornecedor.
+**Nota de evidência atual:** a branch AGD-031 implementa intents persistidas versionadas, invalidação da versão anterior e nova intent após `AppointmentRescheduled`, com dedupe PostgreSQL; essa prova local ainda não está integrada à main. A ausência de entrega real por fornecedor continua explícita e não é provada por registrar intent.
 
 ### AGD-023 — Cancelamento e encerramento
 
@@ -294,6 +294,10 @@ Critérios de aceite:
 - Reserva cancelada, encerrada ou remarcada não recebe lembrete obsoleto.
 - Dois workers não produzem dois efeitos lógicos.
 - Backlog e idade do lembrete são monitorados.
+
+**Nota de escopo/evidência:** falta de fornecedor e template aprovados não autoriza envio real; o núcleo persistido pode ser comprovado por Testcontainers e adapters controlados. Decisão de produto aprovada nesta instrução para AGD-031: ausência de política não cria lembrete nem inventa offset; job atrasado pode ser enviado somente enquanto a reserva estiver `CONFIRMED`, na versão atual, e com início estritamente futuro; reserva cujo evento é consumido após `due_at` fica imediatamente elegível se ainda futura; offset é materializado no consumo e mudanças posteriores não recalculam intenções existentes, enquanto eventos ainda não consumidos usam a política vigente no processamento. Detalhes em ADR-0021 e contrato.
+
+Os testes locais de AGD-031 comprovam invalidação em estado terminal; os testes de AGD-030 cobrem separadamente a intent de notificação de cancelamento. A composição E2E-05 com fornecedor, mensagem entregue, cancelamento de mensagem já em voo ou exatamente-uma-vez externo não está comprovada.
 
 ### AGD-032 — Faltas em janela móvel
 

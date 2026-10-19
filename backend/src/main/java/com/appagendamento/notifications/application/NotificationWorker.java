@@ -3,10 +3,13 @@ package com.appagendamento.notifications.application;
 import com.appagendamento.appointments.api.AppointmentNotificationQuery;
 import com.appagendamento.clients.api.ClientNotificationContactQuery;
 import com.appagendamento.notifications.application.NotificationRepository.NotificationClaim;
+import com.appagendamento.notifications.domain.ReminderSchedule;
 import com.appagendamento.notifications.domain.TransportFailure;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -26,6 +29,11 @@ public class NotificationWorker {
   private final Duration lease;
   private final int maxAttempts;
   private final MeterRegistry meters;
+  private final Clock clock;
+  private final AtomicLong reminderBacklog;
+  private final AtomicLong reminderOverdue;
+  private final AtomicLong reminderOldestOverdueSeconds;
+  private final AtomicLong reminderOutcomeUnknown;
 
   public NotificationWorker(
       NotificationRepository notifications,
@@ -33,6 +41,7 @@ public class NotificationWorker {
       ClientNotificationContactQuery contacts,
       ObjectProvider<NotificationTransport> transports,
       MeterRegistry meters,
+      Clock clock,
       @Value("${app.notifications.worker.batch-size:20}") int batchSize,
       @Value("${app.notifications.worker.lease-seconds:60}") long leaseSeconds,
       @Value("${app.notifications.worker.max-attempts:8}") int maxAttempts) {
@@ -47,15 +56,25 @@ public class NotificationWorker {
     this.batchSize = batchSize;
     this.lease = Duration.ofSeconds(leaseSeconds);
     this.maxAttempts = maxAttempts;
+    this.clock = clock;
+    this.reminderBacklog = meters.gauge("agd.notifications.reminders.backlog", new AtomicLong());
+    this.reminderOverdue = meters.gauge("agd.notifications.reminders.overdue", new AtomicLong());
+    this.reminderOldestOverdueSeconds =
+        meters.gauge("agd.notifications.reminders.oldest_overdue_seconds", new AtomicLong());
+    this.reminderOutcomeUnknown =
+        meters.gauge("agd.notifications.reminders.outcome_unknown", new AtomicLong());
   }
 
   public int processBatch() {
     NotificationTransport transport = transports.getIfAvailable();
     if (transport == null) {
       meters.counter("agd.notifications.worker.disabled").increment();
+      refreshReminderMetrics();
       return 0;
     }
-    return processBatch(transport);
+    int processed = processBatch(transport);
+    refreshReminderMetrics();
+    return processed;
   }
 
   public int processBatch(NotificationTransport transport) {
@@ -91,11 +110,16 @@ public class NotificationWorker {
     if (currentAppointment.isEmpty()
         || currentAppointment.get().version() != claim.appointmentVersion()
         || !claim.type().matchesCurrent(currentAppointment.get().status())) {
-      notifications.markObsolete(claim);
-      meters.counter("agd.notifications.attempts", "outcome", "obsolete").increment();
+      obsolete(claim);
       return;
     }
     snapshot = currentAppointment.get();
+    if (claim.type()
+            == com.appagendamento.notifications.domain.NotificationType.APPOINTMENT_REMINDER
+        && !ReminderSchedule.beforeAppointmentStart(snapshot.startsAt(), clock)) {
+      obsolete(claim);
+      return;
+    }
 
     java.util.Optional<String> recipient;
     try {
@@ -112,7 +136,27 @@ public class NotificationWorker {
       return;
     }
     phone = recipient.get();
-    if (!notifications.authorizeSend(claim)) {
+    try {
+      currentAppointment = appointments.find(claim.tenantId(), claim.appointmentId());
+    } catch (RuntimeException failure) {
+      logPreflightFailure(claim, failure);
+      notifications.markRetryable(
+          claim, backoff(claim.attemptNumber()), maxAttempts, "RECIPIENT_UNAVAILABLE");
+      return;
+    }
+    if (currentAppointment.isEmpty()
+        || currentAppointment.get().version() != claim.appointmentVersion()
+        || !claim.type().matchesCurrent(currentAppointment.get().status())
+        || (claim.type()
+                == com.appagendamento.notifications.domain.NotificationType.APPOINTMENT_REMINDER
+            && !ReminderSchedule.beforeAppointmentStart(
+                currentAppointment.get().startsAt(), clock))) {
+      obsolete(claim);
+      return;
+    }
+    snapshot = currentAppointment.get();
+    if (!notifications.authorizeSend(claim, clock.instant())) {
+      notifications.markObsolete(claim);
       meters.counter("agd.notifications.attempts", "outcome", "claim_not_current").increment();
       return;
     }
@@ -135,6 +179,7 @@ public class NotificationWorker {
       if (result.accepted()) {
         notifications.markAccepted(claim, result.providerCode(), result.providerReference());
         meters.counter("agd.notifications.attempts", "outcome", "accepted").increment();
+        reminderOutcome(claim, "accepted");
       } else {
         applyFailure(claim, result.failure());
         meters
@@ -144,6 +189,7 @@ public class NotificationWorker {
     } catch (RuntimeException failure) {
       notifications.markUnknown(claim, "TRANSPORT_OUTCOME_UNKNOWN");
       meters.counter("agd.notifications.attempts", "outcome", "unknown").increment();
+      reminderOutcome(claim, "unknown");
     }
   }
 
@@ -162,6 +208,28 @@ public class NotificationWorker {
       case DEFINITIVE -> notifications.markFailed(claim, failure.safeCode());
       case AMBIGUOUS -> notifications.markUnknown(claim, failure.safeCode());
     }
+    reminderOutcome(claim, failure.name().toLowerCase());
+  }
+
+  private void obsolete(NotificationClaim claim) {
+    notifications.markObsolete(claim);
+    meters.counter("agd.notifications.attempts", "outcome", "obsolete").increment();
+    reminderOutcome(claim, "obsolete");
+  }
+
+  private void reminderOutcome(NotificationClaim claim, String outcome) {
+    if (claim.type()
+        == com.appagendamento.notifications.domain.NotificationType.APPOINTMENT_REMINDER) {
+      meters.counter("agd.notifications.reminders.outcomes", "outcome", outcome).increment();
+    }
+  }
+
+  private void refreshReminderMetrics() {
+    NotificationRepository.ReminderBacklog snapshot = notifications.reminderBacklog();
+    reminderBacklog.set(snapshot.pendingCount());
+    reminderOverdue.set(snapshot.overdueCount());
+    reminderOldestOverdueSeconds.set(snapshot.oldestOverdueSeconds());
+    reminderOutcomeUnknown.set(snapshot.outcomeUnknownCount());
   }
 
   private static Duration backoff(int attempt) {

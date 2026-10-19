@@ -17,6 +17,23 @@ public class JdbcOutboxEventFeed implements OutboxEventFeed {
 
   @Override
   public List<OutboxEvent> unprocessedAppointmentEvents(String consumerName, int limit) {
+    return findUnprocessedAppointmentEvents(
+        consumerName,
+        limit,
+        "('AppointmentConfirmed', 'AppointmentRescheduled', 'AppointmentCancelled')");
+  }
+
+  @Override
+  public List<OutboxEvent> unprocessedAppointmentReminderEvents(String consumerName, int limit) {
+    return findUnprocessedAppointmentEvents(
+        consumerName,
+        limit,
+        "('AppointmentConfirmed', 'AppointmentRescheduled', 'AppointmentCancelled', "
+            + "'AppointmentCompleted', 'ClientNoShowRecorded')");
+  }
+
+  private List<OutboxEvent> findUnprocessedAppointmentEvents(
+      String consumerName, int limit, String eventTypes) {
     if (consumerName == null || limit < 1 || limit > 500) {
       throw new IllegalArgumentException("Consulta de eventos inválida");
     }
@@ -26,7 +43,7 @@ public class JdbcOutboxEventFeed implements OutboxEventFeed {
                schema_version, operation_id, correlation_id
         FROM agendamento.outbox_event e
         WHERE e.aggregate_type = 'APPOINTMENT'
-          AND e.event_type IN ('AppointmentConfirmed', 'AppointmentRescheduled', 'AppointmentCancelled')
+          AND e.event_type IN %s
           AND e.schema_version = 1
           AND NOT EXISTS (
             SELECT 1 FROM agendamento.processed_event p
@@ -34,7 +51,8 @@ public class JdbcOutboxEventFeed implements OutboxEventFeed {
           )
         ORDER BY e.occurred_at, e.event_id
         LIMIT ?
-        """,
+        """
+            .formatted(eventTypes),
         (row, index) ->
             new OutboxEvent(
                 row.getObject("event_id", java.util.UUID.class),

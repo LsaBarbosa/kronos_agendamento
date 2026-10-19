@@ -1280,7 +1280,13 @@ components:
         cancellationCutoffHours:
           { type: [integer, "null"], minimum: 2, maximum: 24 }
         reminderOffsetHours:
-          { type: [integer, "null"], enum: [2, 6, 12, 24, null] }
+          type: [integer, "null"]
+          enum: [2, 6, 12, 24, null]
+          description: >-
+            Ausência de política não cria lembrete. O offset é materializado
+            quando o evento é consumido; alterações posteriores não recalculam
+            intenções existentes. Um lembrete atrasado só é elegível enquanto
+            a reserva estiver CONFIRMED, na versão atual e com início futuro.
     ReplaceAvailabilityPolicy:
       type: object
       additionalProperties: false
@@ -1297,7 +1303,13 @@ components:
         minimumNoticeHours: { type: integer, minimum: 1, maximum: 24 }
         bookingHorizonDays: { type: integer, enum: [7, 30, 60, 90] }
         cancellationCutoffHours: { type: integer, minimum: 2, maximum: 24 }
-        reminderOffsetHours: { type: integer, enum: [2, 6, 12, 24] }
+        reminderOffsetHours:
+          type: integer
+          enum: [2, 6, 12, 24]
+          description: >-
+            Offset explícito para materializar o lembrete quando o evento da
+            reserva for consumido. Alterações posteriores não recalculam
+            intenções já persistidas; ausência de política não cria lembrete.
     SpecialPeriod:
       type: object
       additionalProperties: false

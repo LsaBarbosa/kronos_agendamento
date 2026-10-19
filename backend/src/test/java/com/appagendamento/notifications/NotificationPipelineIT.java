@@ -12,6 +12,7 @@ import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import com.appagendamento.notifications.api.ProviderWebhookVerifier;
 import com.appagendamento.notifications.application.GetNotificationOperations;
 import com.appagendamento.notifications.application.NotificationEventConsumer;
+import com.appagendamento.notifications.application.NotificationReminderEventConsumer;
 import com.appagendamento.notifications.application.NotificationRepository;
 import com.appagendamento.notifications.application.NotificationTransport;
 import com.appagendamento.notifications.application.NotificationWebhookAdmission;
@@ -24,8 +25,10 @@ import com.appagendamento.tenant.domain.Tenant;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -58,6 +61,7 @@ class NotificationPipelineIT {
   @Autowired private ClientRepository clients;
   @Autowired private OutboxEventRecorder outbox;
   @Autowired private NotificationEventConsumer eventConsumer;
+  @Autowired private NotificationReminderEventConsumer reminderEventConsumer;
   @Autowired private NotificationRepository notifications;
   @Autowired private AppointmentNotificationQuery appointments;
   @Autowired private ClientNotificationContactQuery contacts;
@@ -78,6 +82,8 @@ class NotificationPipelineIT {
 
   @AfterEach
   void clearNotificationFixtures() {
+    eventConsumer.processBatch();
+    reminderEventConsumer.processBatch();
     migrationJdbc.execute(
         "TRUNCATE agendamento.notification_evidence_inbox, "
             + "agendamento.notification_delivery_evidence, "
@@ -119,6 +125,459 @@ class NotificationPipelineIT {
     record(providerCancelled, 2, "AppointmentCancelled");
     eventConsumer.processBatch();
     assertThat(intentCount(providerCancelled.tenant().tenantId())).isEqualTo(1);
+  }
+
+  @Test
+  void reminderEventsScheduleByConfiguredOffsetAndSupersedePriorVersions() {
+    Fixture fixture = fixture("reminder-reschedule");
+    insertReminderPolicy(fixture, 6);
+    record(fixture, 1, "AppointmentConfirmed");
+    assertThat(eventConsumer.processBatch()).isEqualTo(1);
+
+    reminderEventConsumer.processBatch();
+    assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(1);
+    UUID originalReminder = reminderId(fixture.appointmentId(), 1);
+    Instant startsAt = Instant.parse("2027-01-10T10:00:00Z");
+    assertThat(reminderDueAt(originalReminder)).isEqualTo(startsAt.minus(Duration.ofHours(6)));
+    assertThat(intentCount(fixture.tenant().tenantId())).isEqualTo(2);
+    reminderEventConsumer.processBatch();
+    assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(1);
+
+    migrationJdbc.update(
+        "UPDATE agendamento.availability_policy SET reminder_offset_hours = 12, version = version + 1 WHERE tenant_id = ?",
+        fixture.tenant().tenantId());
+    assertThat(reminderDueAt(originalReminder)).isEqualTo(startsAt.minus(Duration.ofHours(6)));
+    Instant rescheduledStarts = Instant.parse("2027-01-10T11:00:00Z");
+    updateAppointment(fixture, 2, "CONFIRMED", rescheduledStarts);
+    record(fixture, 2, "AppointmentRescheduled");
+
+    reminderEventConsumer.processBatch();
+    assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(2);
+    UUID rescheduledReminder = reminderId(fixture.appointmentId(), 2);
+    assertThat(reminderState(originalReminder)).isEqualTo("OBSOLETE");
+    assertThat(reminderDueAt(rescheduledReminder))
+        .isEqualTo(rescheduledStarts.minus(Duration.ofHours(12)));
+    assertThat(reminderCount(fixture.appointmentId())).isEqualTo(2);
+  }
+
+  @Test
+  void delayedOutOfOrderConfirmationCannotScheduleHistoricalVersion() {
+    Fixture fixture = fixture("reminder-out-of-order");
+    insertReminderPolicy(fixture, 6);
+    updateAppointment(fixture, 2, "CONFIRMED", Instant.parse("2027-01-10T11:00:00Z"));
+    record(fixture, 1, "AppointmentConfirmed");
+    record(fixture, 2, "AppointmentRescheduled");
+
+    reminderEventConsumer.processBatch();
+    assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(2);
+
+    assertThat(reminderCount(fixture.appointmentId())).isEqualTo(1);
+    UUID reminder = reminderId(fixture.appointmentId(), 2);
+    assertThat(reminderState(reminder)).isEqualTo("PENDING");
+    assertThat(reminderDueAt(reminder)).isEqualTo(Instant.parse("2027-01-10T05:00:00Z"));
+    reminderEventConsumer.processBatch();
+    assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(2);
+  }
+
+  @Test
+  void absentPolicyDoesNotCreateReminderAndTerminalAppointmentEventsObsoleteIt() {
+    Fixture absentPolicy = fixture("reminder-policy-absent");
+    record(absentPolicy, 1, "AppointmentConfirmed");
+    reminderEventConsumer.processBatch();
+    assertThat(reminderReceiptsForTenant(absentPolicy.tenant().tenantId())).isEqualTo(1);
+    assertThat(reminderCount(absentPolicy.appointmentId())).isZero();
+
+    for (String terminalEvent :
+        List.of("AppointmentCancelled", "AppointmentCompleted", "ClientNoShowRecorded")) {
+      Fixture fixture = fixture("reminder-terminal-" + terminalEvent.toLowerCase());
+      insertReminderPolicy(fixture, 2);
+      record(fixture, 1, "AppointmentConfirmed");
+      reminderEventConsumer.processBatch();
+      assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(1);
+      UUID reminder = reminderId(fixture.appointmentId(), 1);
+      String terminalStatus =
+          switch (terminalEvent) {
+            case "AppointmentCancelled" -> "CANCELLED_BY_PROVIDER";
+            case "AppointmentCompleted" -> "COMPLETED";
+            default -> "NO_SHOW";
+          };
+      updateAppointment(fixture, 2, terminalStatus, Instant.parse("2027-01-10T10:00:00Z"));
+      record(fixture, 2, terminalEvent);
+
+      reminderEventConsumer.processBatch();
+      assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(2);
+      assertThat(reminderState(reminder)).isEqualTo("OBSOLETE");
+      reminderEventConsumer.processBatch();
+      assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(2);
+    }
+  }
+
+  @Test
+  void eventConsumedAfterDueAtIsImmediatelyEligibleWhileAppointmentRemainsFuture() {
+    Fixture fixture = fixture("reminder-created-after-due");
+    Instant now = Instant.now();
+    Instant startsAt = now.plus(Duration.ofHours(6));
+    insertReminderPolicy(fixture, 24);
+    updateAppointment(fixture, 1, "CONFIRMED", startsAt);
+    record(fixture, 1, "AppointmentConfirmed");
+
+    assertThat(reminderEventConsumer.processBatch()).isEqualTo(1);
+
+    UUID reminder = reminderId(fixture.appointmentId(), 1);
+    assertThat(reminderDueAt(reminder)).isBefore(now);
+    assertThat(startsAt).isAfter(now);
+    AtomicInteger sends = new AtomicInteger();
+    assertThat(
+            worker(Clock.fixed(now, java.time.ZoneOffset.UTC))
+                .processBatch(
+                    message -> {
+                      sends.incrementAndGet();
+                      return NotificationTransport.TransportResult.accepted(
+                          "test-adapter", "created-after-due");
+                    }))
+        .isEqualTo(1);
+
+    assertThat(sends).hasValue(1);
+    assertThat(reminderState(reminder)).isEqualTo("ACCEPTED");
+  }
+
+  @Test
+  void reminderIntentAndEventReceiptRollbackTogether() {
+    Fixture fixture = fixture("reminder-rollback");
+    insertReminderPolicy(fixture, 6);
+    record(fixture, 1, "AppointmentConfirmed");
+    migrationJdbc.execute(
+        "CREATE OR REPLACE FUNCTION agendamento.reject_reminder_intent() RETURNS trigger "
+            + "LANGUAGE plpgsql AS $$ BEGIN "
+            + "IF NEW.message_type = 'APPOINTMENT_REMINDER' THEN "
+            + "RAISE EXCEPTION 'injected reminder intent failure'; END IF; RETURN NEW; END $$");
+    migrationJdbc.execute(
+        "CREATE TRIGGER reject_reminder_intent BEFORE INSERT ON "
+            + "agendamento.notification_intent FOR EACH ROW "
+            + "EXECUTE FUNCTION agendamento.reject_reminder_intent()");
+    try {
+      assertThatThrownBy(reminderEventConsumer::processBatch).isInstanceOf(RuntimeException.class);
+      assertThat(reminderCount(fixture.appointmentId())).isZero();
+      assertThat(
+              runtimeJdbc.queryForObject(
+                  "SELECT count(*) FROM agendamento.processed_event "
+                      + "WHERE consumer_name = ? AND event_id = ?",
+                  Integer.class,
+                  NotificationReminderEventConsumer.CONSUMER_NAME,
+                  fixture.eventId()))
+          .isZero();
+    } finally {
+      migrationJdbc.execute(
+          "DROP TRIGGER IF EXISTS reject_reminder_intent ON agendamento.notification_intent");
+      migrationJdbc.execute("DROP FUNCTION IF EXISTS agendamento.reject_reminder_intent()");
+    }
+
+    reminderEventConsumer.processBatch();
+    assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(1);
+    assertThat(reminderCount(fixture.appointmentId())).isEqualTo(1);
+  }
+
+  @Test
+  void overdueReminderMayProceedOnlyWhileAppointmentIsStillFuture() {
+    Fixture fixture = fixture("reminder-overdue-before-start");
+    insertReminderPolicy(fixture, 2);
+    record(fixture, 1, "AppointmentConfirmed");
+    reminderEventConsumer.processBatch();
+    UUID reminder = reminderId(fixture.appointmentId(), 1);
+    Instant startsAt = Instant.parse("2027-01-10T10:00:00Z");
+    migrationJdbc.update(
+        "UPDATE agendamento.notification_intent SET due_at = clock_timestamp() - interval '1 second', next_attempt_at = clock_timestamp() - interval '1 second' WHERE notification_id = ?",
+        reminder);
+    AtomicInteger sends = new AtomicInteger();
+
+    assertThat(
+            worker(Clock.fixed(startsAt.minusSeconds(1), java.time.ZoneOffset.UTC))
+                .processBatch(
+                    message -> {
+                      sends.incrementAndGet();
+                      return NotificationTransport.TransportResult.accepted(
+                          "test-adapter", "late-but-before-start");
+                    }))
+        .isEqualTo(1);
+
+    assertThat(sends).hasValue(1);
+    assertThat(reminderState(reminder)).isEqualTo("ACCEPTED");
+  }
+
+  @Test
+  void reminderWorkerHonorsDueAtAndRejectsAppointmentStartBoundary() {
+    Fixture fixture = fixture("reminder-worker");
+    insertReminderPolicy(fixture, 2);
+    record(fixture, 1, "AppointmentConfirmed");
+    reminderEventConsumer.processBatch();
+    UUID reminder = reminderId(fixture.appointmentId(), 1);
+    Instant startsAt = Instant.parse("2027-01-10T10:00:00Z");
+
+    assertThat(notifications.claimDue(1, Duration.ofMinutes(1))).isEmpty();
+    migrationJdbc.update(
+        "UPDATE agendamento.notification_intent SET due_at = clock_timestamp() - interval '1 second', next_attempt_at = clock_timestamp() - interval '1 second' WHERE notification_id = ?",
+        reminder);
+    NotificationRepository.ReminderBacklog backlog = notifications.reminderBacklog();
+    assertThat(backlog.pendingCount()).isEqualTo(1);
+    assertThat(backlog.overdueCount()).isEqualTo(1);
+    assertThat(backlog.oldestOverdueSeconds()).isGreaterThanOrEqualTo(0);
+    assertThat(workerWithoutTransport().processBatch()).isZero();
+    assertThat(reminderState(reminder)).isEqualTo("PENDING");
+    assertThat(attemptCountFor(reminder)).isZero();
+    NotificationWorker delayedWorker = worker(Clock.fixed(startsAt, java.time.ZoneOffset.UTC));
+    AtomicInteger sends = new AtomicInteger();
+
+    assertThat(
+            delayedWorker.processBatch(
+                message -> {
+                  sends.incrementAndGet();
+                  return NotificationTransport.TransportResult.accepted(
+                      "test-adapter", "reminder-at-start");
+                }))
+        .isEqualTo(1);
+
+    assertThat(sends).hasValue(0);
+    assertThat(reminderState(reminder)).isEqualTo("OBSOLETE");
+    assertThat(attemptCountFor(reminder)).isEqualTo(1);
+  }
+
+  @Test
+  void concurrentReminderWorkersUseOnePersistedClaimAndOneLogicalEffect() throws Exception {
+    Fixture fixture = fixture("reminder-concurrent-workers");
+    insertReminderPolicy(fixture, 2);
+    record(fixture, 1, "AppointmentConfirmed");
+    reminderEventConsumer.processBatch();
+    UUID reminder = reminderId(fixture.appointmentId(), 1);
+    migrationJdbc.update(
+        "UPDATE agendamento.notification_intent SET due_at = clock_timestamp() - interval '1 second', next_attempt_at = clock_timestamp() - interval '1 second' WHERE notification_id = ?",
+        reminder);
+
+    CountDownLatch transportStarted = new CountDownLatch(1);
+    CountDownLatch releaseTransport = new CountDownLatch(1);
+    NotificationWorker firstWorker = worker(Clock.systemUTC());
+    NotificationWorker secondWorker = worker(Clock.systemUTC());
+    AtomicInteger sends = new AtomicInteger();
+    try (ExecutorService workers = Executors.newFixedThreadPool(2)) {
+      Future<Integer> first =
+          workers.submit(
+              () ->
+                  firstWorker.processBatch(
+                      message -> {
+                        sends.incrementAndGet();
+                        transportStarted.countDown();
+                        await(releaseTransport);
+                        return NotificationTransport.TransportResult.accepted(
+                            "test-adapter", "single-reminder-reference");
+                      }));
+      assertThat(transportStarted.await(10, TimeUnit.SECONDS)).isTrue();
+      Future<Integer> second =
+          workers.submit(
+              () ->
+                  secondWorker.processBatch(
+                      message -> {
+                        sends.incrementAndGet();
+                        return NotificationTransport.TransportResult.accepted(
+                            "test-adapter", "duplicate-must-not-send");
+                      }));
+      assertThat(second.get(10, TimeUnit.SECONDS)).isZero();
+      releaseTransport.countDown();
+      assertThat(first.get(10, TimeUnit.SECONDS)).isEqualTo(1);
+    } finally {
+      releaseTransport.countDown();
+    }
+
+    assertThat(
+            worker(Clock.systemUTC())
+                .processBatch(
+                    message -> {
+                      sends.incrementAndGet();
+                      return NotificationTransport.TransportResult.accepted(
+                          "test-adapter", "restart-duplicate");
+                    }))
+        .isZero();
+    assertThat(sends).hasValue(1);
+    assertThat(reminderState(reminder)).isEqualTo("ACCEPTED");
+    assertThat(attemptCountFor(reminder)).isEqualTo(1);
+  }
+
+  @Test
+  void appointmentChangeBeforeFinalSendAuthorizationPreventsReminderTransport() throws Exception {
+    Fixture fixture = fixture("reminder-change-before-send");
+    insertReminderPolicy(fixture, 2);
+    record(fixture, 1, "AppointmentConfirmed");
+    reminderEventConsumer.processBatch();
+    UUID reminder = reminderId(fixture.appointmentId(), 1);
+    migrationJdbc.update(
+        "UPDATE agendamento.notification_intent SET due_at = clock_timestamp() - interval '1 second', next_attempt_at = clock_timestamp() - interval '1 second' WHERE notification_id = ?",
+        reminder);
+
+    CountDownLatch staleSnapshotRead = new CountDownLatch(1);
+    CountDownLatch releaseSnapshot = new CountDownLatch(1);
+    AtomicInteger reads = new AtomicInteger();
+    AppointmentNotificationQuery delayedRead =
+        (tenantId, appointmentId) -> {
+          Optional<AppointmentNotificationQuery.NotificationAppointment> snapshot =
+              appointments.find(tenantId, appointmentId);
+          if (reads.incrementAndGet() == 2) {
+            staleSnapshotRead.countDown();
+            await(releaseSnapshot);
+          }
+          return snapshot;
+        };
+    NotificationWorker worker = worker(Clock.systemUTC(), delayedRead);
+    AtomicInteger sends = new AtomicInteger();
+    try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+      Future<Integer> processing =
+          executor.submit(
+              () ->
+                  worker.processBatch(
+                      message -> {
+                        sends.incrementAndGet();
+                        return NotificationTransport.TransportResult.accepted(
+                            "test-adapter", "should-not-send");
+                      }));
+      assertThat(staleSnapshotRead.await(10, TimeUnit.SECONDS)).isTrue();
+      updateAppointment(fixture, 2, "COMPLETED", Instant.parse("2027-01-10T10:00:00Z"));
+      record(fixture, 2, "AppointmentCompleted");
+      reminderEventConsumer.processBatch();
+      assertThat(reminderEligible(reminder)).isFalse();
+      assertThat(reminderState(reminder)).isEqualTo("CLAIMED");
+      assertThat(attemptState(reminder)).isEqualTo("STARTED");
+      releaseSnapshot.countDown();
+      assertThat(processing.get(10, TimeUnit.SECONDS)).isEqualTo(1);
+    } finally {
+      releaseSnapshot.countDown();
+    }
+
+    assertThat(sends).hasValue(0);
+    assertThat(reminderState(reminder)).isEqualTo("OBSOLETE");
+  }
+
+  @Test
+  void appointmentChangeAfterTransportStartsCannotRetractTheInFlightReminder() throws Exception {
+    Fixture fixture = fixture("reminder-change-in-flight");
+    insertReminderPolicy(fixture, 2);
+    record(fixture, 1, "AppointmentConfirmed");
+    reminderEventConsumer.processBatch();
+    UUID reminder = reminderId(fixture.appointmentId(), 1);
+    migrationJdbc.update(
+        "UPDATE agendamento.notification_intent SET due_at = clock_timestamp() - interval '1 second', next_attempt_at = clock_timestamp() - interval '1 second' WHERE notification_id = ?",
+        reminder);
+    CountDownLatch transportStarted = new CountDownLatch(1);
+    CountDownLatch releaseTransport = new CountDownLatch(1);
+    NotificationWorker worker = worker(Clock.systemUTC());
+    try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+      Future<Integer> processing =
+          executor.submit(
+              () ->
+                  worker.processBatch(
+                      message -> {
+                        transportStarted.countDown();
+                        await(releaseTransport);
+                        return NotificationTransport.TransportResult.accepted(
+                            "test-adapter", "already-in-flight");
+                      }));
+      assertThat(transportStarted.await(10, TimeUnit.SECONDS)).isTrue();
+      updateAppointment(fixture, 2, "CANCELLED_BY_PROVIDER", Instant.parse("2027-01-10T10:00:00Z"));
+      record(fixture, 2, "AppointmentCancelled");
+      reminderEventConsumer.processBatch();
+      assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(2);
+      assertThat(reminderState(reminder)).isEqualTo("CLAIMED");
+      assertThat(reminderEligible(reminder)).isFalse();
+      assertThat(attemptState(reminder)).isEqualTo("STARTED");
+      assertThat(
+              runtimeJdbc.queryForObject(
+                  "SELECT claim_token IS NOT NULL FROM agendamento.notification_intent WHERE notification_id = ?",
+                  Boolean.class,
+                  reminder))
+          .isTrue();
+      releaseTransport.countDown();
+      assertThat(processing.get(10, TimeUnit.SECONDS)).isEqualTo(1);
+    } finally {
+      releaseTransport.countDown();
+    }
+
+    assertThat(reminderState(reminder)).isEqualTo("ACCEPTED");
+    assertThat(attemptState(reminder)).isEqualTo("ACCEPTED");
+    assertThat(
+            runtimeJdbc.queryForObject(
+                "SELECT provider_message_reference FROM agendamento.notification_intent WHERE notification_id = ?",
+                String.class,
+                reminder))
+        .isEqualTo("already-in-flight");
+    assertThat(attemptCountFor(reminder)).isEqualTo(1);
+
+    NotificationWebhookAdmission admission = webhookAdmission();
+    Map<String, String> headers =
+        evidenceHeaders("in-flight-delivery", "3", "DELIVERED", "already-in-flight");
+    byte[] body = "evidence".getBytes(StandardCharsets.UTF_8);
+    assertThat(admission.admit("test-adapter", headers, body))
+        .isEqualTo(NotificationWebhookAdmission.AdmissionResult.ADMITTED);
+    assertThat(reminderState(reminder)).isEqualTo("DELIVERED");
+    assertThat(
+            runtimeJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.notification_delivery_evidence WHERE notification_id = ? AND provider_event_id = 'in-flight-delivery'",
+                Integer.class,
+                reminder))
+        .isEqualTo(1);
+    assertThat(admission.admit("test-adapter", headers, body))
+        .isEqualTo(NotificationWebhookAdmission.AdmissionResult.DUPLICATE);
+    assertThat(attemptCountFor(reminder)).isEqualTo(1);
+  }
+
+  @Test
+  void invalidatedInFlightAmbiguousReminderKeepsUnknownOutcomeWithoutRetry() throws Exception {
+    Fixture fixture = fixture("reminder-ambiguous-in-flight");
+    insertReminderPolicy(fixture, 2);
+    record(fixture, 1, "AppointmentConfirmed");
+    reminderEventConsumer.processBatch();
+    UUID reminder = reminderId(fixture.appointmentId(), 1);
+    migrationJdbc.update(
+        "UPDATE agendamento.notification_intent SET due_at = clock_timestamp() - interval '1 second', next_attempt_at = clock_timestamp() - interval '1 second' WHERE notification_id = ?",
+        reminder);
+    CountDownLatch transportStarted = new CountDownLatch(1);
+    CountDownLatch releaseTransport = new CountDownLatch(1);
+    NotificationWorker worker = workerWithoutTransport();
+    AtomicInteger sends = new AtomicInteger();
+    try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+      Future<Integer> processing =
+          executor.submit(
+              () ->
+                  worker.processBatch(
+                      message -> {
+                        sends.incrementAndGet();
+                        transportStarted.countDown();
+                        await(releaseTransport);
+                        return NotificationTransport.TransportResult.failed(
+                            com.appagendamento.notifications.domain.TransportFailure.AMBIGUOUS);
+                      }));
+      assertThat(transportStarted.await(10, TimeUnit.SECONDS)).isTrue();
+      updateAppointment(fixture, 2, "CONFIRMED", Instant.parse("2027-01-10T11:00:00Z"));
+      record(fixture, 2, "AppointmentRescheduled");
+      reminderEventConsumer.processBatch();
+      assertThat(reminderState(reminder)).isEqualTo("CLAIMED");
+      assertThat(reminderEligible(reminder)).isFalse();
+      assertThat(attemptState(reminder)).isEqualTo("STARTED");
+      releaseTransport.countDown();
+      assertThat(processing.get(10, TimeUnit.SECONDS)).isEqualTo(1);
+    } finally {
+      releaseTransport.countDown();
+    }
+
+    assertThat(sends).hasValue(1);
+    assertThat(reminderState(reminder)).isEqualTo("OUTCOME_UNKNOWN");
+    assertThat(attemptState(reminder)).isEqualTo("OUTCOME_UNKNOWN");
+    assertThat(attemptCountFor(reminder)).isEqualTo(1);
+    assertThat(
+            worker.processBatch(
+                message -> {
+                  sends.incrementAndGet();
+                  return NotificationTransport.TransportResult.accepted(
+                      "test-adapter", "must-not-retry");
+                }))
+        .isZero();
+    assertThat(sends).hasValue(1);
+    assertThat(reminderState(reminder)).isEqualTo("OUTCOME_UNKNOWN");
   }
 
   @Test
@@ -263,6 +722,7 @@ class NotificationPipelineIT {
             contacts,
             context.getBeanProvider(NotificationTransport.class),
             new SimpleMeterRegistry(),
+            Clock.systemUTC(),
             20,
             60,
             8);
@@ -422,6 +882,7 @@ class NotificationPipelineIT {
             contacts,
             context.getBeanProvider(NotificationTransport.class),
             new SimpleMeterRegistry(),
+            Clock.systemUTC(),
             20,
             60,
             1);
@@ -877,7 +1338,15 @@ class NotificationPipelineIT {
     ObjectProvider<NotificationTransport> provider =
         context.getBeanProvider(NotificationTransport.class);
     return new NotificationWorker(
-        notifications, appointments, contacts, provider, new SimpleMeterRegistry(), 20, 60, 8);
+        notifications,
+        appointments,
+        contacts,
+        provider,
+        new SimpleMeterRegistry(),
+        Clock.systemUTC(),
+        20,
+        60,
+        8);
   }
 
   private NotificationWebhookAdmission webhookAdmission() {
@@ -991,6 +1460,83 @@ class NotificationPipelineIT {
             UUID.randomUUID(),
             "{\"appointmentId\":\"" + fixture.appointmentId() + "\",\"version\":" + version + "}"));
     fixture.lastEventId(eventId);
+  }
+
+  private void insertReminderPolicy(Fixture fixture, int offsetHours) {
+    migrationJdbc.update(
+        """
+        INSERT INTO agendamento.availability_policy
+          (tenant_id, slot_step_minutes, minimum_notice_hours, booking_horizon_days,
+           cancellation_cutoff_hours, reminder_offset_hours, version)
+        VALUES (?, 30, 2, 30, 2, ?, 1)
+        """,
+        fixture.tenant().tenantId(),
+        offsetHours);
+  }
+
+  private UUID reminderId(UUID appointmentId, long version) {
+    return runtimeJdbc.queryForObject(
+        "SELECT notification_id FROM agendamento.notification_intent WHERE appointment_id = ? AND appointment_version = ? AND message_type = 'APPOINTMENT_REMINDER'",
+        UUID.class,
+        appointmentId,
+        version);
+  }
+
+  private Instant reminderDueAt(UUID notificationId) {
+    return runtimeJdbc
+        .queryForObject(
+            "SELECT due_at FROM agendamento.notification_intent WHERE notification_id = ?",
+            Timestamp.class,
+            notificationId)
+        .toInstant();
+  }
+
+  private String reminderState(UUID notificationId) {
+    return runtimeJdbc.queryForObject(
+        "SELECT state FROM agendamento.notification_intent WHERE notification_id = ?",
+        String.class,
+        notificationId);
+  }
+
+  private boolean reminderEligible(UUID notificationId) {
+    return runtimeJdbc.queryForObject(
+        "SELECT reminder_eligible FROM agendamento.notification_intent WHERE notification_id = ?",
+        Boolean.class,
+        notificationId);
+  }
+
+  private int reminderCount(UUID appointmentId) {
+    return runtimeJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.notification_intent WHERE appointment_id = ? AND message_type = 'APPOINTMENT_REMINDER'",
+        Integer.class,
+        appointmentId);
+  }
+
+  private int reminderReceiptsForTenant(UUID tenantId) {
+    return runtimeJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.processed_event p "
+            + "JOIN agendamento.outbox_event e USING (event_id) "
+            + "WHERE p.consumer_name = ? AND e.tenant_id = ?",
+        Integer.class,
+        NotificationReminderEventConsumer.CONSUMER_NAME,
+        tenantId);
+  }
+
+  private NotificationWorker worker(Clock clock) {
+    return worker(clock, appointments);
+  }
+
+  private NotificationWorker worker(Clock clock, AppointmentNotificationQuery appointmentQuery) {
+    return new NotificationWorker(
+        notifications,
+        appointmentQuery,
+        contacts,
+        context.getBeanProvider(NotificationTransport.class),
+        new SimpleMeterRegistry(),
+        clock,
+        20,
+        60,
+        8);
   }
 
   private int intentCount(UUID tenantId) {
