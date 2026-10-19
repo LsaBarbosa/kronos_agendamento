@@ -1891,14 +1891,16 @@ try {
       window.fetch = async (...args) => {
         const url = args[0] instanceof Request ? args[0].url : String(args[0]);
         const method = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
-        const response = await window.__clientListOriginalFetch(...args);
-        if (new URL(url).pathname !== '/api/v1/client/appointments' || method.toUpperCase() !== 'GET') return response;
+        if (new URL(url).pathname !== '/api/v1/client/appointments' || method.toUpperCase() !== 'GET') {
+          return window.__clientListOriginalFetch(...args);
+        }
         if (url.includes('cursor=') && window.__holdClientPage) {
           window.__holdClientPage = false;
           window.__clientPagePending = true;
           await new Promise(resolve => { window.__releaseClientPage = resolve; });
           return new Response(JSON.stringify({items:[], nextCursor:'e2e-next-cursor', hasMore:true}), {status:200, headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
         }
+        const response = await window.__clientListOriginalFetch(...args);
         if (!url.includes('cursor=') && window.__holdClientRefresh) {
           window.__holdClientRefresh = false;
           window.__clientRefreshPending = true;
@@ -1913,8 +1915,7 @@ try {
       };
       window.__exposeClientNextPage = true;
     })()`);
-    const clientFilter = await evaluate("document.querySelector('#client-appointment-filter')?.value");
-    await evaluate(`(() => { const select = document.querySelector('#client-appointment-filter'); select.value = ${JSON.stringify(clientFilter === 'future' ? 'all' : 'future')}; select.dispatchEvent(new Event('change', {bubbles:true})); })()`);
+    await clickButtonByText('Atualizar reservas', evaluate);
     await waitUntil(() => evaluate("[...document.querySelectorAll('button')].some(button => button.innerText === 'Carregar mais')"));
     await evaluate("window.__holdClientPage = true");
     await clickButtonByText('Carregar mais', evaluate);
@@ -1946,7 +1947,7 @@ try {
     if (!refreshAfterDetails.details || refreshAfterDetails.loading || !refreshAfterDetails.refreshEnabled) {
       throw new Error(`Abrir detalhes deixou refresh da lista preso: ${JSON.stringify(refreshAfterDetails)}`);
     }
-    window.__clientListOriginalFetch && await evaluate('window.fetch = window.__clientListOriginalFetch');
+    await evaluate('window.fetch = window.__clientListOriginalFetch');
     console.log('Browser: paginação e refresh da lista permaneceram utilizáveis após abrir detalhes com respostas controladamente pendentes.');
     const listedBooking = await evaluate(`fetch('/api/v1/client/appointments', {credentials:'same-origin', cache:'no-store'}).then(response => response.json()).then(page => page.items.find(item => item.appointmentId === '${ownedBookingId}'))`);
     if (listedBooking?.version !== 1) throw new Error(`A lista deveria manter a versão 1 antes da atualização do detalhe: ${JSON.stringify(listedBooking)}`);
