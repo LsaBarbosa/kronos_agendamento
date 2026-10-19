@@ -52,7 +52,7 @@
 | Migration | Banco limpo V1–V25, upgrade V23→V25 e V24→V25, `validate` e rerun; grants runtime | `TenantPersistenceIT` verifica V25, privilégios runtime e rerun em PostgreSQL; V1–V24 preservadas. V25 não altera migrations aplicadas |
 | Gate integral local | commit `59966fa`; `cd backend && env JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` | `BUILD SUCCESS`, 77 unitários/arquiteturais e 194 integrações PostgreSQL 16.13/Testcontainers; `NotificationPipelineIT` 25/25 |
 | E2E existente | App CI no SHA final | E2E OIDC/Keycloak existente não representa entrega de lembrete; sem E2E de fornecedor ou UI nova |
-| CI remoto | App CI e CodeQL push/PR no SHA final, jobs/check-runs concluídos | Pendente publicação |
+| CI remoto | App CI e CodeQL push/PR no SHA final, jobs/check-runs concluídos | No head `2f4d73e85d636b1312a9b0b6eb13260c2690884b`, App CI [push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39321817347)/[PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39321824695) e CodeQL [push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39321817300)/[PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39321824674) tiveram workflows e todos os jobs/check-runs concluídos com sucesso; E2E OIDC passou, sem provar envio de lembrete |
 
 ## Progresso
 
@@ -76,3 +76,4 @@
 - Regressões PostgreSQL sincronizadas: (a) cancelar/processar evento durante `send` preso, depois aceitar com referência e admitir evidência autenticada; evidência correlaciona ao mesmo lembrete e deduplica; (b) remarcar/processar evento durante `send`, depois retornar AMBIGUOUS; tentativa e intent preservam `OUTCOME_UNKNOWN`, sem retry; (c) cancelar na janela de preflight antes da autorização final; zero chamadas externas.
 - Nenhum lock/transação permanece aberto durante `send`. Não é possível retrair efeito externo após início da chamada; V25 preserva seu resultado em vez de mascará-lo como obsoleto. Não há alteração de endpoint/OpenAPI; o campo é estado interno persistido.
 - Resultado local no commit de código `5da586ce4ca01f3834e2f897b59db1dae10386a0`: `NotificationPipelineIT` 26/26, `TenantPersistenceIT` 24/24 e `spotless:check verify` em JDK 21 com 77 unitários/arquiteturais + 196 integrações PostgreSQL 16.13/Testcontainers. Instalação limpa, upgrade V24→V25, validate/rerun e grants passaram. App CI/CodeQL push/PR do head documental final ainda aguardam publicação; AGD-031 permanece parcial.
+- No head `2f4d73e85d636b1312a9b0b6eb13260c2690884b`, App CI/CodeQL push e PR concluíram todos os jobs com sucesso; App CI executou o E2E OIDC/Keycloak existente, que não comprova entrega por fornecedor. AGD-031 permanece parcial.
