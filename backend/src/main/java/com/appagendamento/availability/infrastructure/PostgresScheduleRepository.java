@@ -1,5 +1,6 @@
 package com.appagendamento.availability.infrastructure;
 
+import com.appagendamento.appointments.api.ClientCancellationCutoffQuery;
 import com.appagendamento.availability.application.ScheduleRepository;
 import com.appagendamento.availability.domain.AvailabilityPolicy;
 import com.appagendamento.availability.domain.BlockedPeriod;
@@ -19,18 +20,34 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.UUID;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public class PostgresScheduleRepository implements ScheduleRepository {
+public class PostgresScheduleRepository
+    implements ScheduleRepository, ClientCancellationCutoffQuery {
 
   private final JdbcTemplate jdbc;
 
   public PostgresScheduleRepository(JdbcTemplate jdbc) {
     this.jdbc = jdbc;
+  }
+
+  @Override
+  public OptionalInt cancellationCutoffHours(UUID tenantId) {
+    try {
+      List<Integer> values =
+          jdbc.query(
+              "SELECT cancellation_cutoff_hours FROM agendamento.availability_policy WHERE tenant_id = ?",
+              (row, index) -> row.getInt("cancellation_cutoff_hours"),
+              tenantId);
+      return values.isEmpty() ? OptionalInt.empty() : OptionalInt.of(values.getFirst());
+    } catch (org.springframework.dao.DataAccessException exception) {
+      throw exception;
+    }
   }
 
   @Override

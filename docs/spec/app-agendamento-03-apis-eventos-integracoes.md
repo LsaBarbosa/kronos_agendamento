@@ -239,12 +239,20 @@ O challengeId, quando retornado, é opaco e sempre consultado junto do tenant re
 
 | Método | Endpoint | Descrição |
 |---|---|---|
-| GET | `/api/v1/client/appointments?status=future&cursor=...` | lista reservas daquele tenant/telefone |
-| GET | `/api/v1/client/appointments/{appointmentId}` | detalhes próprios |
-| POST | `/api/v1/client/appointments/{appointmentId}/cancel` | cancela dentro da política |
+| GET | `/api/v1/client/appointments?status=future&cursor=...` | lista reservas próprias em páginas por cursor |
+| GET | `/api/v1/client/appointments/{appointmentId}` | detalhes mínimos da reserva própria |
+| POST | `/api/v1/client/appointments/{appointmentId}/cancel` | cancela reserva própria dentro da política |
 | POST | `/api/v1/client/session/logout` | encerra sessão |
 
-Cancelamento exige `Idempotency-Key` e versão esperada. Resposta repetida do mesmo comando é estável.
+As rotas de reserva derivam `tenant_id` e telefone exclusivamente da sessão `AGDCLIENT` persistida, válida e não revogada. O booleano de `GET /api/v1/client/session` serve apenas para restaurar a interface; cada endpoint valida a sessão e consulta a titularidade no servidor. A titularidade é resolvida por tenant + telefone E.164 verificado; `tenantId`, telefone e `clientId` do navegador não são aceitos como autoridade. Sessão administrativa OIDC e capability AGD-016 não autorizam essas rotas.
+
+A listagem ordena por `starts_at ASC, appointment_id ASC`, com páginas fixas de 20 itens e cursor keyset. Sem filtro, lista todas as reservas próprias. O único filtro temporal vigente é `status=future`, que inclui reservas com `starts_at` igual ou posterior ao instante capturado para a consulta; outros valores são `400 VALIDATION_ERROR`. `cursor` é o `appointmentId` marcador da página anterior; só é aceito se a reserva pertencer ao cliente/tenant autenticados, caso contrário retorna erro genérico de validação. A próxima página é indicada por `nextCursor` e `hasMore`. Todos os resultados incluem apenas serviço do snapshot, início/fim de atendimento, timezone, estado e versão; não incluem telefone/nome do cliente, buffer, auditoria ou dados administrativos.
+
+Detalhe de ID alheio e inexistente retorna o mesmo `404 RESOURCE_NOT_FOUND`. Todas as respostas, inclusive erros de recursos privados, usam `Cache-Control: no-store`.
+
+Cancelamento exige `Idempotency-Key` e `expectedVersion`. Só `CONFIRMED` própria pode ser cancelada; a operação usa lock tenant-first e CAS, grava estado, versão, revisão da agenda, história, auditoria (`CLIENT`/`VERIFIED_CLIENT`), receipt e `AppointmentCancelled` na mesma transação. Serviço inativo e restrição de autoagendamento não impedem acesso/cancelamento da reserva existente. O cutoff é lido da política atual configurada e permite `now <= startsAt - cancellationCutoffHours`, incluindo igualdade. Sem política configurada, a ação falha fechada; não há valor default. Depois do prazo retorna `409 CANCELLATION_WINDOW_CLOSED`, orientando contato com o estabelecimento e sem efeitos. A ocupação só deixa de bloquear após commit.
+
+O replay exige sessão atual e vínculo de titularidade atuais antes de devolver o receipt, mas não reaplica o cutoff nem compara a versão consumida pela própria operação. Mesma chave e comando retorna o resultado original; payload divergente retorna `IDEMPOTENCY_KEY_REUSED`; operação concorrente pode retornar `OPERATION_IN_PROGRESS`. CSRF é obrigatório nas mutações por cookie. Logout revoga a sessão server-side e expira o cookie; a interface apaga os dados privados ao sair ou receber sessão encerrada. O acesso por telefone verificado não constitui identidade civil, não libera nova reserva por si só e não permite consultar reservas de terceiros.
 
 ## 5. API administrativa
 

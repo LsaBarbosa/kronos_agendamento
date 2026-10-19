@@ -1,0 +1,207 @@
+openapi: 3.1.0
+info:
+  title: Área privada do cliente
+  version: 1.0.0
+  description: >-
+    Operações tenant/telefone-scoped pela sessão AGDCLIENT. A sessão válida é
+    verificada novamente pelo servidor em cada recurso; nenhum identificador do
+    cliente enviado pelo navegador concede autorização.
+servers:
+  - url: /api/v1
+security:
+  - ClientSession: []
+paths:
+  /client/appointments:
+    get:
+      summary: Lista reservas do cliente autenticado
+      description: >-
+        Ordenação startsAt crescente com appointmentId como desempate. Páginas
+        de 20 itens. Sem status, lista todas as reservas próprias; status=future
+        filtra startsAt maior ou igual ao instante capturado na consulta. Cursor
+        é um appointmentId marcador e só é aceito se pertencer à identidade
+        autenticada. Resposta privada no-store.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [future]
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+            maxLength: 64
+      responses:
+        '200':
+          description: Página de reservas próprias
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppointmentPage'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /client/appointments/{appointmentId}:
+    get:
+      summary: Consulta os detalhes mínimos de uma reserva própria
+      parameters:
+        - $ref: '#/components/parameters/AppointmentId'
+      responses:
+        '200':
+          description: Snapshot mínimo visível ao cliente
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Appointment' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /client/appointments/{appointmentId}/cancel:
+    post:
+      summary: Cancela reserva própria dentro da política configurada
+      description: >-
+        Requer CSRF e Idempotency-Key. Revalida sessão/titularidade antes de
+        replay. A janela permite igualdade no cutoff. Estado, versão, revisão,
+        história, auditoria, receipt e outbox são atômicos.
+      parameters:
+        - $ref: '#/components/parameters/AppointmentId'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128 }
+        - name: X-CSRF-TOKEN
+          in: header
+          required: true
+          description: Use o headerName/token retornado por GET /csrf.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion]
+              properties:
+                expectedVersion: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Cancelamento confirmado ou receipt idempotente original
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+            Idempotency-Replayed: { schema: { type: boolean } }
+            X-Operation-Id: { schema: { type: string, format: uuid } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [appointmentId, status, version]
+                properties:
+                  appointmentId: { type: string, format: uuid }
+                  status: { type: string, const: CANCELLED_BY_CLIENT }
+                  version: { type: integer, minimum: 2 }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Prazo encerrado, estado/versão conflitante, replay incompatível ou comando em andamento
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+components:
+  securitySchemes:
+    ClientSession:
+      type: apiKey
+      in: cookie
+      name: AGDCLIENT
+  parameters:
+    AppointmentId:
+      name: appointmentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  schemas:
+    Appointment:
+      type: object
+      additionalProperties: false
+      required: [appointmentId, serviceName, startsAt, serviceEndsAt, timeZone, status, version]
+      properties:
+        appointmentId: { type: string, format: uuid }
+        serviceName: { type: string }
+        startsAt: { type: string, format: date-time }
+        serviceEndsAt: { type: string, format: date-time }
+        timeZone: { type: string }
+        status:
+          type: string
+          enum: [CONFIRMED, COMPLETED, NO_SHOW, CANCELLED_BY_CLIENT, CANCELLED_BY_PROVIDER]
+        version: { type: integer, minimum: 1 }
+    AppointmentPage:
+      type: object
+      required: [items, nextCursor, hasMore]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Appointment' }
+        nextCursor: { type: [string, 'null'], format: uuid }
+        hasMore: { type: boolean }
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message, traceId]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            traceId: { type: string, format: uuid }
+            retryable: { type: boolean }
+            details: { type: object }
+  responses:
+    ValidationError:
+      description: Filtro, cursor ou comando inválido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    Unauthenticated:
+      description: Sessão ausente, inválida, expirada ou revogada
+      headers:
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    Forbidden:
+      description: CSRF inválido ou ação não permitida
+      headers:
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    NotFound:
+      description: ID inexistente ou pertencente a outra identidade
+      headers:
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    Unavailable:
+      description: Serviço de dados temporariamente indisponível
+      headers:
+        Cache-Control:
+          schema: { type: string, const: no-store }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }

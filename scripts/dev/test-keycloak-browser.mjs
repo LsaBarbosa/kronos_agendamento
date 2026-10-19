@@ -1568,15 +1568,27 @@ try {
     console.log('Browser: logout local/CSRF validado.');
     await command('Network.clearBrowserCookies');
 
-    const clientPhone = '+5511999991122';
+    const clientPhone = '+5511999991236';
     const demoTenantSlug = queryPostgres(
         `SELECT slug FROM agendamento.tenant WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
         appEnvironment,
     );
-    queryPostgres(
-        `INSERT INTO agendamento.client(client_id, tenant_id, display_name, normalized_phone) VALUES ('${randomUUID()}', '${credentials.DEMO_TENANT_ID}', 'Cliente E2E acesso', '${clientPhone}')`,
+    await navigate(`http://localhost:5173/public/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
+    await waitForText(catalogName + ' Editado', evaluate);
+    await setSelectById('public-service', publicService.serviceId, evaluate);
+    await setFieldById('public-date', publicDate, evaluate);
+    await waitUntil(() => evaluate("[...document.querySelectorAll('.public-page__slot')].some(button => !button.disabled)"));
+    await evaluate("[...document.querySelectorAll('.public-page__slot')].find(button => !button.disabled)?.click()");
+    await setFieldById('public-client-name', 'Cliente da área E2E', evaluate);
+    await setFieldById('public-client-phone', clientPhone, evaluate);
+    await clickButtonByText('Confirmar reserva', evaluate);
+    await waitForText('Reserva confirmada', evaluate);
+    const clientBookingId = queryPostgres(
+        `SELECT a.appointment_id FROM agendamento.appointment a JOIN agendamento.client c USING (tenant_id, client_id) WHERE a.tenant_id = '${credentials.DEMO_TENANT_ID}' AND c.normalized_phone = '${clientPhone}' AND a.status = 'CONFIRMED' ORDER BY a.created_at DESC LIMIT 1`,
         appEnvironment,
     );
+    if (!clientBookingId) throw new Error('O fluxo público não persistiu a reserva da área do cliente.');
+    console.log('Browser: preparou reserva pública real vinculada ao telefone que será verificado pelo challenge AGD-024.');
     await navigate(`http://localhost:5173/client-access/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
     await waitForText('Entre com seu telefone', evaluate);
     await waitUntil(() => evaluate("!document.querySelector('button[type=submit]')?.disabled"));
@@ -1814,6 +1826,72 @@ try {
     if (clientEffects !== '1' || consumedChallengeStatus !== 'VERIFIED') {
         throw new Error('Retry de verificação duplicou a sessão ou não consumiu o challenge uma única vez.');
     }
+
+    await waitForText('Suas reservas', evaluate);
+    const ownedBookingId = queryPostgres(
+        `SELECT a.appointment_id FROM agendamento.appointment a JOIN agendamento.client c USING (tenant_id, client_id) WHERE a.tenant_id = '${credentials.DEMO_TENANT_ID}' AND c.normalized_phone = '${clientPhone}' AND a.status = 'CONFIRMED' ORDER BY a.created_at DESC LIMIT 1`,
+        appEnvironment,
+    );
+    if (!ownedBookingId) throw new Error('Reserva pública persistida não foi vinculada ao telefone verificado.');
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('li[data-appointment-id="${ownedBookingId}"]'))`));
+    await evaluate(`(() => {
+      window.__clientCancellationAttempts = [];
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const url = args[0] instanceof Request ? args[0].url : String(args[0]);
+        const method = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
+        if (url.endsWith('/api/v1/client/appointments/${ownedBookingId}/cancel') && method.toUpperCase() === 'POST') {
+          const headers = new Headers(args[1]?.headers ?? (args[0] instanceof Request ? args[0].headers : undefined));
+          window.__clientCancellationAttempts.push({url, body: args[1]?.body ?? null, key: headers.get('Idempotency-Key'), status: response.status});
+          if (response.ok && window.__dropClientCancellationResponse) {
+            window.__dropClientCancellationResponse = false;
+            throw new TypeError('Simulated lost client cancellation response after commit');
+          }
+        }
+        return response;
+      };
+      window.__dropClientCancellationResponse = true;
+    })()`);
+    await evaluate(`(() => {
+      const row = document.querySelector('li[data-appointment-id="${ownedBookingId}"]');
+      [...row.querySelectorAll('button')].find(button => button.innerText === 'Cancelar').click();
+    })()`);
+    await clickButtonByText('Confirmar cancelamento', evaluate);
+    await waitForText('Não foi possível confirmar o resultado.', evaluate);
+    const cancellationPendingDom = await evaluate(`({
+      message: [...document.querySelectorAll('[role=status]')].map(node => node.innerText).join(' '),
+      retry: [...document.querySelectorAll('button')].find(button => button.innerText === 'Repetir a mesma tentativa')?.disabled,
+      attempts: window.__clientCancellationAttempts,
+    })`);
+    if (!cancellationPendingDom.message.includes('mesma chave') || cancellationPendingDom.retry) {
+      throw new Error('A UI não preservou a intenção de cancelamento após perda da resposta.');
+    }
+    await clickButtonByText('Repetir a mesma tentativa', evaluate);
+    await waitForText('Reserva cancelada.', evaluate);
+    const cancellationRetry = await evaluate('window.__clientCancellationAttempts');
+    if (cancellationRetry.length !== 2 || cancellationRetry[0].url !== cancellationRetry[1].url ||
+        cancellationRetry[0].body !== cancellationRetry[1].body || cancellationRetry[0].key !== cancellationRetry[1].key ||
+        !cancellationRetry[0].key || cancellationRetry[0].status !== 200 || cancellationRetry[1].status !== 200) {
+      throw new Error(`Retry do cancelamento mudou a intenção original: ${JSON.stringify(cancellationRetry)}`);
+    }
+    const cancellationEffects = queryPostgres(
+        `SELECT CASE WHEN (SELECT status = 'CANCELLED_BY_CLIENT' AND version = 2 FROM agendamento.appointment WHERE appointment_id = '${ownedBookingId}') AND (SELECT count(*) = 2 FROM agendamento.appointment_history WHERE appointment_id = '${ownedBookingId}') AND (SELECT count(*) = 1 FROM agendamento.audit_event WHERE target_id = '${ownedBookingId}' AND action = 'APPOINTMENT_CANCELLED_BY_CLIENT') AND (SELECT count(*) = 1 FROM agendamento.outbox_event WHERE aggregate_id = '${ownedBookingId}' AND event_type = 'AppointmentCancelled') AND (SELECT count(*) = 1 FROM agendamento.idempotency_record i WHERE i.command_scope LIKE 'appointments.client.cancel.%' AND i.state = 'COMPLETED' AND i.operation_id = (SELECT operation_id FROM agendamento.outbox_event WHERE aggregate_id = '${ownedBookingId}' AND event_type = 'AppointmentCancelled')) THEN 1 ELSE 0 END`,
+        appEnvironment,
+    );
+    if (cancellationEffects !== '1') throw new Error('Cancelamento/replay não produziu um único conjunto transacional de efeitos.');
+    await command('Page.reload');
+    await waitForText('Suas reservas', evaluate);
+    await waitForText('CANCELLED_BY_CLIENT', evaluate);
+    const restoredCancellation = await evaluate(`({
+      status: document.querySelector('li[data-appointment-id="${ownedBookingId}"]')?.innerText,
+      hasCancelAction: [...(document.querySelector('li[data-appointment-id="${ownedBookingId}"]')?.querySelectorAll('button') ?? [])].some(button => button.innerText === 'Cancelar'),
+      hasPrivateDataInUrl: location.href.includes('${clientPhone}') || location.href.includes('${ownedBookingId}'),
+    })`);
+    if (!restoredCancellation.status?.includes('CANCELLED_BY_CLIENT') || restoredCancellation.hasCancelAction || restoredCancellation.hasPrivateDataInUrl) {
+      throw new Error(`Reload não recuperou o estado terminal com segurança: ${JSON.stringify(restoredCancellation)}`);
+    }
+    console.log('Browser: área autenticada listou reserva pública persistida, cancelou após cutoff permitido, recuperou resposta perdida com a mesma intenção, recarregou o estado terminal; PostgreSQL confirmou efeitos únicos.');
 
     const differentPhone = '+5511999991133';
     queryPostgres(

@@ -64,3 +64,30 @@
     outline: 3px solid #e0a83f;
     outline-offset: 3px;
 }
+
+.client-appointments__heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.client-appointments__list {
+    display: grid;
+    gap: 14px;
+    margin: 18px 0;
+    padding: 0;
+    list-style: none;
+}
+
+.client-appointments__list article,
+.client-appointments
+    section[aria-labelledby='client-appointment-detail-title'] {
+    padding: 16px;
+    border: 1px solid #dfe9e2;
+    border-radius: 14px;
+}
+
+.client-appointments__list h3 {
+    margin-top: 0;
+}

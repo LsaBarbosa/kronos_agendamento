@@ -516,6 +516,288 @@ class ClientAccessIT {
   }
 
   @Test
+  void clientAreaScopesListDetailCursorAndCancellationToVerifiedPhone() throws Exception {
+    UUID appointmentId = insertClientAppointment(PHONE, now.plusSeconds(7_200));
+    UUID otherClientId = UUID.randomUUID();
+    String otherPhone = "+5511999991188";
+    ownerJdbc.update(
+        "INSERT INTO agendamento.client(client_id, tenant_id, display_name, normalized_phone) VALUES (?, ?, 'Outro cliente', ?)",
+        otherClientId,
+        tenantId,
+        otherPhone);
+    UUID otherAppointmentId = insertAppointmentForClient(otherClientId, now.plusSeconds(10_800));
+    UUID foreignTenantAppointmentId =
+        insertForeignTenantAppointment(PHONE, now.plusSeconds(14_400));
+    String cookie = verifiedClientCookie(slug, PHONE);
+
+    mvc.perform(get("/api/v1/client/appointments").header("Cookie", cookie))
+        .andExpect(status().isOk())
+        .andExpect(
+            org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                .string("Cache-Control", "no-store"))
+        .andExpect(jsonPath("$.items.length()").value(1))
+        .andExpect(jsonPath("$.items[0].appointmentId").value(appointmentId.toString()))
+        .andExpect(jsonPath("$.items[0].status").value("CONFIRMED"))
+        .andExpect(jsonPath("$.items[0].clientName").doesNotExist())
+        .andExpect(jsonPath("$.items[0].phone").doesNotExist());
+    mvc.perform(get("/api/v1/client/appointments/{id}", appointmentId).header("Cookie", cookie))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.appointmentId").value(appointmentId.toString()));
+    mvc.perform(
+            get("/api/v1/client/appointments/{id}", otherAppointmentId).header("Cookie", cookie))
+        .andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.error.code").value("RESOURCE_NOT_FOUND"));
+    mvc.perform(
+            get("/api/v1/client/appointments/{id}", foreignTenantAppointmentId)
+                .header("Cookie", cookie))
+        .andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.error.code").value("RESOURCE_NOT_FOUND"));
+    mvc.perform(get("/api/v1/client/appointments/{id}", UUID.randomUUID()).header("Cookie", cookie))
+        .andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.error.code").value("RESOURCE_NOT_FOUND"));
+    mvc.perform(
+            get("/api/v1/client/appointments")
+                .header("Cookie", cookie)
+                .param("cursor", otherAppointmentId.toString()))
+        .andExpect(status().isBadRequest());
+    mvc.perform(
+            post("/api/v1/client/appointments/{id}/cancel", otherAppointmentId)
+                .with(csrf())
+                .header("Cookie", cookie)
+                .header("Idempotency-Key", "foreign-cancel-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1}"))
+        .andExpect(status().isNotFound());
+    assertThat(statusOf(otherAppointmentId)).isEqualTo("CONFIRMED");
+    assertThat(countAppointmentsFor(otherClientId)).isEqualTo(1);
+  }
+
+  @Test
+  void clientCancellationAtInclusiveCutoffWorksForInactiveServiceAndReplayHasNoEffects()
+      throws Exception {
+    UUID appointmentId = insertClientAppointment(PHONE, now.plusSeconds(7_200));
+    String cookie = verifiedClientCookie(slug, PHONE);
+    String idempotencyKey = "client-cancel-" + UUID.randomUUID();
+
+    mvc.perform(
+            post("/api/v1/client/appointments/{id}/cancel", appointmentId)
+                .header("Cookie", cookie)
+                .header("Idempotency-Key", idempotencyKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1}"))
+        .andExpect(status().isForbidden());
+    assertThat(statusOf(appointmentId)).isEqualTo("CONFIRMED");
+
+    mvc.perform(
+            post("/api/v1/client/appointments/{id}/cancel", appointmentId)
+                .with(csrf())
+                .header("Cookie", cookie)
+                .header("Idempotency-Key", idempotencyKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.appointmentId").value(appointmentId.toString()))
+        .andExpect(jsonPath("$.status").value("CANCELLED_BY_CLIENT"))
+        .andExpect(jsonPath("$.version").value(2))
+        .andExpect(
+            org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                .string("Cache-Control", "no-store"));
+
+    UUID operationId =
+        UUID.fromString(
+            appJdbc.queryForObject(
+                "SELECT operation_id FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope LIKE 'appointments.client.cancel.%'",
+                String.class, tenantId));
+    ownerJdbc.update(
+        "UPDATE agendamento.client_access_session SET expires_at = ? WHERE tenant_id = ?",
+        java.sql.Timestamp.from(now.plusSeconds(14_400)),
+        tenantId);
+    org.mockito.Mockito.when(clock.instant()).thenReturn(now.plusSeconds(7_200));
+    mvc.perform(
+            post("/api/v1/client/appointments/{id}/cancel", appointmentId)
+                .with(csrf())
+                .header("Cookie", cookie)
+                .header("Idempotency-Key", idempotencyKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1}"))
+        .andExpect(status().isOk())
+        .andExpect(
+            org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                .string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.appointmentId").value(appointmentId.toString()))
+        .andExpect(jsonPath("$.version").value(2));
+
+    assertThat(statusOf(appointmentId)).isEqualTo("CANCELLED_BY_CLIENT");
+    assertThat(versionOf(appointmentId)).isEqualTo(2);
+    assertThat(countHistory(appointmentId)).isEqualTo(2);
+    assertThat(countAudit(appointmentId)).isEqualTo(1);
+    assertThat(countOutbox(appointmentId)).isEqualTo(1);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.idempotency_record WHERE operation_id = ? AND state = 'COMPLETED'",
+                Long.class,
+                operationId))
+        .isEqualTo(1);
+    mvc.perform(get("/api/v1/client/appointments").header("Cookie", cookie))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.items[0].status").value("CANCELLED_BY_CLIENT"));
+  }
+
+  @Test
+  void expiredClientCookieCannotReadOrMutateClientAppointments() throws Exception {
+    UUID appointmentId = insertClientAppointment(PHONE, now.plusSeconds(7_200));
+    String cookie = verifiedClientCookie(slug, PHONE);
+    org.mockito.Mockito.when(clock.instant()).thenReturn(now.plusSeconds(900));
+
+    mvc.perform(get("/api/v1/client/appointments").header("Cookie", cookie))
+        .andExpect(status().isUnauthorized())
+        .andExpect(
+            org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                .string("Cache-Control", "no-store"));
+    mvc.perform(
+            post("/api/v1/client/appointments/{id}/cancel", appointmentId)
+                .with(csrf())
+                .header("Cookie", cookie)
+                .header("Idempotency-Key", "expired-cancel-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1}"))
+        .andExpect(status().isUnauthorized());
+    assertThat(statusOf(appointmentId)).isEqualTo("CONFIRMED");
+    assertThat(versionOf(appointmentId)).isEqualTo(1);
+    assertThat(countHistory(appointmentId)).isEqualTo(1);
+    assertThat(countAudit(appointmentId)).isZero();
+    assertThat(countOutbox(appointmentId)).isZero();
+  }
+
+  @Test
+  void revokedClientCookieCannotReadOrMutateClientAppointments() throws Exception {
+    UUID appointmentId = insertClientAppointment(PHONE, now.plusSeconds(7_200));
+    String cookie = verifiedClientCookie(slug, PHONE);
+
+    mvc.perform(post("/api/v1/client/session/logout").with(csrf()).header("Cookie", cookie))
+        .andExpect(status().isNoContent());
+    mvc.perform(get("/api/v1/client/appointments").header("Cookie", cookie))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(
+            post("/api/v1/client/appointments/{id}/cancel", appointmentId)
+                .with(csrf())
+                .header("Cookie", cookie)
+                .header("Idempotency-Key", "revoked-cancel-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1}"))
+        .andExpect(status().isUnauthorized());
+    assertThat(statusOf(appointmentId)).isEqualTo("CONFIRMED");
+    assertThat(versionOf(appointmentId)).isEqualTo(1);
+    assertThat(countHistory(appointmentId)).isEqualTo(1);
+    assertThat(countAudit(appointmentId)).isZero();
+    assertThat(countOutbox(appointmentId)).isZero();
+  }
+
+  @Test
+  void cancellationAfterCutoffIsRejectedWithoutSuccessfulEffects() throws Exception {
+    UUID appointmentId = insertClientAppointment(PHONE, now.plusSeconds(3_600));
+    String cookie = verifiedClientCookie(slug, PHONE);
+
+    mvc.perform(
+            post("/api/v1/client/appointments/{id}/cancel", appointmentId)
+                .with(csrf())
+                .header("Cookie", cookie)
+                .header("Idempotency-Key", "late-cancel-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1}"))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("CANCELLATION_WINDOW_CLOSED"));
+    assertThat(statusOf(appointmentId)).isEqualTo("CONFIRMED");
+    assertThat(versionOf(appointmentId)).isEqualTo(1);
+    assertThat(countHistory(appointmentId)).isEqualTo(1);
+    assertThat(countAudit(appointmentId)).isZero();
+    assertThat(countOutbox(appointmentId)).isZero();
+  }
+
+  @Test
+  void clientCancellationAuditFailureRollsBackStateHistoryOutboxAndReceipt() throws Exception {
+    UUID appointmentId = insertClientAppointment(PHONE, now.plusSeconds(7_200));
+    String cookie = verifiedClientCookie(slug, PHONE);
+    String key = "client-cancel-audit-failure-" + UUID.randomUUID();
+    ownerJdbc.execute(
+        "CREATE FUNCTION agendamento.fail_client_cancel_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action = 'APPOINTMENT_CANCELLED_BY_CLIENT' THEN RAISE EXCEPTION 'injected client audit failure'; END IF; RETURN NEW; END $$");
+    ownerJdbc.execute(
+        "CREATE TRIGGER fail_client_cancel_audit BEFORE INSERT ON agendamento.audit_event FOR EACH ROW EXECUTE FUNCTION agendamento.fail_client_cancel_audit()");
+    try {
+      assertThatThrownBy(
+              () ->
+                  mvc.perform(
+                          post("/api/v1/client/appointments/{id}/cancel", appointmentId)
+                              .with(csrf())
+                              .header("Cookie", cookie)
+                              .header("Idempotency-Key", key)
+                              .contentType(MediaType.APPLICATION_JSON)
+                              .content("{\"expectedVersion\":1}"))
+                      .andReturn())
+          .hasStackTraceContaining("injected client audit failure");
+
+      assertThat(statusOf(appointmentId)).isEqualTo("CONFIRMED");
+      assertThat(versionOf(appointmentId)).isEqualTo(1);
+      assertThat(countHistory(appointmentId)).isEqualTo(1);
+      assertThat(countAudit(appointmentId)).isZero();
+      assertThat(countOutbox(appointmentId)).isZero();
+      assertThat(
+              ownerJdbc.queryForObject(
+                  "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope LIKE 'appointments.client.cancel.%'",
+                  Long.class, tenantId))
+          .isZero();
+    } finally {
+      ownerJdbc.execute("DROP TRIGGER fail_client_cancel_audit ON agendamento.audit_event");
+      ownerJdbc.execute("DROP FUNCTION agendamento.fail_client_cancel_audit()");
+    }
+
+    mvc.perform(
+            post("/api/v1/client/appointments/{id}/cancel", appointmentId)
+                .with(csrf())
+                .header("Cookie", cookie)
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CANCELLED_BY_CLIENT"));
+    assertThat(statusOf(appointmentId)).isEqualTo("CANCELLED_BY_CLIENT");
+    assertThat(versionOf(appointmentId)).isEqualTo(2);
+    assertThat(countHistory(appointmentId)).isEqualTo(2);
+    assertThat(countAudit(appointmentId)).isEqualTo(1);
+    assertThat(countOutbox(appointmentId)).isEqualTo(1);
+  }
+
+  @Test
+  void clientAppointmentListUsesBoundedDeterministicCursorPages() throws Exception {
+    Instant firstStart = now.plusSeconds(86_400);
+    for (int index = 0; index < 21; index++) {
+      insertClientAppointment(PHONE, firstStart.plusSeconds(index * 3_600L));
+    }
+    String cookie = verifiedClientCookie(slug, PHONE);
+
+    MvcResult firstResult =
+        mvc.perform(get("/api/v1/client/appointments").header("Cookie", cookie))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.items.length()").value(20))
+            .andExpect(jsonPath("$.hasMore").value(true))
+            .andReturn();
+    var firstPage = mapper.readTree(firstResult.getResponse().getContentAsString());
+    String cursor = firstPage.get("nextCursor").asText();
+    MvcResult nextResult =
+        mvc.perform(
+                get("/api/v1/client/appointments").header("Cookie", cookie).param("cursor", cursor))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.items.length()").value(1))
+            .andExpect(jsonPath("$.hasMore").value(false))
+            .andReturn();
+    var nextPage = mapper.readTree(nextResult.getResponse().getContentAsString());
+    assertThat(nextPage.at("/items/0/appointmentId").asText())
+        .isNotEqualTo(firstPage.at("/items/19/appointmentId").asText());
+    assertThat(Instant.parse(nextPage.at("/items/0/startsAt").asText()))
+        .isAfter(Instant.parse(firstPage.at("/items/19/startsAt").asText()));
+  }
+
+  @Test
   void verificationUsesClockInstantAfterWaitingForChallengeRowLock() throws Exception {
     UUID challengeId = requestChallenge(slug, PHONE, "access-expiry-lock-" + UUID.randomUUID());
     String code = sentCodes.get(challengeId);
@@ -651,6 +933,154 @@ class ClientAccessIT {
                 .header("Cookie", cookie))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.authenticated").value(expected));
+  }
+
+  private String verifiedClientCookie(String requestSlug, String phone) throws Exception {
+    UUID challengeId = requestChallenge(requestSlug, phone, "client-area-" + UUID.randomUUID());
+    MvcResult result =
+        mvc.perform(
+                post("/api/v1/public/"
+                        + requestSlug
+                        + "/access-challenges/"
+                        + challengeId
+                        + "/verify")
+                    .with(csrf())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"code\":\"" + sentCodes.get(challengeId) + "\"}"))
+            .andExpect(status().isNoContent())
+            .andReturn();
+    String setCookie = result.getResponse().getHeader("Set-Cookie");
+    assertThat(setCookie).startsWith("AGDCLIENT=");
+    return setCookie.substring(0, setCookie.indexOf(';'));
+  }
+
+  private UUID insertClientAppointment(String phone, Instant startsAt) {
+    UUID clientId =
+        ownerJdbc.queryForObject(
+            "SELECT client_id FROM agendamento.client WHERE tenant_id = ? AND normalized_phone = ?",
+            UUID.class,
+            tenantId,
+            phone);
+    UUID serviceId = UUID.randomUUID();
+    ownerJdbc.update(
+        "INSERT INTO agendamento.service(service_id, tenant_id, name, normalized_name, duration_minutes, buffer_after_minutes, status, version) VALUES (?, ?, 'Consulta', 'consulta', 30, 0, 'INACTIVE', 2)",
+        serviceId,
+        tenantId);
+    ownerJdbc.update(
+        "INSERT INTO agendamento.availability_policy(tenant_id, slot_step_minutes, minimum_notice_hours, booking_horizon_days, cancellation_cutoff_hours, reminder_offset_hours, version) VALUES (?, 30, 2, 30, 2, 6, 1) ON CONFLICT (tenant_id) DO NOTHING",
+        tenantId);
+    return insertAppointment(clientId, serviceId, startsAt);
+  }
+
+  private UUID insertAppointmentForClient(UUID clientId, Instant startsAt) {
+    UUID serviceId =
+        ownerJdbc.queryForObject(
+            "SELECT service_id FROM agendamento.service WHERE tenant_id = ? LIMIT 1",
+            UUID.class,
+            tenantId);
+    return insertAppointment(clientId, serviceId, startsAt);
+  }
+
+  private UUID insertForeignTenantAppointment(String phone, Instant startsAt) {
+    UUID otherTenantId = UUID.randomUUID();
+    ownerJdbc.update(
+        "INSERT INTO agendamento.tenant(tenant_id, name, slug, timezone, status) VALUES (?, 'Foreign fixture', ?, 'UTC', 'ACTIVE')",
+        otherTenantId,
+        "client-area-foreign-" + UUID.randomUUID().toString().substring(0, 8));
+    UUID otherClientId = UUID.randomUUID();
+    ownerJdbc.update(
+        "INSERT INTO agendamento.client(client_id, tenant_id, display_name, normalized_phone) VALUES (?, ?, 'Foreign fixture client', ?)",
+        otherClientId,
+        otherTenantId,
+        phone);
+    UUID otherServiceId = UUID.randomUUID();
+    ownerJdbc.update(
+        "INSERT INTO agendamento.service(service_id, tenant_id, name, normalized_name, duration_minutes, buffer_after_minutes, status, version) VALUES (?, ?, 'Consulta estrangeira', 'consulta estrangeira', 30, 0, 'ACTIVE', 1)",
+        otherServiceId,
+        otherTenantId);
+    UUID appointmentId = UUID.randomUUID();
+    Instant endsAt = startsAt.plusSeconds(1_800);
+    ownerJdbc.update(
+        "INSERT INTO agendamento.appointment(appointment_id, tenant_id, client_id, service_id, starts_at, service_ends_at, occupied_until, time_zone, client_name_snapshot, service_name_snapshot, service_duration_minutes, service_buffer_after_minutes, status, created_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, 'UTC', 'Foreign fixture client', 'Consulta estrangeira', 30, 0, 'CONFIRMED', ?, 1)",
+        appointmentId,
+        otherTenantId,
+        otherClientId,
+        otherServiceId,
+        java.sql.Timestamp.from(startsAt),
+        java.sql.Timestamp.from(endsAt),
+        java.sql.Timestamp.from(endsAt),
+        java.sql.Timestamp.from(now));
+    return appointmentId;
+  }
+
+  private UUID insertAppointment(UUID clientId, UUID serviceId, Instant startsAt) {
+    UUID appointmentId = UUID.randomUUID();
+    Instant endsAt = startsAt.plusSeconds(1_800);
+    ownerJdbc.update(
+        "INSERT INTO agendamento.appointment(appointment_id, tenant_id, client_id, service_id, starts_at, service_ends_at, occupied_until, time_zone, client_name_snapshot, service_name_snapshot, service_duration_minutes, service_buffer_after_minutes, status, created_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, 'America/Sao_Paulo', 'Cliente Teste', 'Consulta histórica', 30, 0, 'CONFIRMED', ?, 1)",
+        appointmentId,
+        tenantId,
+        clientId,
+        serviceId,
+        java.sql.Timestamp.from(startsAt),
+        java.sql.Timestamp.from(endsAt),
+        java.sql.Timestamp.from(endsAt),
+        java.sql.Timestamp.from(now));
+    ownerJdbc.update(
+        "INSERT INTO agendamento.appointment_history(history_id, tenant_id, appointment_id, from_status, to_status, actor_type, actor_ref, reason_code, reason, occurred_at, previous_starts_at, previous_occupied_until, new_starts_at, new_occupied_until, version_before, version_after) VALUES (?, ?, ?, NULL, 'CONFIRMED', 'PUBLIC', 'PUBLIC_BOOKING', 'APPOINTMENT_CREATED', NULL, ?, NULL, NULL, NULL, NULL, NULL, NULL)",
+        UUID.randomUUID(),
+        tenantId,
+        appointmentId,
+        java.sql.Timestamp.from(now));
+    return appointmentId;
+  }
+
+  private String statusOf(UUID appointmentId) {
+    return appJdbc.queryForObject(
+        "SELECT status FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+        String.class,
+        tenantId,
+        appointmentId);
+  }
+
+  private long versionOf(UUID appointmentId) {
+    return appJdbc.queryForObject(
+        "SELECT version FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+        Long.class,
+        tenantId,
+        appointmentId);
+  }
+
+  private long countAppointmentsFor(UUID clientId) {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.appointment WHERE tenant_id = ? AND client_id = ?",
+        Long.class,
+        tenantId,
+        clientId);
+  }
+
+  private long countHistory(UUID appointmentId) {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.appointment_history WHERE tenant_id = ? AND appointment_id = ?",
+        Long.class,
+        tenantId,
+        appointmentId);
+  }
+
+  private long countAudit(UUID appointmentId) {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.audit_event WHERE tenant_id = ? AND target_id = ? AND action = 'APPOINTMENT_CANCELLED_BY_CLIENT'",
+        Long.class,
+        tenantId,
+        appointmentId);
+  }
+
+  private long countOutbox(UUID appointmentId) {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.outbox_event WHERE tenant_id = ? AND aggregate_id = ? AND event_type = 'AppointmentCancelled'",
+        Long.class,
+        tenantId,
+        appointmentId);
   }
 
   private String verifyPath(UUID challengeId) {

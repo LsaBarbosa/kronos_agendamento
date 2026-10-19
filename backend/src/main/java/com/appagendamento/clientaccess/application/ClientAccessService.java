@@ -2,11 +2,14 @@ package com.appagendamento.clientaccess.application;
 
 import com.appagendamento.clientaccess.api.AccessChallengeAccepted;
 import com.appagendamento.clientaccess.api.AccessCodeSender;
+import com.appagendamento.clientaccess.api.ClientAccessIdentityQuery;
+import com.appagendamento.clientaccess.api.VerifiedClientIdentity;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,7 +20,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
-public class ClientAccessService {
+public class ClientAccessService implements ClientAccessIdentityQuery {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(ClientAccessService.class);
 
@@ -321,6 +324,24 @@ public class ClientAccessService {
             Boolean.class,
             digest,
             Timestamp.from(now)));
+  }
+
+  @Override
+  public Optional<VerifiedClientIdentity> currentIdentity(String rawCookieHeader) {
+    String token = cookieValue(rawCookieHeader);
+    if (token == null) return Optional.empty();
+    Instant now = clock.instant();
+    List<VerifiedClientIdentity> identities =
+        jdbc.query(
+            "SELECT tenant_id, phone_ciphertext, phone_key_id FROM agendamento.client_access_session WHERE session_digest = ? AND revoked_at IS NULL AND expires_at > ?",
+            (row, index) ->
+                new VerifiedClientIdentity(
+                    row.getObject("tenant_id", UUID.class),
+                    crypto.decryptPhone(
+                        row.getBytes("phone_ciphertext"), row.getString("phone_key_id"))),
+            crypto.sessionDigest(token),
+            Timestamp.from(now));
+    return identities.stream().findFirst();
   }
 
   public boolean isAuthenticatedForChallenge(
