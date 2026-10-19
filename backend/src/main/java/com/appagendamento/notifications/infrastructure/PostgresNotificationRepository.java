@@ -160,6 +160,7 @@ public class PostgresNotificationRepository implements NotificationRepository {
         || providerReference.length() > 160) {
       throw new IllegalArgumentException("Referência normalizada do transporte inválida");
     }
+    lockProviderReference(providerCode, providerReference);
     int updated =
         jdbc.update(
             """
@@ -176,7 +177,7 @@ public class PostgresNotificationRepository implements NotificationRepository {
             claim.claimToken());
     if (updated == 1) {
       finishAttempt(claim, "ACCEPTED", null);
-      reconcilePendingEvidence(claim.notificationId(), providerCode, providerReference);
+      reconcilePendingEvidence(providerCode, providerReference);
       return true;
     }
     markUnknown(claim, "TRANSPORT_OUTCOME_UNKNOWN");
@@ -367,6 +368,7 @@ public class PostgresNotificationRepository implements NotificationRepository {
   @Override
   @Transactional
   public EvidenceAdmission recordEvidence(VerifiedDeliveryEvidence evidence) {
+    lockProviderReference(evidence.providerCode(), evidence.providerMessageReference());
     List<String> inserted =
         jdbc.query(
             """
@@ -385,19 +387,15 @@ public class PostgresNotificationRepository implements NotificationRepository {
             evidence.deliveryState(),
             java.sql.Timestamp.from(evidence.occurredAt()));
     if (inserted.isEmpty()) {
+      reconcilePendingEvidence(evidence.providerCode(), evidence.providerMessageReference());
       return EvidenceAdmission.DUPLICATE;
     }
+    reconcilePendingEvidence(evidence.providerCode(), evidence.providerMessageReference());
     List<UUID> linked =
         jdbc.query(
             """
-            UPDATE agendamento.notification_evidence_inbox e
-            SET notification_id = n.notification_id
-            FROM agendamento.notification_intent n
-            WHERE e.provider_code = ? AND e.provider_event_id = ?
-              AND e.provider_code = n.provider_code
-              AND e.provider_message_reference = n.provider_message_reference
-              AND e.notification_id IS NULL
-            RETURNING e.notification_id
+            SELECT notification_id FROM agendamento.notification_evidence_inbox
+            WHERE provider_code = ? AND provider_event_id = ? AND notification_id IS NOT NULL
             """,
             (row, index) -> row.getObject("notification_id", UUID.class),
             evidence.providerCode(),
@@ -405,28 +403,41 @@ public class PostgresNotificationRepository implements NotificationRepository {
     if (linked.isEmpty()) {
       return EvidenceAdmission.ADMITTED_PENDING_CORRELATION;
     }
-    persistAndApplyEvidence(evidence, linked.getFirst());
     return EvidenceAdmission.ADMITTED;
   }
 
-  private void reconcilePendingEvidence(
-      UUID notificationId, String providerCode, String providerReference) {
+  private void lockProviderReference(String providerCode, String providerReference) {
+    jdbc.query(
+        "SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?))",
+        (org.springframework.jdbc.core.ResultSetExtractor<Void>)
+            resultSet -> {
+              resultSet.next();
+              return null;
+            },
+        providerCode,
+        providerReference);
+  }
+
+  private void reconcilePendingEvidence(String providerCode, String providerReference) {
     List<PendingEvidence> pending =
         jdbc.query(
             """
-            UPDATE agendamento.notification_evidence_inbox
-            SET notification_id = ?
-            WHERE provider_code = ? AND provider_message_reference = ?
-              AND notification_id IS NULL
-            RETURNING provider_event_id, provider_sequence, delivery_state, occurred_at
+            UPDATE agendamento.notification_evidence_inbox e
+            SET notification_id = n.notification_id
+            FROM agendamento.notification_intent n
+            WHERE e.provider_code = ? AND e.provider_message_reference = ?
+              AND e.notification_id IS NULL AND n.provider_code = e.provider_code
+              AND n.provider_message_reference = e.provider_message_reference
+            RETURNING e.notification_id, e.provider_event_id, e.provider_sequence,
+                      e.delivery_state, e.occurred_at
             """,
             (row, index) ->
                 new PendingEvidence(
+                    row.getObject("notification_id", UUID.class),
                     row.getString("provider_event_id"),
                     row.getLong("provider_sequence"),
                     row.getString("delivery_state"),
                     row.getTimestamp("occurred_at").toInstant()),
-            notificationId,
             providerCode,
             providerReference);
     pending.stream()
@@ -444,7 +455,7 @@ public class PostgresNotificationRepository implements NotificationRepository {
                         evidence.providerSequence(),
                         evidence.deliveryState(),
                         evidence.occurredAt()),
-                    notificationId));
+                    evidence.notificationId()));
   }
 
   private void persistAndApplyEvidence(VerifiedDeliveryEvidence evidence, UUID notificationId) {
@@ -482,6 +493,7 @@ public class PostgresNotificationRepository implements NotificationRepository {
   }
 
   private record PendingEvidence(
+      UUID notificationId,
       String providerEventId,
       long providerSequence,
       String deliveryState,

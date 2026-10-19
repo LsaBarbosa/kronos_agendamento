@@ -45,6 +45,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @SpringBootTest
 class NotificationPipelineIT {
@@ -60,6 +62,7 @@ class NotificationPipelineIT {
   @Autowired private AppointmentNotificationQuery appointments;
   @Autowired private ClientNotificationContactQuery contacts;
   @Autowired private org.springframework.context.ApplicationContext context;
+  @Autowired private PlatformTransactionManager transactionManager;
 
   @DynamicPropertySource
   static void database(DynamicPropertyRegistry registry) {
@@ -618,11 +621,166 @@ class NotificationPipelineIT {
                 Integer.class,
                 notificationId))
         .isEqualTo(1);
+    migrationJdbc.update(
+        "UPDATE agendamento.notification_evidence_inbox SET notification_id = NULL WHERE provider_code = ? AND provider_event_id = ?",
+        "test-provider",
+        "early-delivery");
+    migrationJdbc.update(
+        "DELETE FROM agendamento.notification_delivery_evidence WHERE provider_code = ? AND provider_event_id = ?",
+        "test-provider",
+        "early-delivery");
+    migrationJdbc.update(
+        "UPDATE agendamento.notification_intent SET state = 'ACCEPTED', delivered_at = NULL, last_evidence_sequence = -1 WHERE notification_id = ?",
+        notificationId);
     assertThat(
             admission.admit(
                 "test-provider", evidenceHeaders("early-delivery", "7", "DELIVERED"), body))
         .isEqualTo(NotificationWebhookAdmission.AdmissionResult.DUPLICATE);
     assertThat(intentState(fixture.tenant().tenantId())).isEqualTo("DELIVERED");
+    assertThat(
+            runtimeJdbc.queryForObject(
+                "SELECT notification_id FROM agendamento.notification_evidence_inbox WHERE provider_event_id = 'early-delivery'",
+                UUID.class))
+        .isEqualTo(notificationId);
+    assertThat(
+            runtimeJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.notification_delivery_evidence WHERE provider_event_id = 'early-delivery'",
+                Integer.class))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void overlappingEvidenceAdmissionAndAcceptanceTransactionsConvergeForEitherLockWinner()
+      throws Exception {
+    assertConcurrentEvidenceAndAcceptanceConverge("evidence-lock-first", false);
+    assertConcurrentEvidenceAndAcceptanceConverge("acceptance-lock-first", true);
+  }
+
+  private void assertConcurrentEvidenceAndAcceptanceConverge(
+      String fixtureName, boolean acceptanceWinsLock) throws Exception {
+    Fixture fixture = fixture(fixtureName);
+    record(fixture, 1, "AppointmentConfirmed");
+    eventConsumer.processBatch();
+    NotificationRepository.NotificationClaim claim =
+        notifications.claimDue(1, Duration.ofSeconds(30)).getFirst();
+    NotificationWebhookAdmission admission = webhookAdmission();
+    byte[] body = "evidence".getBytes(StandardCharsets.UTF_8);
+    String providerReference = "ref-" + fixtureName;
+    Map<String, String> headers =
+        evidenceHeaders("overlap-" + fixtureName, "11", "DELIVERED", providerReference);
+    TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+    CountDownLatch firstOperationComplete = new CountDownLatch(1);
+    CountDownLatch releaseFirstTransaction = new CountDownLatch(1);
+    CountDownLatch secondTransactionStarted = new CountDownLatch(1);
+    AtomicInteger secondBackendPid = new AtomicInteger();
+
+    try (ExecutorService connections = Executors.newFixedThreadPool(2)) {
+      Future<?> first =
+          connections.submit(
+              () ->
+                  transaction.executeWithoutResult(
+                      status -> {
+                        if (acceptanceWinsLock) {
+                          assertThat(
+                                  notifications.markAccepted(
+                                      claim, "test-provider", providerReference))
+                              .isTrue();
+                        } else {
+                          assertThat(admission.admit("test-provider", headers, body))
+                              .isEqualTo(
+                                  NotificationWebhookAdmission.AdmissionResult
+                                      .ADMITTED_PENDING_CORRELATION);
+                        }
+                        firstOperationComplete.countDown();
+                        await(releaseFirstTransaction);
+                      }));
+
+      boolean firstCompleted = firstOperationComplete.await(10, TimeUnit.SECONDS);
+      if (!firstCompleted) {
+        first.get(1, TimeUnit.SECONDS);
+      }
+      assertThat(firstCompleted).isTrue();
+      Future<?> second =
+          connections.submit(
+              () ->
+                  transaction.executeWithoutResult(
+                      status -> {
+                        secondBackendPid.set(
+                            runtimeJdbc.queryForObject("SELECT pg_backend_pid()", Integer.class));
+                        secondTransactionStarted.countDown();
+                        if (acceptanceWinsLock) {
+                          assertThat(admission.admit("test-provider", headers, body))
+                              .isEqualTo(NotificationWebhookAdmission.AdmissionResult.ADMITTED);
+                        } else {
+                          assertThat(
+                                  notifications.markAccepted(
+                                      claim, "test-provider", providerReference))
+                              .isTrue();
+                        }
+                      }));
+
+      assertThat(secondTransactionStarted.await(10, TimeUnit.SECONDS)).isTrue();
+      awaitAdvisoryLockWait(secondBackendPid.get());
+      releaseFirstTransaction.countDown();
+      first.get(10, TimeUnit.SECONDS);
+      second.get(10, TimeUnit.SECONDS);
+    } finally {
+      releaseFirstTransaction.countDown();
+    }
+
+    assertThat(intentStateByNotificationId(claim.notificationId())).isEqualTo("DELIVERED");
+    assertThat(
+            runtimeJdbc.queryForObject(
+                "SELECT notification_id FROM agendamento.notification_evidence_inbox WHERE provider_event_id = ?",
+                UUID.class,
+                "overlap-" + fixtureName))
+        .isEqualTo(claim.notificationId());
+    assertThat(
+            runtimeJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.notification_delivery_evidence WHERE notification_id = ?",
+                Integer.class,
+                claim.notificationId()))
+        .isEqualTo(1);
+    assertThat(
+            runtimeJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.notification_attempt WHERE notification_id = ? AND state = 'ACCEPTED'",
+                Integer.class,
+                claim.notificationId()))
+        .isEqualTo(1);
+    assertThat(admission.admit("test-provider", headers, body))
+        .isEqualTo(NotificationWebhookAdmission.AdmissionResult.DUPLICATE);
+    assertThat(
+            runtimeJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.notification_delivery_evidence WHERE notification_id = ?",
+                Integer.class,
+                claim.notificationId()))
+        .isEqualTo(1);
+  }
+
+  private void awaitAdvisoryLockWait(int backendPid) throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+    while (System.nanoTime() < deadline) {
+      Boolean waiting =
+          runtimeJdbc.queryForObject(
+              "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid = ? AND locktype = 'advisory' AND NOT granted)",
+              Boolean.class,
+              backendPid);
+      if (Boolean.TRUE.equals(waiting)) {
+        return;
+      }
+      Thread.sleep(10);
+    }
+    assertThat(false).as("second PostgreSQL connection waits on provider/reference lock").isTrue();
+  }
+
+  private static void await(CountDownLatch latch) {
+    try {
+      assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
+    } catch (InterruptedException exception) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError(
+          "Interrupted while synchronizing PostgreSQL transactions", exception);
+    }
   }
 
   @Test
@@ -864,6 +1022,11 @@ class NotificationPipelineIT {
   }
 
   private Map<String, String> evidenceHeaders(String eventId, String sequence, String state) {
+    return evidenceHeaders(eventId, sequence, state, "msg-ref");
+  }
+
+  private Map<String, String> evidenceHeaders(
+      String eventId, String sequence, String state, String providerReference) {
     return Map.of(
         "x-test-auth",
         "synthetic-valid",
@@ -872,7 +1035,7 @@ class NotificationPipelineIT {
         "x-test-sequence",
         sequence,
         "x-test-reference",
-        "msg-ref",
+        providerReference,
         "x-test-state",
         state,
         "x-test-time",
