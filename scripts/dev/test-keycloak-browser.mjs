@@ -1585,11 +1585,26 @@ try {
     await navigate(`http://localhost:5173/public/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
     await waitForText(catalogName + ' Editado', evaluate);
     await setSelectById('public-service', publicService.serviceId, evaluate);
-    const clientBookingDate = await evaluate(`(() => {
-      const nextWeeklyOccurrence = new Date(${JSON.stringify(publicDate)} + 'T00:00:00Z');
-      nextWeeklyOccurrence.setUTCDate(nextWeeklyOccurrence.getUTCDate() + 7);
-      return nextWeeklyOccurrence.toISOString().slice(0, 10);
+    const clientBookingDate = await evaluate(`(async () => {
+      const timeZone = ${JSON.stringify(publication.timeZone)};
+      const fields = Object.fromEntries(new Intl.DateTimeFormat('en-US', {timeZone, year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(new Date()).map(part => [part.type, part.value]));
+      const today = new Date(Date.UTC(Number(fields.year), Number(fields.month)-1, Number(fields.day)));
+      for (let offset = 1; offset < 30; offset += 1) {
+        const candidate = new Date(today);
+        candidate.setUTCDate(candidate.getUTCDate() + offset);
+        const date = candidate.toISOString().slice(0, 10);
+        if (date === ${JSON.stringify(publicDate)}) continue;
+        const query = new URLSearchParams({serviceId:${JSON.stringify(publicService.serviceId)}, from:date, to:date});
+        const response = await fetch('/api/v1/public/' + encodeURIComponent(${JSON.stringify(publication.slug)}) + '/availability?' + query);
+        if (!response.ok) throw new Error('Consulta de disponibilidade da fixture cliente falhou: ' + response.status);
+        const availability = await response.json();
+        if (availability.days?.[0]?.slots?.length) return date;
+      }
+      return null;
     })()`);
+    if (!clientBookingDate) {
+        throw new Error('Não foi encontrada data futura elegível e não consumida para a reserva real da área do cliente.');
+    }
     await setFieldById('public-date', clientBookingDate, evaluate);
     await waitUntil(() => evaluate("[...document.querySelectorAll('.public-page__slot')].some(button => !button.disabled)"));
     await evaluate("[...document.querySelectorAll('.public-page__slot')].find(button => !button.disabled)?.click()");
