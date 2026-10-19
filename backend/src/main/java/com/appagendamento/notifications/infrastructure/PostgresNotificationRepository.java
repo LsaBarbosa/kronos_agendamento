@@ -2,6 +2,7 @@ package com.appagendamento.notifications.infrastructure;
 
 import com.appagendamento.notifications.application.NotificationRepository;
 import com.appagendamento.notifications.application.NotificationRepository.AttemptOverview;
+import com.appagendamento.notifications.application.NotificationRepository.EvidenceAdmission;
 import com.appagendamento.notifications.application.NotificationRepository.NotificationClaim;
 import com.appagendamento.notifications.application.NotificationRepository.NotificationDetail;
 import com.appagendamento.notifications.application.NotificationRepository.NotificationOverview;
@@ -158,6 +159,7 @@ public class PostgresNotificationRepository implements NotificationRepository {
             claim.claimToken());
     if (updated == 1) {
       finishAttempt(claim, "ACCEPTED", null);
+      reconcilePendingEvidence(claim.notificationId(), providerCode, providerReference);
       return true;
     }
     markUnknown(claim, "TRANSPORT_OUTCOME_UNKNOWN");
@@ -347,49 +349,126 @@ public class PostgresNotificationRepository implements NotificationRepository {
 
   @Override
   @Transactional
-  public boolean recordEvidence(VerifiedDeliveryEvidence evidence) {
-    List<UUID> inserted =
+  public EvidenceAdmission recordEvidence(VerifiedDeliveryEvidence evidence) {
+    List<String> inserted =
         jdbc.query(
             """
-            INSERT INTO agendamento.notification_delivery_evidence
-              (provider_code, provider_event_id, notification_id, provider_sequence,
-               delivery_state, occurred_at)
-            SELECT ?, ?, notification_id, ?, ?, ?
-            FROM agendamento.notification_intent
-            WHERE provider_code = ? AND provider_message_reference = ?
+            INSERT INTO agendamento.notification_evidence_inbox
+              (provider_code, provider_event_id, provider_message_reference,
+               provider_sequence, delivery_state, occurred_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT (provider_code, provider_event_id) DO NOTHING
-            RETURNING notification_id
+            RETURNING provider_event_id
+            """,
+            (row, index) -> row.getString("provider_event_id"),
+            evidence.providerCode(),
+            evidence.providerEventId(),
+            evidence.providerMessageReference(),
+            evidence.providerSequence(),
+            evidence.deliveryState(),
+            java.sql.Timestamp.from(evidence.occurredAt()));
+    if (inserted.isEmpty()) {
+      return EvidenceAdmission.DUPLICATE;
+    }
+    List<UUID> linked =
+        jdbc.query(
+            """
+            UPDATE agendamento.notification_evidence_inbox e
+            SET notification_id = n.notification_id
+            FROM agendamento.notification_intent n
+            WHERE e.provider_code = ? AND e.provider_event_id = ?
+              AND e.provider_code = n.provider_code
+              AND e.provider_message_reference = n.provider_message_reference
+              AND e.notification_id IS NULL
+            RETURNING e.notification_id
             """,
             (row, index) -> row.getObject("notification_id", UUID.class),
             evidence.providerCode(),
-            evidence.providerEventId(),
-            evidence.providerSequence(),
-            evidence.deliveryState(),
-            java.sql.Timestamp.from(evidence.occurredAt()),
-            evidence.providerCode(),
-            evidence.providerMessageReference());
-    if (inserted.isEmpty()) {
-      return false;
+            evidence.providerEventId());
+    if (linked.isEmpty()) {
+      return EvidenceAdmission.ADMITTED_PENDING_CORRELATION;
     }
+    persistAndApplyEvidence(evidence, linked.getFirst());
+    return EvidenceAdmission.ADMITTED;
+  }
+
+  private void reconcilePendingEvidence(
+      UUID notificationId, String providerCode, String providerReference) {
+    List<PendingEvidence> pending =
+        jdbc.query(
+            """
+            UPDATE agendamento.notification_evidence_inbox
+            SET notification_id = ?
+            WHERE provider_code = ? AND provider_message_reference = ?
+              AND notification_id IS NULL
+            RETURNING provider_event_id, provider_sequence, delivery_state, occurred_at
+            """,
+            (row, index) ->
+                new PendingEvidence(
+                    row.getString("provider_event_id"),
+                    row.getLong("provider_sequence"),
+                    row.getString("delivery_state"),
+                    row.getTimestamp("occurred_at").toInstant()),
+            notificationId,
+            providerCode,
+            providerReference);
+    pending.stream()
+        .sorted(
+            java.util.Comparator.comparingLong(PendingEvidence::providerSequence)
+                .thenComparing(PendingEvidence::occurredAt)
+                .thenComparing(PendingEvidence::providerEventId))
+        .forEach(
+            evidence ->
+                persistAndApplyEvidence(
+                    new VerifiedDeliveryEvidence(
+                        providerCode,
+                        evidence.providerEventId(),
+                        providerReference,
+                        evidence.providerSequence(),
+                        evidence.deliveryState(),
+                        evidence.occurredAt()),
+                    notificationId));
+  }
+
+  private void persistAndApplyEvidence(VerifiedDeliveryEvidence evidence, UUID notificationId) {
+    jdbc.update(
+        """
+        INSERT INTO agendamento.notification_delivery_evidence
+          (provider_code, provider_event_id, notification_id, provider_sequence,
+           delivery_state, occurred_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (provider_code, provider_event_id) DO NOTHING
+        """,
+        evidence.providerCode(),
+        evidence.providerEventId(),
+        notificationId,
+        evidence.providerSequence(),
+        evidence.deliveryState(),
+        java.sql.Timestamp.from(evidence.occurredAt()));
     String state = evidence.deliveryState().equals("DELIVERED") ? "DELIVERED" : "DELIVERY_FAILED";
     jdbc.update(
         """
-            UPDATE agendamento.notification_intent
-            SET state = ?, accepted_at = coalesce(accepted_at, ?),
-                delivered_at = CASE WHEN ? THEN ?::timestamptz ELSE NULL END,
-                last_evidence_sequence = ?
-            WHERE notification_id = ? AND last_evidence_sequence < ?
-              AND state IN ('ACCEPTED', 'OUTCOME_UNKNOWN', 'DELIVERED', 'DELIVERY_FAILED')
-            """,
+        UPDATE agendamento.notification_intent
+        SET state = ?, accepted_at = coalesce(accepted_at, ?),
+            delivered_at = CASE WHEN ? THEN ?::timestamptz ELSE NULL END,
+            last_evidence_sequence = ?
+        WHERE notification_id = ? AND last_evidence_sequence < ?
+          AND state IN ('ACCEPTED', 'OUTCOME_UNKNOWN', 'DELIVERED', 'DELIVERY_FAILED')
+        """,
         state,
         java.sql.Timestamp.from(evidence.occurredAt()),
         state.equals("DELIVERED"),
         java.sql.Timestamp.from(evidence.occurredAt()),
         evidence.providerSequence(),
-        inserted.getFirst(),
+        notificationId,
         evidence.providerSequence());
-    return true;
   }
+
+  private record PendingEvidence(
+      String providerEventId,
+      long providerSequence,
+      String deliveryState,
+      java.time.Instant occurredAt) {}
 
   private static NotificationOverview overview(java.sql.ResultSet row)
       throws java.sql.SQLException {

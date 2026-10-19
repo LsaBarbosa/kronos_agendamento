@@ -32,14 +32,17 @@ public class NotificationWebhookAdmission {
     if (evidence == null) {
       return AdmissionResult.REJECTED;
     }
-    return notifications.recordEvidence(evidence)
-        ? AdmissionResult.ADMITTED
-        : AdmissionResult.DUPLICATE_OR_UNMATCHED;
+    return switch (notifications.recordEvidence(evidence)) {
+      case ADMITTED -> AdmissionResult.ADMITTED;
+      case ADMITTED_PENDING_CORRELATION -> AdmissionResult.ADMITTED_PENDING_CORRELATION;
+      case DUPLICATE -> AdmissionResult.DUPLICATE;
+    };
   }
 
   public enum AdmissionResult {
     ADMITTED,
-    DUPLICATE_OR_UNMATCHED,
+    ADMITTED_PENDING_CORRELATION,
+    DUPLICATE,
     REJECTED,
     CLOSED
   }

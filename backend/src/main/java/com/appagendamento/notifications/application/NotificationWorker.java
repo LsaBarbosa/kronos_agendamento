@@ -6,6 +6,7 @@ import com.appagendamento.notifications.application.NotificationRepository.Notif
 import com.appagendamento.notifications.domain.TransportFailure;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
+import java.util.List;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -59,7 +60,12 @@ public class NotificationWorker {
 
   public int processBatch(NotificationTransport transport) {
     int processed = 0;
-    for (NotificationClaim claim : notifications.claimDue(batchSize, lease)) {
+    while (processed < batchSize) {
+      List<NotificationClaim> next = notifications.claimDue(1, lease);
+      if (next.isEmpty()) {
+        break;
+      }
+      NotificationClaim claim = next.getFirst();
       processed++;
       process(claim, transport);
     }

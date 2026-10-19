@@ -1,5 +1,14 @@
 # Evidências de validação — AGD-001
 
+## Follow-up P2 AGD-030 — PR #18
+
+- Base revisada: `eb965187c69e3c1e5ec14fc1c24e84f82ece8aa2`; mesma branch e PR #18. O patch acrescenta V23 sem alterar V1–V22.
+- `backend/`: `env JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` — `BUILD SUCCESS` em 19/10/2026, 73 testes unitários/arquiteturais e 182 integrações com PostgreSQL 16.13/Testcontainers; `NotificationPipelineIT` 14/14 e `TenantPersistenceIT` 22/22. V23 instalação limpa, upgrade V22→V23, `validate`/rerun e grants mínimos aprovados. Java 25 foi rejeitado pelo Enforcer da baseline (Java 21/22); execução final usou JDK 21.
+- Regressões: claim de uma intenção por vez com primeira chamada presa por latch e lease expirada; worker concorrente processa a segunda apenas com claim novo. Evidência autenticada durante `send` é admitida como pendente, duplicata é distinguida, e `markAccepted` associa/aplica sem webhook adicional. Testes cobrem ordenação monotônica e rollback de admissão/reconciliação.
+- Ambiente inicial: uma tentativa isolada no sandbox não acessou o socket Docker; com autorização para acesso ao Docker, os testes reais passaram. A tentativa com Java 25 foi incompatibilidade de ambiente, não falha de código.
+- Iteração intermediária: o primeiro teste focado revelou somente uma referência incorreta ao helper de estado no teste de concorrência; corrigida para consultar pelo `notification_id`. O primeiro `spotless:check` apontou formatação, aplicada com `spotless:apply`; a execução integral subsequente passou sem falhas.
+- Revisão sequencial do diff; agentes independentes indisponíveis por limite de threads, sem alegação de aprovação humana. Envio real, protocolo/verifier de fornecedor, browser E2E de entrega, reconciliação de `OUTCOME_UNKNOWN` sem referência/consulta suportada e homologação permanecem pendentes.
+
 ## AGD-030 — Pipeline de notificações (validação local concluída)
 
 - Base da história: PR #17/AGD-025 integrado em `cb2fdbee705dbd8277bc4d943e3672b7f92ff74c`; App CI [39289175761](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39289175761) e CodeQL [39289175672](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39289175672) passaram em todos os jobs pós-merge.

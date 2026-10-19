@@ -29,6 +29,7 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -75,7 +76,8 @@ class NotificationPipelineIT {
   @AfterEach
   void clearNotificationFixtures() {
     migrationJdbc.execute(
-        "TRUNCATE agendamento.notification_delivery_evidence, "
+        "TRUNCATE agendamento.notification_evidence_inbox, "
+            + "agendamento.notification_delivery_evidence, "
             + "agendamento.notification_attempt, agendamento.notification_intent");
   }
 
@@ -167,6 +169,72 @@ class NotificationPipelineIT {
       assertThat(first.get(20, TimeUnit.SECONDS) + second.get(20, TimeUnit.SECONDS)).isEqualTo(1);
     }
     assertThat(attemptCount(fixture.tenant().tenantId())).isEqualTo(1);
+  }
+
+  @Test
+  void secondWorkerGetsFreshClaimWhileFirstTransportIsBlockedAndItsLeaseExpires() throws Exception {
+    Fixture first = fixture("claim-first");
+    Fixture second = fixture("claim-second");
+    record(first, 1, "AppointmentConfirmed");
+    record(second, 1, "AppointmentConfirmed");
+    eventConsumer.processBatch();
+    runtimeJdbc.update(
+        "UPDATE agendamento.notification_intent SET created_at = clock_timestamp() - interval '2 minutes' WHERE appointment_id = ?",
+        first.appointmentId());
+    runtimeJdbc.update(
+        "UPDATE agendamento.notification_intent SET created_at = clock_timestamp() WHERE appointment_id = ?",
+        second.appointmentId());
+
+    CountDownLatch firstCallEntered = new CountDownLatch(1);
+    CountDownLatch releaseFirstCall = new CountDownLatch(1);
+    NotificationWorker worker = workerWithoutTransport();
+    try (ExecutorService workers = Executors.newFixedThreadPool(2)) {
+      Future<Integer> firstBatch =
+          workers.submit(
+              () ->
+                  worker.processBatch(
+                      message -> {
+                        assertThat(message.appointmentId()).isEqualTo(first.appointmentId());
+                        firstCallEntered.countDown();
+                        try {
+                          assertThat(releaseFirstCall.await(15, TimeUnit.SECONDS)).isTrue();
+                        } catch (InterruptedException interrupted) {
+                          Thread.currentThread().interrupt();
+                          throw new IllegalStateException(interrupted);
+                        }
+                        return NotificationTransport.TransportResult.accepted(
+                            "test-adapter", "first-reference");
+                      }));
+      assertThat(firstCallEntered.await(10, TimeUnit.SECONDS)).isTrue();
+      UUID firstNotification = notificationIdForAppointment(first.appointmentId());
+      UUID secondNotification = notificationIdForAppointment(second.appointmentId());
+      assertThat(attemptState(firstNotification)).isEqualTo("STARTED");
+      assertThat(attemptCountFor(secondNotification)).isZero();
+      runtimeJdbc.update(
+          "UPDATE agendamento.notification_intent SET lease_until = clock_timestamp() - interval '1 second' WHERE notification_id = ?",
+          firstNotification);
+
+      Future<Integer> concurrentScan =
+          workers.submit(
+              () ->
+                  worker.processBatch(
+                      message -> {
+                        assertThat(message.appointmentId()).isEqualTo(second.appointmentId());
+                        return NotificationTransport.TransportResult.accepted(
+                            "test-adapter", "second-reference");
+                      }));
+      assertThat(concurrentScan.get(15, TimeUnit.SECONDS)).isEqualTo(1);
+      assertThat(intentStateByNotificationId(secondNotification)).isEqualTo("ACCEPTED");
+      assertThat(attemptState(firstNotification)).isEqualTo("OUTCOME_UNKNOWN");
+      assertThat(attemptCountFor(secondNotification)).isEqualTo(1);
+      assertThat(attemptState(secondNotification)).isEqualTo("ACCEPTED");
+      releaseFirstCall.countDown();
+      assertThat(firstBatch.get(15, TimeUnit.SECONDS)).isEqualTo(1);
+      assertThat(intentStateByNotificationId(firstNotification)).isEqualTo("OUTCOME_UNKNOWN");
+      assertThat(attemptCountFor(firstNotification)).isEqualTo(1);
+    } finally {
+      releaseFirstCall.countDown();
+    }
   }
 
   @Test
@@ -439,7 +507,7 @@ class NotificationPipelineIT {
     assertThat(admission.admit("test-provider", headers, body))
         .isEqualTo(NotificationWebhookAdmission.AdmissionResult.ADMITTED);
     assertThat(admission.admit("test-provider", headers, body))
-        .isEqualTo(NotificationWebhookAdmission.AdmissionResult.DUPLICATE_OR_UNMATCHED);
+        .isEqualTo(NotificationWebhookAdmission.AdmissionResult.DUPLICATE);
     assertThat(admission.admit("test-provider", evidenceHeaders("event-1", "1", "FAILED"), body))
         .isEqualTo(NotificationWebhookAdmission.AdmissionResult.ADMITTED);
     assertThat(intentState(fixture.tenant().tenantId())).isEqualTo("DELIVERED");
@@ -456,6 +524,131 @@ class NotificationPipelineIT {
                 "test-provider",
                 "event-1"))
         .isEqualTo(1);
+  }
+
+  @Test
+  void authenticatedEvidenceDuringSendIsDurableAndReconciledAfterAcceptanceWithoutRedelivery() {
+    Fixture fixture = fixture("early-evidence");
+    record(fixture, 1, "AppointmentConfirmed");
+    eventConsumer.processBatch();
+    NotificationWebhookAdmission admission = webhookAdmission();
+    byte[] body = "evidence".getBytes(StandardCharsets.UTF_8);
+    NotificationWorker worker = workerWithoutTransport();
+
+    assertThat(
+            worker.processBatch(
+                message -> {
+                  assertThat(
+                          admission.admit(
+                              "test-provider",
+                              evidenceHeaders("early-delivery", "7", "DELIVERED"),
+                              body))
+                      .isEqualTo(
+                          NotificationWebhookAdmission.AdmissionResult
+                              .ADMITTED_PENDING_CORRELATION);
+                  assertThat(
+                          admission.admit(
+                              "test-provider",
+                              evidenceHeaders("early-delivery", "7", "DELIVERED"),
+                              body))
+                      .isEqualTo(NotificationWebhookAdmission.AdmissionResult.DUPLICATE);
+                  assertThat(
+                          runtimeJdbc.queryForObject(
+                              "SELECT count(*) FROM agendamento.notification_evidence_inbox WHERE provider_event_id = 'early-delivery' AND notification_id IS NULL",
+                              Integer.class))
+                      .isEqualTo(1);
+                  return NotificationTransport.TransportResult.accepted("test-provider", "msg-ref");
+                }))
+        .isEqualTo(1);
+
+    UUID notificationId = notificationId(fixture.tenant().tenantId());
+    assertThat(intentState(fixture.tenant().tenantId())).isEqualTo("DELIVERED");
+    assertThat(
+            runtimeJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.notification_evidence_inbox WHERE provider_event_id = 'early-delivery' AND notification_id = ?",
+                Integer.class,
+                notificationId))
+        .isEqualTo(1);
+    assertThat(
+            runtimeJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.notification_delivery_evidence WHERE provider_event_id = 'early-delivery' AND notification_id = ?",
+                Integer.class,
+                notificationId))
+        .isEqualTo(1);
+    assertThat(
+            admission.admit(
+                "test-provider", evidenceHeaders("early-delivery", "7", "DELIVERED"), body))
+        .isEqualTo(NotificationWebhookAdmission.AdmissionResult.DUPLICATE);
+    assertThat(intentState(fixture.tenant().tenantId())).isEqualTo("DELIVERED");
+  }
+
+  @Test
+  void evidenceAdmissionAndAcceptanceReconciliationRollbackAtomically() {
+    Fixture fixture = fixture("evidence-rollback");
+    record(fixture, 1, "AppointmentConfirmed");
+    eventConsumer.processBatch();
+    NotificationWebhookAdmission admission = webhookAdmission();
+    byte[] body = "evidence".getBytes(StandardCharsets.UTF_8);
+    migrationJdbc.execute(
+        "CREATE OR REPLACE FUNCTION agendamento.reject_evidence_inbox() RETURNS trigger "
+            + "LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected evidence admission failure'; END $$");
+    migrationJdbc.execute(
+        "CREATE TRIGGER reject_evidence_inbox BEFORE INSERT ON "
+            + "agendamento.notification_evidence_inbox FOR EACH ROW "
+            + "EXECUTE FUNCTION agendamento.reject_evidence_inbox()");
+    try {
+      assertThatThrownBy(
+              () ->
+                  admission.admit(
+                      "test-provider",
+                      evidenceHeaders("rolled-back-admission", "1", "DELIVERED"),
+                      body))
+          .isInstanceOf(RuntimeException.class);
+      assertThat(
+              runtimeJdbc.queryForObject(
+                  "SELECT count(*) FROM agendamento.notification_evidence_inbox WHERE provider_event_id = 'rolled-back-admission'",
+                  Integer.class))
+          .isZero();
+    } finally {
+      migrationJdbc.execute(
+          "DROP TRIGGER IF EXISTS reject_evidence_inbox ON agendamento.notification_evidence_inbox");
+      migrationJdbc.execute("DROP FUNCTION IF EXISTS agendamento.reject_evidence_inbox()");
+    }
+
+    NotificationRepository.NotificationClaim claim =
+        notifications.claimDue(1, Duration.ofSeconds(30)).getFirst();
+    assertThat(
+            admission.admit(
+                "test-provider", evidenceHeaders("rolled-back-admission", "1", "DELIVERED"), body))
+        .isEqualTo(NotificationWebhookAdmission.AdmissionResult.ADMITTED_PENDING_CORRELATION);
+    migrationJdbc.execute(
+        "CREATE OR REPLACE FUNCTION agendamento.reject_delivery_evidence() RETURNS trigger "
+            + "LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected reconciliation failure'; END $$");
+    migrationJdbc.execute(
+        "CREATE TRIGGER reject_delivery_evidence BEFORE INSERT ON "
+            + "agendamento.notification_delivery_evidence FOR EACH ROW "
+            + "EXECUTE FUNCTION agendamento.reject_delivery_evidence()");
+    try {
+      assertThatThrownBy(() -> notifications.markAccepted(claim, "test-provider", "msg-ref"))
+          .isInstanceOf(RuntimeException.class);
+      assertThat(intentStateByNotificationId(claim.notificationId())).isEqualTo("CLAIMED");
+      assertThat(
+              runtimeJdbc.queryForObject(
+                  "SELECT notification_id IS NULL FROM agendamento.notification_evidence_inbox WHERE provider_event_id = 'rolled-back-admission'",
+                  Boolean.class))
+          .isTrue();
+      assertThat(
+              runtimeJdbc.queryForObject(
+                  "SELECT count(*) FROM agendamento.notification_delivery_evidence WHERE provider_event_id = 'rolled-back-admission'",
+                  Integer.class))
+          .isZero();
+    } finally {
+      migrationJdbc.execute(
+          "DROP TRIGGER IF EXISTS reject_delivery_evidence ON agendamento.notification_delivery_evidence");
+      migrationJdbc.execute("DROP FUNCTION IF EXISTS agendamento.reject_delivery_evidence()");
+    }
+    assertThat(notifications.markAccepted(claim, "test-provider", "msg-ref")).isTrue();
+    assertThat(intentStateByNotificationId(claim.notificationId())).isEqualTo("DELIVERED");
   }
 
   @Test
@@ -484,6 +677,29 @@ class NotificationPipelineIT {
         context.getBeanProvider(NotificationTransport.class);
     return new NotificationWorker(
         notifications, appointments, contacts, provider, new SimpleMeterRegistry(), 20, 60, 8);
+  }
+
+  private NotificationWebhookAdmission webhookAdmission() {
+    ProviderWebhookVerifier verifier =
+        (provider, headers, rawBody) -> {
+          if (!"synthetic-valid".equals(headers.get("x-test-auth"))
+              || !"evidence".equals(new String(rawBody, StandardCharsets.UTF_8))) {
+            return Optional.empty();
+          }
+          return Optional.of(
+              new NotificationRepository.VerifiedDeliveryEvidence(
+                  provider,
+                  headers.get("x-test-event"),
+                  headers.getOrDefault("x-test-reference", "msg-ref"),
+                  Long.parseLong(headers.get("x-test-sequence")),
+                  headers.get("x-test-state"),
+                  Instant.parse(headers.get("x-test-time"))));
+        };
+    org.springframework.beans.factory.support.StaticListableBeanFactory factory =
+        new org.springframework.beans.factory.support.StaticListableBeanFactory();
+    factory.addBean("testWebhookVerifier", verifier);
+    return new NotificationWebhookAdmission(
+        factory.getBeanProvider(ProviderWebhookVerifier.class), notifications);
   }
 
   private Fixture fixture(String slugPrefix) {
@@ -606,11 +822,46 @@ class NotificationPipelineIT {
 
   private Map<String, String> evidenceHeaders(String eventId, String sequence, String state) {
     return Map.of(
-        "x-test-auth", "synthetic-valid",
-        "x-test-event", eventId,
-        "x-test-sequence", sequence,
-        "x-test-state", state,
-        "x-test-time", "2027-01-10T10:30:00Z");
+        "x-test-auth",
+        "synthetic-valid",
+        "x-test-event",
+        eventId,
+        "x-test-sequence",
+        sequence,
+        "x-test-reference",
+        "msg-ref",
+        "x-test-state",
+        state,
+        "x-test-time",
+        "2027-01-10T10:30:00Z");
+  }
+
+  private UUID notificationIdForAppointment(UUID appointmentId) {
+    return runtimeJdbc.queryForObject(
+        "SELECT notification_id FROM agendamento.notification_intent WHERE appointment_id = ?",
+        UUID.class,
+        appointmentId);
+  }
+
+  private int attemptCountFor(UUID notificationId) {
+    return runtimeJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.notification_attempt WHERE notification_id = ?",
+        Integer.class,
+        notificationId);
+  }
+
+  private String attemptState(UUID notificationId) {
+    return runtimeJdbc.queryForObject(
+        "SELECT state FROM agendamento.notification_attempt WHERE notification_id = ?",
+        String.class,
+        notificationId);
+  }
+
+  private String intentStateByNotificationId(UUID notificationId) {
+    return runtimeJdbc.queryForObject(
+        "SELECT state FROM agendamento.notification_intent WHERE notification_id = ?",
+        String.class,
+        notificationId);
   }
 
   private AuthenticatedAdmin admin(UUID tenantId) {

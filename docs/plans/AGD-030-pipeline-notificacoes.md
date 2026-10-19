@@ -32,7 +32,7 @@
 
 ## Estratégia e testes
 
-1. Adicionar V22 para intenções, tentativas e evidências normalizadas, com FKs tenant-scoped, índices de claim/consulta e grants runtime mínimos; preservar V1–V21.
+1. V22 criou intenções/tentativas/evidências ligadas; V23 acrescenta inbox durável para evidências autenticadas ainda sem correlação, preservando V1–V22 e grants runtime mínimos.
 2. Definir portas públicas dos módulos `appointments` e `clients` para snapshots/notificação e contato, sem consultas cross-module arbitrárias.
 3. Implementar consumidor local com receipt e intenção atômicos, worker/transport desacoplados, estados de falha e consulta administrativa.
 4. Manter controller/webhook não registrado sem verifier; testes usam adapter sintético isolado.
@@ -58,6 +58,9 @@
 - A outbox atual já tem worker genérico, mas nenhum provider; sua lease recuperável após crash foi desenhada para publicação idempotente e não deve ser reutilizada para reenviar cegamente mensagens de resultado ambíguo.
 - O adapter controlado prova composição e transações, não entrega, template ou autenticidade de fornecedor real.
 - Não há mecanismo genérico suficiente para declarar ordenação de webhook sem protocolo selecionado; a camada normalizada exige sequência monotônica do adapter e permanece fechada em produção.
+- Claims são adquiridos um a um imediatamente antes do processamento externo; o limite de lote não reserva leases antecipadamente.
+- Inbox persiste somente campos normalizados mínimos. Evidência recebida antes de `markAccepted` fica pendente e é reconciliada atomicamente após a referência persistir. Duplicatas mantêm identidade única antes da correlação; sequência antiga não regride estado.
+- Para `OUTCOME_UNKNOWN` sem referência e sem consulta/idempotência suportada pelo fornecedor, a evidência não pode ser associada com segurança. Mantém-se o estado desconhecido para reconciliação operacional; não há retry cego.
 
 ## Retomada
 
@@ -65,3 +68,9 @@
 - AGD-030 permanecerá parcial até fornecedor, templates aprovados, segredos, política de reconciliação suportada e homologação real.
 - AGD-031 continua separada; não declarar lembretes invalidados/enviados.
 - Revisão por subagentes não disponível por limite de threads nesta sessão; revisão sequencial será registrada sem alegação de independência ou aprovação humana.
+
+## Follow-up P2 — claims e evidência antecipada
+
+- Corrigir reivindicação em lote para uma intenção por vez, preservando lease/fencing e tratamento conservador da chamada em curso cujo lease expire.
+- V23 cria `notification_evidence_inbox`, deduplicação por provedor/evento e vínculo posterior à intenção; migra evidências já persistidas de V22 sem payload bruto.
+- Evidência local executada: `spotless:check verify` em Java 21 — 73 unitários/arquiteturais e 182 integrações PostgreSQL 16.13/Testcontainers; `NotificationPipelineIT` 14/14 e `TenantPersistenceIT` 22/22. Inclui corrida com latch/lease vencida, fake send admitindo webhook antes do aceite, dedupe/ordem/rollback, instalação limpa, upgrade V22→V23, validate/rerun e privilégios runtime. SHA final/CI remoto ficam registrados em VALIDATION após publicação.

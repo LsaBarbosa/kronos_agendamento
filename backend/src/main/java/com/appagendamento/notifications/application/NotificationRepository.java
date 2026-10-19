@@ -36,7 +36,13 @@ public interface NotificationRepository {
 
   Optional<NotificationDetail> detail(UUID tenantId, UUID notificationId);
 
-  boolean recordEvidence(VerifiedDeliveryEvidence evidence);
+  EvidenceAdmission recordEvidence(VerifiedDeliveryEvidence evidence);
+
+  enum EvidenceAdmission {
+    ADMITTED,
+    ADMITTED_PENDING_CORRELATION,
+    DUPLICATE
+  }
 
   record NotificationClaim(
       UUID notificationId,

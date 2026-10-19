@@ -2,7 +2,10 @@ openapi: 3.1.0
 info:
   title: App Agendamento — notificações administrativas
   version: 1.0.0
-  description: Consulta tenant-scoped e minimizada do pipeline de notificações.
+  description: >-
+    Consulta tenant-scoped e minimizada do pipeline de notificações. Evidência
+    autenticada ainda não correlacionada é mantida internamente em inbox durável;
+    nenhuma rota de webhook é habilitada sem verifier de fornecedor aprovado.
 servers:
   - url: /
 paths:
