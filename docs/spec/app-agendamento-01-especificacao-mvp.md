@@ -335,8 +335,10 @@ Regras:
 - Cada intenção possui chave de deduplicação.
 - Remarcação ou cancelamento invalida lembretes pendentes da versão anterior. Conclusão e falta também tornam inelegível qualquer lembrete ainda pendente.
 - O worker verifica status, versão, início temporal e claim vigente imediatamente antes de iniciar o transporte. Alteração posterior a esse ponto não pode retirar uma mensagem já em voo.
-- O lembrete único é agendado pelo `reminderOffsetHours` configurado (2, 6, 12 ou 24), como instante UTC derivado do início da reserva. Ausência de política não autoriza default nem intenção implícita.
-- A especificação ainda não fixa o tratamento de job atrasado, reserva criada após o instante previsto ou mudança posterior do offset; consultar OPEN-QUESTIONS e AGD-031 antes de considerar essa semântica aprovada.
+- O lembrete único é agendado pelo `reminderOffsetHours` explicitamente configurado (2, 6, 12 ou 24), como instante UTC derivado do início da reserva. Política ausente não cria lembrete nem inventa offset; “padrão ligado” exige política configurada.
+- Decisão de produto aprovada nesta instrução para AGD-031: job atrasado pode ser enviado enquanto a reserva permanecer `CONFIRMED`, na versão atual, e seu início for estritamente futuro. Na igualdade com `starts_at` ou depois, o lembrete é obsoleto, sem tolerância.
+- Reserva criada/confirmada depois de `due_at` torna a intenção imediatamente elegível se o início ainda for futuro e todas as demais validações/dedupe passarem.
+- O vencimento é materializado ao criar a intenção usando a política vigente quando o evento é consumido. Mudanças de política não recalculam intenções existentes; eventos ainda não consumidos e novas versões após remarcação usam a política vigente quando processados.
 - Tentativas, resposta do provedor e estado final são registradas sem armazenar credenciais ou conteúdo sensível desnecessário.
 - Retries usam backoff e limite; após falha final, o sistema sinaliza operação.
 

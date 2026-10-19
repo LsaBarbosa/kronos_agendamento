@@ -146,6 +146,7 @@ class NotificationPipelineIT {
     migrationJdbc.update(
         "UPDATE agendamento.availability_policy SET reminder_offset_hours = 12, version = version + 1 WHERE tenant_id = ?",
         fixture.tenant().tenantId());
+    assertThat(reminderDueAt(originalReminder)).isEqualTo(startsAt.minus(Duration.ofHours(6)));
     Instant rescheduledStarts = Instant.parse("2027-01-10T11:00:00Z");
     updateAppointment(fixture, 2, "CONFIRMED", rescheduledStarts);
     record(fixture, 2, "AppointmentRescheduled");
@@ -212,6 +213,35 @@ class NotificationPipelineIT {
   }
 
   @Test
+  void eventConsumedAfterDueAtIsImmediatelyEligibleWhileAppointmentRemainsFuture() {
+    Fixture fixture = fixture("reminder-created-after-due");
+    Instant now = Instant.now();
+    Instant startsAt = now.plus(Duration.ofHours(6));
+    insertReminderPolicy(fixture, 24);
+    updateAppointment(fixture, 1, "CONFIRMED", startsAt);
+    record(fixture, 1, "AppointmentConfirmed");
+
+    assertThat(reminderEventConsumer.processBatch()).isEqualTo(1);
+
+    UUID reminder = reminderId(fixture.appointmentId(), 1);
+    assertThat(reminderDueAt(reminder)).isBefore(now);
+    assertThat(startsAt).isAfter(now);
+    AtomicInteger sends = new AtomicInteger();
+    assertThat(
+            worker(Clock.fixed(now, java.time.ZoneOffset.UTC))
+                .processBatch(
+                    message -> {
+                      sends.incrementAndGet();
+                      return NotificationTransport.TransportResult.accepted(
+                          "test-adapter", "created-after-due");
+                    }))
+        .isEqualTo(1);
+
+    assertThat(sends).hasValue(1);
+    assertThat(reminderState(reminder)).isEqualTo("ACCEPTED");
+  }
+
+  @Test
   void reminderIntentAndEventReceiptRollbackTogether() {
     Fixture fixture = fixture("reminder-rollback");
     insertReminderPolicy(fixture, 6);
@@ -248,7 +278,7 @@ class NotificationPipelineIT {
   }
 
   @Test
-  void overdueReminderMayProceedOnlyWhileAppointmentIsStillFutureUnderCurrentProposal() {
+  void overdueReminderMayProceedOnlyWhileAppointmentIsStillFuture() {
     Fixture fixture = fixture("reminder-overdue-before-start");
     insertReminderPolicy(fixture, 2);
     record(fixture, 1, "AppointmentConfirmed");

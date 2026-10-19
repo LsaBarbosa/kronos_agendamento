@@ -295,7 +295,7 @@ Critérios de aceite:
 - Dois workers não produzem dois efeitos lógicos.
 - Backlog e idade do lembrete são monitorados.
 
-**Nota de escopo/evidência:** falta de fornecedor e template aprovados não autoriza envio real; o núcleo persistido pode ser comprovado por Testcontainers e adapters controlados. A regra de job atrasado, confirmação depois do `due_at`, ausência de configuração (o documento 01 também descreve lembrete “padrão ligado”) e retroatividade de alteração do offset precisa de decisão explícita; ver OPEN-QUESTIONS e ADR-0021. Até essa decisão, não marcar como concluído o comportamento temporal afetado.
+**Nota de escopo/evidência:** falta de fornecedor e template aprovados não autoriza envio real; o núcleo persistido pode ser comprovado por Testcontainers e adapters controlados. Decisão de produto aprovada nesta instrução para AGD-031: ausência de política não cria lembrete nem inventa offset; job atrasado pode ser enviado somente enquanto a reserva estiver `CONFIRMED`, na versão atual, e com início estritamente futuro; reserva cujo evento é consumido após `due_at` fica imediatamente elegível se ainda futura; offset é materializado no consumo e mudanças posteriores não recalculam intenções existentes, enquanto eventos ainda não consumidos usam a política vigente no processamento. Detalhes em ADR-0021 e contrato.
 
 Os testes locais de AGD-031 comprovam invalidação em estado terminal; os testes de AGD-030 cobrem separadamente a intent de notificação de cancelamento. A composição E2E-05 com fornecedor, mensagem entregue, cancelamento de mensagem já em voo ou exatamente-uma-vez externo não está comprovada.
 

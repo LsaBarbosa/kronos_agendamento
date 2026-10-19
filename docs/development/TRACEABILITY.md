@@ -1,5 +1,9 @@
 # Rastreabilidade inicial
 
+## Atualização AGD-031 — decisão e teste no PR #19
+
+Em 19/10/2026 o usuário aprovou regras para política ausente, lembrete atrasado, evento consumido após `due_at` e materialização/não retroatividade do offset. Requisitos (docs/spec 01/02/03/06), ADR-0021, OpenAPI e OPEN-QUESTIONS foram atualizados; decisões não ficam mais como pendência de produto. No código já conforme, `ReminderScheduleTest` (4) e `NotificationPipelineIT` (27, PostgreSQL 16.13/Testcontainers) passaram no comando JDK21 `./mvnw -B -ntp -Dtest=ReminderScheduleTest -Dit.test=NotificationPipelineIT verify`; exercitados início futuro exato/depois, política ausente, intent antiga preservada ao mudar offset e evento consumido após vencimento ainda elegível. SHA e links novos de CI serão registrados após publicação/conclusão. A validação anterior de `4e27ff2` teve checks verdes, mas não cobre este delta. Revisão sequencial porque novas threads independentes foram recusadas por limite do ambiente; sem alegação de aprovação humana. AGD-031 continua parcial por fornecedor, template, segredos, protocolo real e homologação; sem envio real.
+
 ## AGD-030 — Pipeline de notificações
 
 **Integração:** PR [#18](https://github.com/LsaBarbosa/kronos_agendamento/pull/18) foi integrado por merge commit `ce417455c058a13a3dc3113d89729f3d9d0645af`; o head validado foi `282f273f90bbebd8a737297dfa7a4d8722d70a46`. App CI [39305915505](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39305915505) e CodeQL [39305915408](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39305915408) pós-merge terminaram com sucesso em todos os jobs/check-runs. Mantidas as pendências de transport/verifier, templates, segredos, homologação e reconciliação real de resultados sem referência.

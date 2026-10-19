@@ -27,8 +27,9 @@
 - Reutilizar V22/V23, `processed_event`, `NotificationEventConsumer`, `NotificationWorker`, fencing, chave externa, outbox e lock de correlação do ADR-0020.
 - V24 habilita `APPOINTMENT_REMINDER`, preserva `due_at` separado de `next_attempt_at` e permite que uma confirmação produza notificação imediata e lembrete da mesma origem. O follow-up P2 usa V25 para separar elegibilidade do resultado de transporte; V1–V24 permanecem imutáveis.
 - O consumo precisa ser idempotente e recuperar eventos antigos por consumidor próprio; processar versão atual, nunca enviar conteúdo de evento histórico para uma reserva em versão diferente.
-- Proposta temporal registrada como pendente de produto: um lembrete atrasado só pode ser enviado antes do início efetivo da reserva; se a reserva já começou, fica obsoleto. Uma reserva criada depois de `due_at` fica imediatamente elegível se ainda não começou. Não se cria tolerância após o início.
-- Proposta de política registrada como pendente: offset é materializado em `due_at` ao criar a intenção; mudança posterior não altera intenção persistida, e nova versão confirmada/remarcada usa o offset lido ao processar seu evento. A especificação não resolve a retroatividade nem o efeito de atraso do consumidor antes da criação do intent; ver `OPEN-QUESTIONS.md`.
+- Decisão de produto aprovada nesta instrução (19/10/2026): política ausente não cria lembrete nem inventa offset; “padrão ligado” exige política explicitamente configurada.
+- Decisão temporal aprovada na mesma instrução: job atrasado é elegível somente com reserva `CONFIRMED`, versão corrente e início estritamente futuro; na igualdade ou depois do início torna-se obsoleto, sem tolerância. Reserva cujo evento é consumido após `due_at` pode ser enviada imediatamente se ainda futura e passar pelas demais validações.
+- `due_at` é materializado com o offset vigente no consumo do evento. Mudança posterior de política não recalcula intent já criada. Evento não consumido e nova versão após remarcação usam a política vigente quando processados.
 - Sem transport configurado, worker não reivindica nem consome tentativas; adapters controlados não provam entrega externa.
 - Um transporte já em voo não pode ser desfeito por remarcação/cancelamento; a garantia cobre preflight/claim antes do início, não retractação externa.
 
@@ -45,7 +46,7 @@
 | Critério | Comando/procedimento | Resultado observado |
 |---|---|---|
 | Regras temporais/DST | `ReminderScheduleTest`, `Clock.fixed`, offsets válidos e zonas `America/New_York` nas transições de outono/primavera | 4 testes unitários passaram no gate Java 21 |
-| Persistência e dedupe | `NotificationPipelineIT` com PostgreSQL 16.13/Testcontainers; confirmação origina intenção imediata + lembrete na mesma outbox, duplicatas e escopo lógico | 25/25 integrações passam; confirmação remarcada gera nova versão e obsoleta a anterior |
+| Persistência e dedupe | `NotificationPipelineIT` com PostgreSQL 16.13/Testcontainers; confirmação origina intenção imediata + lembrete na mesma outbox, duplicatas e escopo lógico | 27/27 integrações passam; confirmação remarcada gera nova versão e obsoleta a anterior |
 | Eventos terminais/ordem | Confirmação atrasada com reserva já v2, remarcação v2, cancelamento, conclusão e falta | Eventos terminais invalidam; evento histórico não agenda versão antiga |
 | Worker e corridas | Latches e workers concorrentes; alterações antes/depois do transporte; reivindicação individual, fencing e `Clock` | Um worker envia uma vez; claim/estado são revalidados antes do transporte; mensagem em voo não é retraída |
 | Sem fornecedor e métricas | Intent due vencida, backlog/overdue e worker sem transport | Permanência em `PENDING` sem tentativa; contadores/idade consultáveis sem PII |
@@ -67,7 +68,7 @@
 
 ## Encerramento ou retomada
 
-- AGD-031 permanece parcial sem decisão das regras temporais/política, fornecedor real, template, segredos gerenciados e homologação. A falha inicial de migração em schema isolado foi causada pela qualificação fixa `agendamento`; a V24 foi corrigida para usar o schema Flyway corrente e a suíte final passou.
+- As regras de produto temporais/política foram aprovadas em 19/10/2026 e não permanecem pendentes. AGD-031 continua parcial por fornecedor/transport real, template aprovado, segredos gerenciados e homologação. A falha inicial de migração em schema isolado foi causada pela qualificação fixa `agendamento`; a V24 foi corrigida para usar o schema Flyway corrente e a suíte final passou.
 - Não alegar entrega WhatsApp, exactly-once externo, cancelamento de mensagem em voo ou conclusão de AGD-032/033.
 
 ## Follow-up P2 — invalidação durante transporte em voo
@@ -77,3 +78,12 @@
 - Nenhum lock/transação permanece aberto durante `send`. Não é possível retrair efeito externo após início da chamada; V25 preserva seu resultado em vez de mascará-lo como obsoleto. Não há alteração de endpoint/OpenAPI; o campo é estado interno persistido.
 - Resultado local no commit de código `5da586ce4ca01f3834e2f897b59db1dae10386a0`: `NotificationPipelineIT` 26/26, `TenantPersistenceIT` 24/24 e `spotless:check verify` em JDK 21 com 77 unitários/arquiteturais + 196 integrações PostgreSQL 16.13/Testcontainers. Instalação limpa, upgrade V24→V25, validate/rerun e grants passaram. App CI/CodeQL push/PR do head documental final ainda aguardam publicação; AGD-031 permanece parcial.
 - No head `2f4d73e85d636b1312a9b0b6eb13260c2690884b`, App CI/CodeQL push e PR concluíram todos os jobs com sucesso; App CI executou o E2E OIDC/Keycloak existente, que não comprova entrega por fornecedor. AGD-031 permanece parcial.
+
+## Decisões temporais fechadas — validação corretiva do PR #19
+
+- O head remoto `4e27ff213f1aa3a3a32478d46781a65cf3279728` foi confirmado antes da alteração. Foram atualizados os documentos canônicos, ADR-0021, OpenAPI e OPEN-QUESTIONS; as quatro regras aprovadas em 19/10/2026 não são atribuídas retroativamente à especificação anterior.
+- Regressões em `NotificationPipelineIT`: evento confirmado consumido depois de `due_at` cria intent vencida que é aceita quando a reserva segue no futuro; alteração do offset de 6h para 12h preserva o `due_at` da intent antiga e usa 12h para a nova versão. O teste de borda no início continua rejeitando igualdade e depois.
+- Validação local executada: `cd backend && export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH && ./mvnw -B -ntp -Dtest=ReminderScheduleTest -Dit.test=NotificationPipelineIT verify` — `BUILD SUCCESS`, 4 unitários e 27 integrações com PostgreSQL 16.13/Testcontainers; V1–V25 aplicadas em banco real.
+- A primeira execução no sandbox não acessou o socket Docker (`Operation not permitted`); a repetição autorizada fora do sandbox executou os mesmos testes e passou. Isso é limitação de permissão local, não falha do código.
+- Revisão de código e requisitos foi sequencial. Revisores independentes foram tentados, mas o ambiente recusou novas threads; não alegar revisão independente ou aprovação humana.
+- Antes desta atualização, o head `4e27ff2` tinha App CI/CodeQL push e PR com todos os jobs concluídos com sucesso (runs descritos no PR). Estes checks cobrem o head anterior, não o delta deste follow-up; novo SHA precisa de checks próprios antes do merge.

@@ -1,11 +1,11 @@
 # ADR-0021 — Intenção persistida de lembrete único
 
 **Data:** 19/10/2026  
-**Status:** adotada para o núcleo técnico de AGD-031; sem aprovação de política temporal/retroatividade ou fornecedor.
+**Status:** adotada para o núcleo técnico e regras temporais de AGD-031; fornecedor e homologação permanecem pendentes.
 
 ## Contexto
 
-AGD-030 persiste notificações imediatas e oferece outbox, receipts, claims individuais, lease/fencing, backoff e correlação autenticada de evidências. AGD-031 precisa agendar um lembrete por reserva sem introduzir broker ou enviar quando a configuração estiver ausente. A política admite offsets de 2, 6, 12 ou 24 horas, mas não especifica a semântica de atraso nem a retroatividade de mudanças.
+AGD-030 persiste notificações imediatas e oferece outbox, receipts, claims individuais, lease/fencing, backoff e correlação autenticada de evidências. AGD-031 agenda um lembrete por reserva sem broker e sem envio de produção quando a configuração real estiver ausente. Esta decisão de produto foi aprovada nesta instrução, em 19/10/2026, para fechar a semântica de política ausente, atraso e mudança de offset.
 
 ## Decisões técnicas
 
@@ -17,11 +17,12 @@ AGD-030 persiste notificações imediatas e oferece outbox, receipts, claims ind
 - Falta de transport configurado mantém produção sem claim e sem tentativa. `OUTCOME_UNKNOWN` continua sem retry automático. Métricas são agregadas e não usam PII ou labels tenant/reserva.
 - V25 separa elegibilidade e resultado da tentativa com `notification_intent.reminder_eligible`. Evento de cancelamento/remarcação obsoleta PENDING/RETRY e marca CLAIMED inelegível sem limpar ownership/lease nem alterar attempt STARTED. `authorizeSend` e `claimDue` rejeitam lembrete inelegível. Se o transporte já começou, aceite com referência permanece gravável e a correlação de evidência continua no protocolo comum do ADR-0020; resultado ambíguo permanece `OUTCOME_UNKNOWN`, sem retry automático. Uma falha conhecida sem efeito, retornada depois da invalidação, encerra a intent como obsoleta e preserva o resultado detalhado na tentativa.
 
-## Questões de produto ainda abertas
+## Decisões de produto aprovadas em 19/10/2026
 
-- Documento 06 pede reavaliar se job atrasado ainda faz sentido, mas não define o limite. Documento 01 descreve lembrete como “padrão ligado”, enquanto `AvailabilityPolicy` pode estar ausente e não existe offset default aprovado. É necessária decisão sobre o que “ligado” significa sem configuração explícita.
-- Também é necessário decidir se reserva confirmada depois de `due_at` deve ser lembrada imediatamente se ainda futura, ou não gerar lembrete; e se alteração de `reminderOffsetHours` afeta intents já criadas ou eventos ainda não consumidos.
-- A implementação atual representa uma proposta técnica: materializa o offset lido ao consumir o evento; um dueAt vencido pode ser enviado somente antes do início. Essa proposta não é decisão de produto e o critério temporal correspondente fica parcial até aprovação.
+- Política ausente: não criar lembrete nem inventar offset. A descrição de “padrão ligado” só se aplica quando a política estiver explicitamente configurada.
+- Atraso: permitir envio atrasado somente enquanto a reserva continuar `CONFIRMED`, na versão correta, e `starts_at` for estritamente maior que o instante capturado no preflight. Na igualdade ou depois do início, a intenção é obsoleta; não há tolerância.
+- Reserva criada/confirmada depois de `due_at`: pode ser processada imediatamente enquanto ainda futura, sujeita às demais validações e deduplicação.
+- Política temporal: calcular e materializar `due_at` na criação da intenção com a política vigente quando o evento é consumido. Alteração posterior não recalcula intents persistidas. Evento ainda não consumido usa a política vigente no processamento; remarcação cria intenção da nova versão com essa mesma regra.
 
 ## Consequências e limites
 
@@ -29,3 +30,4 @@ AGD-030 persiste notificações imediatas e oferece outbox, receipts, claims ind
 - A revalidação imediatamente antes do transporte minimiza envio obsoleto, mas não fornece cancelamento de chamada já em voo nem exactly-once externo.
 - V25 acrescenta somente a elegibilidade persistida; V1–V24 permanecem imutáveis. Instalação limpa, upgrade V24→V25, validate/rerun e privilégios runtime são verificados em PostgreSQL real.
 - Não há expurgo/TTL novo; retenção permanece pendente.
+- Regras temporais e ausência de configuração estão decididas e podem ser validadas sem serviço externo. AGD-031 permanece parcial por transport/verifier, templates aprovados, credenciais gerenciadas e homologação. A decisão não autoriza envio real.
