@@ -54,7 +54,7 @@ Exclusões: sessão de cliente verificado além do mecanismo existente, busca po
 | Frontend | `npm run format:check && npm run lint && npm test && npm run check` | Format/lint, 23 Vitest, TypeScript e build passaram; `node --check` do E2E passou. |
 | Browser E2E com sessão real | App CI `oidc-browser-e2e`, emissor de teste AGD-024, PostgreSQL e Chrome | Head `7b7bad96`: App CI push [39260666437](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39260666437) e PR [39260674294](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39260674294) passaram todos os jobs. Browser comprovou reserva pública persistida, sessão cliente, cancelamento e replay no mesmo alvo/body/chave, DOM/status após reload e efeito único; challenge de outro telefone retorna sessão vinculada falsa sem invalidar a sessão anterior; logout com JSON de lista atrasado limpa dados privados. Falhas de helper anteriores estão registradas; corrigidas sem reduzir assertions. Teste local não executado para preservar Compose compartilhado/configuração incompleta. |
 | Revisão | revisão independente em leitura | Revisão sequencial pelo coordenador; criação de revisores independentes bloqueada pelo limite de threads. Não equivale a aprovação humana. |
-| CI remoto | App CI e CodeQL em push/PR | Head de código `7b7bad96`: App CI push/PR e CodeQL push/PR passaram todos os jobs; a atualização documental final ainda precisa de sua própria execução no CI. |
+| CI remoto | App CI e CodeQL em push/PR | Código/E2E `7b7bad96`: App CI push/PR e CodeQL push/PR passaram todos os jobs. Head documental `f6c3f771`: App CI push/PR e CodeQL push/PR também passaram todos os jobs. |
 
 ## Decisões/limites
 
