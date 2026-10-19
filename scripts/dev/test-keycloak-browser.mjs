@@ -2012,8 +2012,7 @@ try {
     );
     if (sessionRowsAfterRejectedRecovery !== '1') throw new Error('Challenge rejeitado criou sessão adicional.');
 
-    await command('Page.reload');
-    await waitForText('Suas reservas', evaluate);
+    await waitUntil(() => evaluate("Boolean(document.getElementById('client-appointment-filter'))"));
     await evaluate(`(() => {
       const originalFetch = window.fetch.bind(window);
       window.__clientListJsonPending = false;
