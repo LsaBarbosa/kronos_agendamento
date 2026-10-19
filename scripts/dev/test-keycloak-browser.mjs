@@ -1800,7 +1800,7 @@ try {
       attempt => attempt.url === verificationRetry[0]?.url && attempt.body === verificationRetry[0]?.body,
     );
     if (!clientSession.authenticated || !boundRecovery.authenticated || adminSessionStatus !== 401 ||
-        verificationRetry.length !== 5 || !verificationIntentPreserved || recoveryAttempts !== 4) {
+        verificationRetry.length !== 5 || !verificationIntentPreserved || recoveryAttempts !== 5) {
         throw new Error(`Recuperação de cliente divergiu: client=${clientSession.authenticated}, bound=${boundRecovery.authenticated}, adminStatus=${adminSessionStatus}, verifyAttempts=${verificationRetry.length}, sameIntent=${verificationIntentPreserved}, recoveryAttempts=${recoveryAttempts}.`);
     }
     const clientEffects = queryPostgres(
