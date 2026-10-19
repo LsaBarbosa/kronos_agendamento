@@ -4,7 +4,7 @@
 
 - Implementar intenção persistida de um único lembrete por reserva/versão, integrada ao pipeline AGD-030.
 - Referências: documento 01, seção “Mensagens do MVP”; documento 02, regras de reserva e eventos; documento 03, envelope de outbox e jobs; documento 06, AGD-031 e E2E-05.
-- Base: PR #18 integrado em `main` pelo merge `ce417455c058a13a3dc3113d89729f3d9d0645af`; branch `agd-031-lembrete-unico`.
+- Base: PR #18 integrado em `main` pelo merge `ce417455c058a13a3dc3113d89729f3d9d0645af`; branch `agd-031-lembrete-unico`; implementação local no commit `59966fa`.
 
 ## Escopo e exclusões
 
@@ -50,7 +50,7 @@
 | Worker e corridas | Latches e workers concorrentes; alterações antes/depois do transporte; reivindicação individual, fencing e `Clock` | Um worker envia uma vez; claim/estado são revalidados antes do transporte; mensagem em voo não é retraída |
 | Sem fornecedor e métricas | Intent due vencida, backlog/overdue e worker sem transport | Permanência em `PENDING` sem tentativa; contadores/idade consultáveis sem PII |
 | Migration | Banco limpo V1–V24, upgrade V23→V24, `validate` e rerun; grants runtime | `TenantPersistenceIT` 23/23 cobre V24 e privilégios; V1–V23 preservadas. Falha inicial por schema hardcoded foi corrigida antes da validação final |
-| Gate integral local | `cd backend && env JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` | `BUILD SUCCESS`, 77 unitários/arquiteturais e 194 integrações PostgreSQL 16.13/Testcontainers; `NotificationPipelineIT` 25/25 |
+| Gate integral local | commit `59966fa`; `cd backend && env JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` | `BUILD SUCCESS`, 77 unitários/arquiteturais e 194 integrações PostgreSQL 16.13/Testcontainers; `NotificationPipelineIT` 25/25 |
 | E2E existente | App CI no SHA final | E2E OIDC/Keycloak existente não representa entrega de lembrete; sem E2E de fornecedor ou UI nova |
 | CI remoto | App CI e CodeQL push/PR no SHA final, jobs/check-runs concluídos | Pendente publicação |
 
@@ -58,7 +58,7 @@
 
 - [x] PR #18 integrado por merge commit; App CI e CodeQL pós-merge concluídos com sucesso.
 - [x] Implementação funcional e migration V24; V1–V23 imutáveis.
-- [x] Validação de backend/PostgreSQL; revisão final sequencial. Revisores independentes indisponíveis por limite de threads.
+- [x] Validação de backend/PostgreSQL no commit `59966fa`; revisão final sequencial. Revisores independentes indisponíveis por limite de threads.
 - [ ] Publicação, revisão humana e App CI/CodeQL push/PR no SHA final.
 - [ ] Homologação/fornecedor real permanecem fora do ambiente autorizado e pendentes.
 
