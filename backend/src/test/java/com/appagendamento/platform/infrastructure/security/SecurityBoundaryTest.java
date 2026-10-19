@@ -30,6 +30,8 @@ import com.appagendamento.catalog.application.ListServices;
 import com.appagendamento.catalog.application.SetServiceStatus;
 import com.appagendamento.catalog.application.UpdateService;
 import com.appagendamento.clientaccess.application.ClientAccessService;
+import com.appagendamento.clients.application.GetClientNoShowPolicy;
+import com.appagendamento.clients.application.ReplaceClientNoShowPolicy;
 import com.appagendamento.clients.application.SearchAdministrativeClients;
 import com.appagendamento.notifications.application.GetNotificationOperations;
 import com.appagendamento.platform.infrastructure.web.CorrelationIdFilter;
@@ -97,6 +99,8 @@ class SecurityBoundaryTest {
   @MockitoBean private GetClientAppointments getClientAppointments;
   @MockitoBean private CancelClientAppointment cancelClientAppointment;
   @MockitoBean private GetNotificationOperations getNotificationOperations;
+  @MockitoBean private GetClientNoShowPolicy getClientNoShowPolicy;
+  @MockitoBean private ReplaceClientNoShowPolicy replaceClientNoShowPolicy;
 
   @Test
   void anonymousBusinessRequestReceivesConsistentError() throws Exception {

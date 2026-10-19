@@ -403,6 +403,15 @@ O detalhe técnico do protocolo e trade-offs está na ADR-0017.
 | GET | `/api/v1/admin/clients/{id}/no-shows` | eventos na janela e história |
 | POST | `/api/v1/admin/clients/{id}/restrictions/{restrictionId}/lift` | desbloqueio com motivo |
 
+#### Política de faltas (AGD-032 — incremento parcial)
+
+| Método | Endpoint | Uso |
+|---|---|---|
+| GET | `/api/v1/admin/no-show-policy` | consultar se o limite tenant-scoped está configurado |
+| PUT | `/api/v1/admin/no-show-policy` | configurar/alterar limite 1–5 com `expectedVersion` e `Idempotency-Key` |
+
+O tenant e o administrador vêm da associação autenticada no servidor. Ausência de política é representada como `configured=false`, `version=0`, sem `threshold`; não há default. A resposta indica `restrictionStatus=NOT_TRACKED` enquanto AGD-033 não integrar bloqueio real. Configurar o limite não calcula nem afirma contagem, bloqueio ou desbloqueio. Consulta explicável de eventos e correção permanecem parciais enquanto produto decide o instante/limites da janela e o efeito da correção. A mutação de política usa CAS, idempotência e auditoria na transação; auditoria contém apenas campo alterado e versões.
+
 ### Assinatura
 
 | Método | Endpoint | Uso |

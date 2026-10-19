@@ -1,5 +1,22 @@
 # Evidências de validação — AGD-001
 
+## AGD-032 — validação local pré-publicação
+
+- Base `de4be40aa99e1b9db64527f25cb02552f786dc46`; branch `agd-032-faltas-janela-movel`; SHA desta rodada será preenchido após commit. V1–V25 preservadas; V26 adiciona somente a política opcional de limite por tenant.
+- Backend: `cd backend && export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH && ./mvnw -B -ntp spotless:check verify` — `BUILD SUCCESS`, JDK 21, PostgreSQL 16.13/Testcontainers; 77 testes unitários/arquiteturais e 203 integrações, sem falhas. `ClientNoShowPolicyIT` 5/5 e `TenantPersistenceIT` 25/25; migration limpa/upgrade V25→V26, Flyway validate/rerun, grants e constraint 1–5 cobertos.
+- Frontend: `cd frontend && npm run format:check && npm run lint && npm test -- --run && npm run check` — passou; 23 Vitest, TypeScript e build Vite.
+- Script: `node --check scripts/dev/test-keycloak-browser.mjs` passou. O roteiro foi estendido para configurar/reler o limite e conferir `NOT_TRACKED`; corrigiu-se o seletor do tenant para mirar o parágrafo rotulado, sem depender do primeiro `p code` global.
+- Browser local Chrome/Keycloak: tentativa não comprovou AGD-032. A primeira inicialização normal do backend falhou porque o `.env` local não contém `PUBLIC_BOOKING_HMAC_ACTIVE_KEY_ID`; nenhuma chave foi adicionada ao arquivo. Com o overlay E2E oficial e segredos sintéticos de teste, o login real ocorreu, mas o roteiro parou antes da política porque o tenant persistido já continha serviços e a fixture espera catálogo vazio. Nenhum dado foi apagado; o backend E2E foi parado e os volumes preservados. A execução browser do CI, em banco limpo, permanece necessária.
+- Uma execução integral anterior encontrou sete erros no `SecurityBoundaryTest` porque o novo controller não tinha mocks no slice MVC; adicionaram-se apenas os dois `@MockitoBean` correspondentes. O gate integral subsequente passou. Isso não reduziu assertions nem gates.
+- A API e UI de configuração de limite não contam faltas nem corrigem reservas. Três decisões continuam pendentes: âncora/limites/timezone, semântica da correção e comportamento sem threshold. CI remoto ainda não executado; nenhuma homologação, restrição efetiva ou integração AGD-033 alegada.
+
+## Integração final AGD-031 — PR #19
+
+- Head integrado `e52488856323bea84214aea811752f698e537ff6`; merge commit em `main`: `de4be40aa99e1b9db64527f25cb02552f786dc46`.
+- App CI PR [39325175039](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39325175039), CodeQL push/PR [39325167836](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39325167836)/[39325175049](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39325175049): sucesso, todos os jobs/check-runs concluídos. App CI push [39325167845](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39325167845) falhou no E2E legado AGD-022; rerun seletivo passou, mas a causa original permanece desconhecida.
+- CI pós-merge: App CI [39327046746](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39327046746) e CodeQL [39327046786](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39327046786) concluíram todos os jobs com sucesso.
+- As quatro regras temporais estão resolvidas; referências antigas abaixo que ainda indicam decisão pendente são históricas e foram superadas. Transport/verifier real, templates, segredos e homologação seguem pendentes; nenhum envio real.
+
 ## Follow-up P2 AGD-031 — invalidação durante envio em voo
 
 - Base revisada: `83298afc1e93199f928bf6424ac981ec009c8dd1`; código validado/commit `5da586ce4ca01f3834e2f897b59db1dae10386a0`, mesma branch `agd-031-lembrete-unico` e PR #19. V1–V24 preservadas; migration V25 adiciona elegibilidade persistida separada do estado e resultado do transporte.

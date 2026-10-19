@@ -1,0 +1,60 @@
+# AGD-032 — Faltas em janela móvel
+
+## Identificação e objetivo
+
+- Implementar política tenant-scoped de faltas, leitura explicável e correção administrativa, sem concluir AGD-033.
+- Referências: documento 01 §10; documento 02 §§4.6/6; documento 03 seção Clientes e restrições; documento 06 critérios AGD-032/E2E-06; ADR-0018 e ADR-0021.
+- Base: main integrada em `de4be40aa99e1b9db64527f25cb02552f786dc46`; branch `agd-032-faltas-janela-movel`.
+
+## Escopo e exclusões
+
+- Inclui: política de limite 1–5 por tenant; leitura administrativa tenant-scoped de eventos `NO_SHOW`; contagem explicável na janela de 12 meses; correção explícita e auditada; controles de autorização/CAS/idempotência e efeitos transacionais necessários.
+- Exclui: bloqueio público, restrição efetiva em novas reservas, desbloqueio e reativação concorrente de restrições (AGD-033); não altera `CONFIRMED` por edição genérica; não implementa faltas artificiais nem integra fornecedores.
+- `NOT_TRACKED` permanece fronteira não implementada; não significa “sem restrição”.
+
+## Estado e dependências
+
+- `NO_SHOW` já é estado terminal persistido em `appointment`, com `appointment_history`, auditoria e `ClientNoShowRecorded` transacionais (AGD-023).
+- `clients` ainda fornece `UntrackedClientBookingRestrictionQuery`; não há política persistida nem consulta de faltas.
+- Última migration integrada: V25 (`V1–V25` preservadas); próxima migration funcional, se necessária: V26.
+- Revisão independente não disponível: duas delegações foram recusadas pelo limite de threads; revisão será sequencial e não equivale a aprovação humana.
+
+## Critérios verificáveis e decisões pendentes
+
+| Critério | Evidência esperada | Estado |
+|---|---|---|
+| Política tenant-scoped configurável de 1–5 | API administrativa, CAS/idempotência/auditoria, PostgreSQL e UI | Implementação independente em andamento; ausência deve aparecer explicitamente como não configurada, sem valor default |
+| Contagem de faltas nos 12 meses | Consulta com `Clock`, tenant/timezone e limites definidos, PostgreSQL | Bloqueada pela decisão temporal solicitada ao usuário |
+| Eventos explicáveis na UI | Eventos/fatos e correções ordenados, sem dados excessivos | Aguardando decisão temporal e semântica de correção |
+| Correção administrativa | CAS/idempotência, compensação e auditoria sem apagar história | Aguardando decisão sobre estado resultante/efeitos da correção |
+| Restrição automática de autoagendamento | Não faz parte da prova deste incremento; manter `NOT_TRACKED` onde aplicável | AGD-033 |
+
+Perguntas abertas registradas em `OPEN-QUESTIONS.md`:
+1. âncora da janela, limites inclusivos e uso de calendário/timezone;
+2. efeito da correção da falta sobre o estado atual da reserva;
+3. consequência de uma política de limite ausente.
+
+## Estratégia
+
+1. Implementar somente a configuração de limite e a representação explícita de política ausente enquanto as perguntas não forem respondidas.
+2. Após decisão, definir um instante de referência único via `Clock`, obter timezone da fonte confiável e consultar fatos de falta por tenant sem inferir restrição efetiva.
+3. Implementar correção como comando específico, preserving estado/história original e registrando fato compensatório, autorização, versão e motivo conforme decisão aprovada.
+4. Atualizar o caminho administrativo para mostrar política, contagem e fatos explicáveis; não exibir telefone, dados de terceiros ou `NOT_TRACKED` como resultado de contagem.
+5. Usar nova migration somente para schema funcional real, com grants mínimos e rollback integral de auditoria/receipt.
+6. Validar com JDK 21, PostgreSQL real/Testcontainers, conexões independentes para concorrência/CAS e browser Keycloak/PostgreSQL.
+
+## Validação
+
+| Critério | Comando/procedimento | Resultado esperado | Resultado observado |
+|---|---|---|---|
+| Política 1–5, CAS e isolamento | `ClientNoShowPolicyIT` em PostgreSQL real | Apenas tenant autenticado, limites rejeitam inválidos, versão não se perde | Passou 5/5: ausência explícita, tenant isolation, associação revogada, replay único, entradas inválidas, CAS inicial concorrente |
+| Janela móvel | Testes com `Clock` e fronteiras | Limites e calendário exatamente conforme decisão de produto | Pendente de decisão |
+| Correção e histórico | PostgreSQL: correção, replay, concorrência e rollback | Sem apagar evento/história; efeitos únicos | Pendente de decisão |
+| Browser administrativo | Chrome + Keycloak + PostgreSQL | Configura política, vê contagem/eventos e corrige conforme fluxo aprovado | Não comprovado localmente: login funcionou no overlay de teste, mas fixture persistida tinha serviços e o script parou antes do trecho de política; CI em banco limpo pendente |
+| Gate completo | `cd backend && export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH && ./mvnw -B -ntp spotless:check verify`; frontend gates | Gate aplicável verde | Backend passou: 77 testes unitários/arquiteturais + 203 integrações PostgreSQL; frontend 23 Vitest, format/lint/typecheck/build passou. CI remoto pendente |
+
+## Limites e retomada
+
+- Não declarar bloqueio ou desbloqueio público real até AGD-033.
+- Manter pendentes homologação HTTPS/staging, preflight hospedado, segredo gerenciado/rotação, scan completo, retenção e integrações reais.
+- Próximo passo: receber as três decisões registradas em `OPEN-QUESTIONS.md`, concluir contagem/correção, revisar, validar, publicar branch e PR; não fazer merge/deploy.

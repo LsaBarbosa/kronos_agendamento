@@ -8,6 +8,7 @@ import { PublicPage } from './PublicPage';
 import { PublicPublicationPanel } from './PublicPublicationPanel';
 import { AdminAgendaPanel } from './AdminAgendaPanel';
 import { ClientAccessPage } from './ClientAccessPage';
+import { ClientNoShowPolicyPanel } from './ClientNoShowPolicyPanel';
 
 type Session = { authenticated: boolean; tenantId: string; role: string };
 type Csrf = { headerName: string; token: string };
@@ -522,6 +523,21 @@ function AdminApp() {
                         );
                     }}
                 />
+                {session && (
+                    <ClientNoShowPolicyPanel
+                        enabled
+                        csrf={csrf}
+                        onSessionInvalid={(responseStatus) => {
+                            setSession(null);
+                            setCsrf(null);
+                            setStatus(
+                                responseStatus === 401
+                                    ? 'Sua sessão expirou. Entre novamente para continuar.'
+                                    : 'Sua associação administrativa foi revogada ou o acesso foi negado.',
+                            );
+                        }}
+                    />
+                )}
                 <AdminAgendaPanel
                     enabled={Boolean(session)}
                     csrf={csrf}

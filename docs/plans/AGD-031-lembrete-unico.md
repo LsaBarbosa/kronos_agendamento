@@ -1,5 +1,9 @@
 # AGD-031 — Lembrete único
 
+## Encerramento de código e decisões temporais (19/10/2026)
+
+PR #19 foi integrado por merge commit `de4be40aa99e1b9db64527f25cb02552f786dc46` (head `e52488856323bea84214aea811752f698e537ff6`). Decisões de política ausente, atraso, consumo após `due_at` e materialização do offset estão resolvidas conforme ADR-0021 e os contratos. Checks do head e pós-merge constam em `docs/development/VALIDATION.md`; a falha inicial do E2E de remarcação AGD-022 permanece com causa desconhecida apesar do rerun seletivo verde. AGD-031 segue parcial quanto às integrações e gates operacionais ainda ausentes; não houve envio real.
+
 ## Identificação e objetivo
 
 - Implementar intenção persistida de um único lembrete por reserva/versão, integrada ao pipeline AGD-030.

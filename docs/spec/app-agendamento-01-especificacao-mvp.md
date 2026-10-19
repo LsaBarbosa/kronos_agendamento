@@ -316,6 +316,8 @@ Regras:
 - Uma nova falta posterior pode voltar a bloquear conforme a política vigente.
 - Mudança do limite não deve reescrever história; pode recalcular restrições atuais por job versionado e auditado.
 
+**Limites ainda não definidos para AGD-032:** a especificação determina uma janela móvel de 12 meses, mas não fixa o instante que ancora os fatos, a inclusividade/calendário/timezone das fronteiras, nem o estado corrente e efeitos da correção administrativa. Até decisão explícita, não apresentar uma contagem como completa nem corrigir `NO_SHOW`. A configuração do limite por tenant pode ser persistida em 1–5; ausência não aplica default, e a configuração sozinha não materializa restrição. `NOT_TRACKED` permanece até AGD-033.
+
 ## 11. Notificações
 
 ### Mensagens do MVP

@@ -93,7 +93,7 @@ try {
         );
     }
     const tenantDisplayed = await evaluate(
-        "document.querySelector('p code')?.textContent === " + JSON.stringify(authenticatedSession.tenantId),
+        `Array.from(document.querySelectorAll('p')).some(paragraph => paragraph.textContent.includes('Tenant autorizado:') && paragraph.querySelector('code')?.textContent === ${JSON.stringify(authenticatedSession.tenantId)})`,
     );
     if (!tenantDisplayed) throw new Error('Tenant autorizado não apareceu na UI.');
     await waitForText('Catálogo de serviços', evaluate);
@@ -176,13 +176,21 @@ try {
     await setSelectByLabel('Lembrete único antes do atendimento (horas)', '6', evaluate);
     await clickButtonByText('Salvar políticas', evaluate);
     await waitForText('Políticas salvas.', evaluate);
+    await setSelectByLabel('Faltas na janela móvel de 12 meses (limite 1 a 5)', '3', evaluate);
+    await clickButtonByText('Salvar limite', evaluate);
+    await waitForText('Limite salvo. A aplicação efetiva de restrições depende de AGD-033.', evaluate);
     await clickButtonByText('Recarregar configuração persistida', evaluate);
     await waitForText('Configuração recarregada.', evaluate);
+    await clickButtonByText('Atualizar política', evaluate);
+    await waitForText('Limite configurado: 3 falta(s), versão 1.', evaluate);
     const persistedSchedule = await evaluate(
         "fetch('/api/v1/admin/schedule/weekly-periods', {credentials:'same-origin'}).then(response => response.json())",
     );
     const persistedPolicy = await evaluate(
         "fetch('/api/v1/admin/availability-policy', {credentials:'same-origin'}).then(response => response.json())",
+    );
+    const persistedNoShowPolicy = await evaluate(
+        "fetch('/api/v1/admin/no-show-policy', {credentials:'same-origin'}).then(response => response.json())",
     );
     if (
         persistedSchedule.periods.length !== 2 ||
@@ -193,7 +201,11 @@ try {
         persistedPolicy.minimumNoticeHours !== 12 ||
         persistedPolicy.bookingHorizonDays !== 30 ||
         persistedPolicy.cancellationCutoffHours !== 4 ||
-        persistedPolicy.reminderOffsetHours !== 6
+        persistedPolicy.reminderOffsetHours !== 6 ||
+        !persistedNoShowPolicy.configured ||
+        persistedNoShowPolicy.threshold !== 3 ||
+        persistedNoShowPolicy.version !== 1 ||
+        persistedNoShowPolicy.restrictionStatus !== 'NOT_TRACKED'
     ) {
         throw new Error('Grade/políticas não persistiram ou divergiram após recarregar.');
     }
