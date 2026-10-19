@@ -2,6 +2,12 @@
 
 ## AGD-030 — Pipeline de notificações
 
+**Integração:** PR [#18](https://github.com/LsaBarbosa/kronos_agendamento/pull/18) foi integrado por merge commit `ce417455c058a13a3dc3113d89729f3d9d0645af`; o head validado foi `282f273f90bbebd8a737297dfa7a4d8722d70a46`. App CI [39305915505](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39305915505) e CodeQL [39305915408](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39305915408) pós-merge terminaram com sucesso em todos os jobs/check-runs. Mantidas as pendências de transport/verifier, templates, segredos, homologação e reconciliação real de resultados sem referência.
+
+## AGD-031 — Lembrete único (em andamento)
+
+V24 adiciona `due_at`, libera o tipo lógico `APPOINTMENT_REMINDER` e permite mais de uma intenção derivada do mesmo evento, mantendo dedupe por `(tenant, appointment, version, type, recipient)`. O consumidor distinto processa confirmação, remarcação e todos os terminais; receipt e criação/invalidação compartilham a transação existente. Worker revalida status/versão, início e claim antes do transporte; sem transport, não reivindica nem simula envio. Métricas são agregadas sem PII. Evidência de código/testes e SHA serão associados após o commit local. Decisões de semântica temporal/ausência de policy seguem pendentes em OPEN-QUESTIONS; AGD-031 fica parcial sem aprovação e integração real.
+
 **Follow-up P2 no PR #18 (base `eb965187c69e3c1e5ec14fc1c24e84f82ece8aa2`):** código validado em `561bde7`: JDK 21 `spotless:check verify` passou, 73 unitários/arquiteturais + 183 integrações PostgreSQL 16.13/Testcontainers; `NotificationPipelineIT` 15/15 e `TenantPersistenceIT` 22/22. V23 validada em instalação limpa e upgrade V22→V23, Flyway validate/rerun e grants mínimos. CI remoto ainda aguarda a publicação dos registros finais.
 
 | Critério | Implementação | Evidência/limite |
@@ -16,7 +22,7 @@
 | Consulta operacional mínima | `AdminNotificationController`, `GetNotificationOperations`, filtro pelo tenant OIDC/associação atual e respostas `no-store` minimizadas; `docs/openapi/admin-notifications.yaml` | `NotificationPipelineIT` verifica isolamento entre tenants e ausência de telefone/nome/referência de provedor no DTO. Sem UI nesta história. |
 | Migrations e runtime | `V22__persist_notification_pipeline.sql`, `V23__persist_notification_evidence_inbox.sql`; grants runtime mínimos | Validação PostgreSQL/Testcontainers cobre instalação limpa, upgrades até V23, V22→V23, validate/rerun e UPDATE somente da coluna de correlação. V1–V22 preservadas; retenção/TTL não definido. |
 | CI remoto | App CI e CodeQL push/PR no SHA `07e657a666a6acf92b6d931ad967e108108e7c6f` | Todos os jobs concluíram success: App CI [push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39294080889)/[PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39294115689), CodeQL [push](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39294081135)/[PR](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39294115634). |
-| Entrega por fornecedor | Nenhum transport/verifier de produção configurado; configuração ausente permanece fechada | Pendente de escolha e homologação de fornecedor, template aprovado, segredos, protocolo autenticado/anti-replay e credenciais. Nenhuma mensagem real declarada. AGD-031 (lembretes) não implementada. |
+| Entrega por fornecedor | Nenhum transport/verifier de produção configurado; configuração ausente permanece fechada | Pendente de escolha e homologação de fornecedor, template aprovado, segredos, protocolo autenticado/anti-replay e credenciais. Nenhuma mensagem real declarada. AGD-031 está em implementação nesta branch, sem envio real. |
 
 ## Follow-up P2 AGD-025 — PR #17
 

@@ -230,6 +230,8 @@ O estado `SENT` significa que o provedor aceitou a mensagem, não necessariament
 
 Antes de enviar lembrete, o worker compara `appointment_version` e estado corrente. Divergência torna a intenção obsoleta.
 
+AGD-031 persiste uma intenção lógica `APPOINTMENT_REMINDER` por tenant, reserva, versão e destinatário. `due_at` preserva o instante UTC original calculado a partir do início e do offset configurado; `next_attempt_at` pode avançar por backoff sem alterar `due_at`. Remarcação invalida versões anteriores; cancelamento, conclusão e falta invalidam intents pendentes. A política para lembrete atrasado e retroatividade de alterações do offset permanece em OPEN-QUESTIONS, não decidida pela implementação.
+
 ## 9. Máquina de estados do código de acesso
 
 ```mermaid

@@ -333,8 +333,10 @@ Regras:
 
 - Mensagem é efeito assíncrono; falha de envio não desfaz reserva confirmada.
 - Cada intenção possui chave de deduplicação.
-- Remarcação ou cancelamento invalida lembretes pendentes da versão anterior.
-- O worker verifica status e versão da reserva imediatamente antes de enviar.
+- Remarcação ou cancelamento invalida lembretes pendentes da versão anterior. Conclusão e falta também tornam inelegível qualquer lembrete ainda pendente.
+- O worker verifica status, versão, início temporal e claim vigente imediatamente antes de iniciar o transporte. Alteração posterior a esse ponto não pode retirar uma mensagem já em voo.
+- O lembrete único é agendado pelo `reminderOffsetHours` configurado (2, 6, 12 ou 24), como instante UTC derivado do início da reserva. Ausência de política não autoriza default nem intenção implícita.
+- A especificação ainda não fixa o tratamento de job atrasado, reserva criada após o instante previsto ou mudança posterior do offset; consultar OPEN-QUESTIONS e AGD-031 antes de considerar essa semântica aprovada.
 - Tentativas, resposta do provedor e estado final são registradas sem armazenar credenciais ou conteúdo sensível desnecessário.
 - Retries usam backoff e limite; após falha final, o sistema sinaliza operação.
 

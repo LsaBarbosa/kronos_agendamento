@@ -7,6 +7,7 @@ import com.appagendamento.notifications.application.NotificationRepository.Notif
 import com.appagendamento.notifications.application.NotificationRepository.NotificationDetail;
 import com.appagendamento.notifications.application.NotificationRepository.NotificationOverview;
 import com.appagendamento.notifications.application.NotificationRepository.NotificationSummary;
+import com.appagendamento.notifications.application.NotificationRepository.ReminderBacklog;
 import com.appagendamento.notifications.application.NotificationRepository.VerifiedDeliveryEvidence;
 import com.appagendamento.notifications.domain.NotificationType;
 import java.time.Duration;
@@ -55,6 +56,101 @@ public class PostgresNotificationRepository implements NotificationRepository {
   }
 
   @Override
+  public void createReminderIntent(
+      UUID tenantId,
+      UUID appointmentId,
+      long appointmentVersion,
+      UUID recipientClientId,
+      UUID sourceEventId,
+      java.time.Instant dueAt) {
+    UUID notificationId = UUID.randomUUID();
+    jdbc.update(
+        """
+        INSERT INTO agendamento.notification_intent
+          (notification_id, tenant_id, appointment_id, appointment_version, message_type,
+           recipient_client_id, source_event_id, due_at, next_attempt_at,
+           external_idempotency_key)
+        VALUES (?, ?, ?, ?, 'APPOINTMENT_REMINDER', ?, ?, ?, ?, ?)
+        ON CONFLICT DO NOTHING
+        """,
+        notificationId,
+        tenantId,
+        appointmentId,
+        appointmentVersion,
+        recipientClientId,
+        sourceEventId,
+        java.sql.Timestamp.from(dueAt),
+        java.sql.Timestamp.from(dueAt),
+        notificationId.toString());
+  }
+
+  @Override
+  @Transactional
+  public int obsoleteRemindersBeforeVersion(
+      UUID tenantId, UUID appointmentId, long currentVersion) {
+    return obsoleteReminders(tenantId, appointmentId, currentVersion, false);
+  }
+
+  @Override
+  @Transactional
+  public int obsoleteAllReminders(UUID tenantId, UUID appointmentId) {
+    return obsoleteReminders(tenantId, appointmentId, 0, true);
+  }
+
+  private int obsoleteReminders(
+      UUID tenantId, UUID appointmentId, long currentVersion, boolean allVersions) {
+    jdbc.update(
+        """
+        UPDATE agendamento.notification_attempt a
+        SET state = 'OBSOLETE', error_code = NULL, completed_at = clock_timestamp()
+        FROM agendamento.notification_intent n
+        WHERE a.notification_id = n.notification_id AND a.claim_token = n.claim_token
+          AND a.state = 'STARTED' AND n.tenant_id = ? AND n.appointment_id = ?
+          AND n.message_type = 'APPOINTMENT_REMINDER'
+          AND n.state = 'CLAIMED' AND (? OR n.appointment_version < ?)
+        """,
+        tenantId,
+        appointmentId,
+        allVersions,
+        currentVersion);
+    return jdbc.update(
+        """
+        UPDATE agendamento.notification_intent
+        SET state = 'OBSOLETE', claim_token = NULL, lease_until = NULL
+        WHERE tenant_id = ? AND appointment_id = ? AND message_type = 'APPOINTMENT_REMINDER'
+          AND state IN ('PENDING', 'RETRY', 'CLAIMED') AND (? OR appointment_version < ?)
+        """,
+        tenantId,
+        appointmentId,
+        allVersions,
+        currentVersion);
+  }
+
+  @Override
+  public ReminderBacklog reminderBacklog() {
+    return jdbc.queryForObject(
+        """
+        SELECT count(*) FILTER (WHERE state IN ('PENDING', 'RETRY', 'CLAIMED')) AS pending_count,
+               count(*) FILTER (WHERE state IN ('PENDING', 'RETRY') AND due_at <= clock_timestamp()) AS overdue_count,
+               coalesce(greatest(0, extract(epoch FROM clock_timestamp() - min(due_at)
+                 FILTER (WHERE state IN ('PENDING', 'RETRY') AND due_at <= clock_timestamp())))::bigint, 0) AS oldest_overdue_seconds,
+               count(*) FILTER (WHERE state = 'OBSOLETE') AS obsolete_count,
+               count(*) FILTER (WHERE state = 'FAILED_FINAL') AS failed_count,
+               count(*) FILTER (WHERE state = 'OUTCOME_UNKNOWN') AS outcome_unknown_count
+        FROM agendamento.notification_intent
+        WHERE message_type = 'APPOINTMENT_REMINDER'
+        """,
+        (row, index) ->
+            new ReminderBacklog(
+                row.getLong("pending_count"),
+                row.getLong("overdue_count"),
+                row.getLong("oldest_overdue_seconds"),
+                row.getLong("obsolete_count"),
+                row.getLong("failed_count"),
+                row.getLong("outcome_unknown_count")));
+  }
+
+  @Override
   @Transactional
   public List<NotificationClaim> claimDue(int batchSize, Duration leaseDuration) {
     if (batchSize < 1 || batchSize > 100 || leaseDuration.isNegative() || leaseDuration.isZero()) {
@@ -81,6 +177,7 @@ public class PostgresNotificationRepository implements NotificationRepository {
             """
             SELECT notification_id FROM agendamento.notification_intent
             WHERE state IN ('PENDING', 'RETRY') AND next_attempt_at <= clock_timestamp()
+              AND (message_type <> 'APPOINTMENT_REMINDER' OR due_at <= clock_timestamp())
             ORDER BY next_attempt_at, created_at, notification_id
             LIMIT ? FOR UPDATE SKIP LOCKED
             """,
@@ -97,6 +194,7 @@ public class PostgresNotificationRepository implements NotificationRepository {
                   lease_until = clock_timestamp() + (? * interval '1 millisecond')
               WHERE notification_id = ? AND state IN ('PENDING', 'RETRY')
                 AND next_attempt_at <= clock_timestamp()
+                AND (message_type <> 'APPOINTMENT_REMINDER' OR due_at <= clock_timestamp())
               RETURNING notification_id, tenant_id, appointment_id, appointment_version,
                         recipient_client_id, message_type, external_idempotency_key, attempt_count
               """,
@@ -134,19 +232,28 @@ public class PostgresNotificationRepository implements NotificationRepository {
 
   @Override
   @Transactional(readOnly = true)
-  public boolean authorizeSend(NotificationClaim claim) {
+  public boolean authorizeSend(NotificationClaim claim, java.time.Instant checkInstant) {
     return Boolean.TRUE.equals(
         jdbc.queryForObject(
             """
             SELECT EXISTS (
-              SELECT 1 FROM agendamento.notification_intent
-              WHERE notification_id = ? AND state = 'CLAIMED' AND claim_token = ?
-                AND lease_until > clock_timestamp()
+              SELECT 1
+              FROM agendamento.notification_intent n
+              JOIN agendamento.appointment a
+                ON a.tenant_id = n.tenant_id AND a.appointment_id = n.appointment_id
+              WHERE n.notification_id = ? AND n.state = 'CLAIMED' AND n.claim_token = ?
+                AND n.lease_until > clock_timestamp()
+                AND a.version = n.appointment_version
+                AND ((n.message_type = 'APPOINTMENT_CANCELLED'
+                      AND a.status IN ('CANCELLED_BY_CLIENT', 'CANCELLED_BY_PROVIDER'))
+                     OR (n.message_type <> 'APPOINTMENT_CANCELLED' AND a.status = 'CONFIRMED'))
+                AND (n.message_type <> 'APPOINTMENT_REMINDER' OR a.starts_at > ?)
             )
             """,
             Boolean.class,
             claim.notificationId(),
-            claim.claimToken()));
+            claim.claimToken(),
+            java.sql.Timestamp.from(checkInstant)));
   }
 
   @Override
@@ -317,7 +424,7 @@ public class PostgresNotificationRepository implements NotificationRepository {
     return jdbc.query(
         """
         SELECT notification_id, appointment_id, appointment_version, message_type, state,
-               attempt_count, next_attempt_at, created_at, last_error_code
+               attempt_count, next_attempt_at, due_at, created_at, last_error_code
         FROM agendamento.notification_intent
         WHERE tenant_id = ?
         ORDER BY created_at DESC, notification_id DESC
@@ -334,7 +441,7 @@ public class PostgresNotificationRepository implements NotificationRepository {
         jdbc.query(
             """
             SELECT notification_id, appointment_id, appointment_version, message_type, state,
-                   attempt_count, next_attempt_at, created_at, last_error_code
+                   attempt_count, next_attempt_at, due_at, created_at, last_error_code
             FROM agendamento.notification_intent
             WHERE tenant_id = ? AND notification_id = ?
             """,
@@ -509,6 +616,7 @@ public class PostgresNotificationRepository implements NotificationRepository {
         row.getString("state"),
         row.getInt("attempt_count"),
         row.getTimestamp("next_attempt_at").toInstant(),
+        row.getTimestamp("due_at").toInstant(),
         row.getTimestamp("created_at").toInstant(),
         row.getString("last_error_code"));
   }

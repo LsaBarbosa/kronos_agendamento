@@ -5,7 +5,8 @@ import java.util.Optional;
 public enum NotificationType {
   APPOINTMENT_CONFIRMED("AppointmentConfirmed", "CONFIRMED"),
   APPOINTMENT_RESCHEDULED("AppointmentRescheduled", "CONFIRMED"),
-  APPOINTMENT_CANCELLED("AppointmentCancelled", null);
+  APPOINTMENT_CANCELLED("AppointmentCancelled", null),
+  APPOINTMENT_REMINDER("AppointmentReminder", "CONFIRMED");
 
   private final String eventType;
   private final String requiredStatus;

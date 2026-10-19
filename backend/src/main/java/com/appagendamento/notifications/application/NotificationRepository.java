@@ -17,9 +17,23 @@ public interface NotificationRepository {
       UUID sourceEventId,
       NotificationType type);
 
+  void createReminderIntent(
+      UUID tenantId,
+      UUID appointmentId,
+      long appointmentVersion,
+      UUID recipientClientId,
+      UUID sourceEventId,
+      Instant dueAt);
+
+  int obsoleteRemindersBeforeVersion(UUID tenantId, UUID appointmentId, long currentVersion);
+
+  int obsoleteAllReminders(UUID tenantId, UUID appointmentId);
+
+  ReminderBacklog reminderBacklog();
+
   List<NotificationClaim> claimDue(int batchSize, Duration leaseDuration);
 
-  boolean authorizeSend(NotificationClaim claim);
+  boolean authorizeSend(NotificationClaim claim, Instant checkInstant);
 
   boolean markAccepted(NotificationClaim claim, String providerCode, String providerReference);
 
@@ -59,6 +73,14 @@ public interface NotificationRepository {
 
   record NotificationSummary(String state, long count, Long oldestPendingSeconds) {}
 
+  record ReminderBacklog(
+      long pendingCount,
+      long overdueCount,
+      long oldestOverdueSeconds,
+      long obsoleteCount,
+      long failedCount,
+      long outcomeUnknownCount) {}
+
   record NotificationOverview(
       UUID notificationId,
       UUID appointmentId,
@@ -67,6 +89,7 @@ public interface NotificationRepository {
       String state,
       int attemptCount,
       Instant nextAttemptAt,
+      Instant dueAt,
       Instant createdAt,
       String lastErrorCode) {}
 

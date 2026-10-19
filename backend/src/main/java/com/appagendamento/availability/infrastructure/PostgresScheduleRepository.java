@@ -1,6 +1,7 @@
 package com.appagendamento.availability.infrastructure;
 
 import com.appagendamento.appointments.api.ClientCancellationCutoffQuery;
+import com.appagendamento.availability.api.ReminderOffsetQuery;
 import com.appagendamento.availability.application.ScheduleRepository;
 import com.appagendamento.availability.domain.AvailabilityPolicy;
 import com.appagendamento.availability.domain.BlockedPeriod;
@@ -28,7 +29,7 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public class PostgresScheduleRepository
-    implements ScheduleRepository, ClientCancellationCutoffQuery {
+    implements ScheduleRepository, ClientCancellationCutoffQuery, ReminderOffsetQuery {
 
   private final JdbcTemplate jdbc;
 
@@ -48,6 +49,16 @@ public class PostgresScheduleRepository
     } catch (org.springframework.dao.DataAccessException exception) {
       throw exception;
     }
+  }
+
+  @Override
+  public OptionalInt findReminderOffsetHours(UUID tenantId) {
+    List<Integer> values =
+        jdbc.query(
+            "SELECT reminder_offset_hours FROM agendamento.availability_policy WHERE tenant_id = ?",
+            (row, index) -> row.getInt("reminder_offset_hours"),
+            tenantId);
+    return values.isEmpty() ? OptionalInt.empty() : OptionalInt.of(values.getFirst());
   }
 
   @Override

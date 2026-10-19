@@ -45,7 +45,7 @@ paths:
           schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
       responses:
         '200':
-          description: Lista minimizada, limitada a 100 registros
+          description: Lista minimizada, limitada a 100 registros; lembretes expõem seu instante original em dueAt
           headers:
             Cache-Control:
               schema: { type: string, const: no-store }
@@ -110,15 +110,16 @@ components:
         oldestPendingSeconds: { type: integer, minimum: 0, nullable: true }
     Notification:
       type: object
-      required: [notificationId, appointmentId, appointmentVersion, type, state, attemptCount, createdAt]
+      required: [notificationId, appointmentId, appointmentVersion, type, state, attemptCount, nextAttemptAt, dueAt, createdAt]
       properties:
         notificationId: { type: string, format: uuid }
         appointmentId: { type: string, format: uuid }
         appointmentVersion: { type: integer, minimum: 1 }
-        type: { type: string, enum: [APPOINTMENT_CONFIRMED, APPOINTMENT_RESCHEDULED, APPOINTMENT_CANCELLED] }
+        type: { type: string, enum: [APPOINTMENT_CONFIRMED, APPOINTMENT_RESCHEDULED, APPOINTMENT_CANCELLED, APPOINTMENT_REMINDER] }
         state: { type: string, enum: [PENDING, CLAIMED, RETRY, ACCEPTED, DELIVERED, DELIVERY_FAILED, FAILED_FINAL, OUTCOME_UNKNOWN, OBSOLETE] }
         attemptCount: { type: integer, minimum: 0 }
-        nextAttemptAt: { type: string, format: date-time, nullable: true }
+        nextAttemptAt: { type: string, format: date-time }
+        dueAt: { type: string, format: date-time, description: Instante UTC original da intenção; para notificações imediatas representa sua criação lógica. }
         createdAt: { type: string, format: date-time }
         lastErrorCode: { type: string, nullable: true }
     Attempt:
