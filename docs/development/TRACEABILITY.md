@@ -2,7 +2,7 @@
 
 ## AGD-030 — Pipeline de notificações
 
-**Follow-up P2 no PR #18 (base `eb965187c69e3c1e5ec14fc1c24e84f82ece8aa2`):** verificação local no estado de código preparado: JDK 21 `spotless:check verify` passou, 73 unitários/arquiteturais + 182 integrações PostgreSQL 16.13/Testcontainers; `NotificationPipelineIT` 14/14 e `TenantPersistenceIT` 22/22. V23 validada em instalação limpa e upgrade V22→V23, Flyway validate/rerun e grants mínimos. SHA final e CI remoto serão anexados após publicação.
+**Follow-up P2 no PR #18 (base `eb965187c69e3c1e5ec14fc1c24e84f82ece8aa2`):** código validado em `23e502b`: JDK 21 `spotless:check verify` passou, 73 unitários/arquiteturais + 182 integrações PostgreSQL 16.13/Testcontainers; `NotificationPipelineIT` 14/14 e `TenantPersistenceIT` 22/22. V23 validada em instalação limpa e upgrade V22→V23, Flyway validate/rerun e grants mínimos. O CI deste follow-up aguarda publicação; o SHA documental final será verificado separadamente.
 
 | Critério | Implementação | Evidência/limite |
 |---|---|---|

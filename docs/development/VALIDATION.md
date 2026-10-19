@@ -2,7 +2,7 @@
 
 ## Follow-up P2 AGD-030 — PR #18
 
-- Base revisada: `eb965187c69e3c1e5ec14fc1c24e84f82ece8aa2`; mesma branch e PR #18. O patch acrescenta V23 sem alterar V1–V22.
+- Base revisada: `eb965187c69e3c1e5ec14fc1c24e84f82ece8aa2`; mesma branch e PR #18. O patch acrescenta V23 sem alterar V1–V22. Código testado: `23e502b`; este registro é somente documental após esse commit.
 - `backend/`: `env JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` — `BUILD SUCCESS` em 19/10/2026, 73 testes unitários/arquiteturais e 182 integrações com PostgreSQL 16.13/Testcontainers; `NotificationPipelineIT` 14/14 e `TenantPersistenceIT` 22/22. V23 instalação limpa, upgrade V22→V23, `validate`/rerun e grants mínimos aprovados. Java 25 foi rejeitado pelo Enforcer da baseline (Java 21/22); execução final usou JDK 21.
 - Regressões: claim de uma intenção por vez com primeira chamada presa por latch e lease expirada; worker concorrente processa a segunda apenas com claim novo. Evidência autenticada durante `send` é admitida como pendente, duplicata é distinguida, e `markAccepted` associa/aplica sem webhook adicional. Testes cobrem ordenação monotônica e rollback de admissão/reconciliação.
 - Ambiente inicial: uma tentativa isolada no sandbox não acessou o socket Docker; com autorização para acesso ao Docker, os testes reais passaram. A tentativa com Java 25 foi incompatibilidade de ambiente, não falha de código.
