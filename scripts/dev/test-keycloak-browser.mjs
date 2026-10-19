@@ -1952,17 +1952,47 @@ try {
     );
     if (sessionRowsAfterRejectedRecovery !== '1') throw new Error('Challenge rejeitado criou sessão adicional.');
 
-    const clientLogoutStatus = await evaluate(`(async () => {
-      const csrf = await fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'}).then(response => response.json());
-      return fetch('/api/v1/client/session/logout', {
-        method:'POST', credentials:'same-origin', cache:'no-store',
-        headers:{[csrf.headerName]:csrf.token},
-      }).then(response => response.status);
+    await command('Page.reload');
+    await waitForText('Suas reservas', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__clientListJsonPending = false;
+      window.__clientListDelayIntercepted = false;
+      window.__releaseClientListJson = null;
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const requestUrl = args[0] instanceof Request ? args[0].url : String(args[0]);
+        const requestMethod = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
+        if (requestUrl.includes('/api/v1/client/appointments?') && requestMethod.toUpperCase() === 'GET' && !window.__clientListDelayIntercepted) {
+          window.__clientListDelayIntercepted = true;
+          return new Proxy(response, {get(target, property) {
+            if (property === 'json') return () => new Promise((resolve, reject) => {
+              window.__clientListJsonPending = true;
+              window.__releaseClientListJson = () => target.json().then(resolve, reject);
+            });
+            return Reflect.get(target, property, target);
+          }});
+        }
+        return response;
+      };
     })()`);
-    if (clientLogoutStatus !== 204) throw new Error(`Logout de cliente retornou HTTP ${clientLogoutStatus}.`);
+    await setSelectById('client-appointment-filter', 'all', evaluate);
+    await waitUntil(() => evaluate('window.__clientListJsonPending === true'));
+    await clickButtonByText('Sair', evaluate);
+    await waitForText('Sessão encerrada.', evaluate);
+    await evaluate('window.__releaseClientListJson?.()');
+    await waitUntil(() => evaluate("!document.body.innerText.includes('Suas reservas')"));
+    const privateStateAfterDelayedResponse = await evaluate(`({
+      clientAreaVisible: document.body.innerText.includes('Suas reservas'),
+      appointmentVisible: Boolean(document.querySelector('li[data-appointment-id="${ownedBookingId}"]')),
+      sessionEnded: document.body.innerText.includes('Sessão encerrada.'),
+    })`);
+    if (privateStateAfterDelayedResponse.clientAreaVisible || privateStateAfterDelayedResponse.appointmentVisible || !privateStateAfterDelayedResponse.sessionEnded) {
+      throw new Error(`Resposta atrasada restaurou dados privados após logout: ${JSON.stringify(privateStateAfterDelayedResponse)}`);
+    }
     const loggedOutClient = await evaluate("fetch('/api/v1/client/session', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())");
     if (loggedOutClient.authenticated) throw new Error('Logout não revogou a sessão do cliente.');
-    console.log('Browser: solicitação neutra, expiração, bloqueio após cinco erros, sessão isolada e logout de cliente verificados com emissor privado E2E.');
+    console.log('Browser: área consultou/cancelou a reserva própria, recuperou resposta perdida, limpou sessão no logout mesmo com lista atrasada; emissor privado também comprovou limites, expiração e isolamento.');
 
     await command('Network.clearBrowserCookies');
     await navigate('http://localhost:5173/admin', command, evaluate);

@@ -110,6 +110,12 @@ export function ClientAppointmentsArea({
                 }
                 const page = (await response.json()) as AppointmentPage;
                 if (
+                    !active.current ||
+                    !sessionValid.current ||
+                    sequence !== requestSequence.current
+                )
+                    return;
+                if (
                     !Array.isArray(page.items) ||
                     typeof page.hasMore !== 'boolean' ||
                     !(
@@ -311,6 +317,7 @@ export function ClientAppointmentsArea({
                 status?: unknown;
                 version?: unknown;
             } | null;
+            if (!active.current || !sessionValid.current) return;
             if (
                 !receipt ||
                 receipt.appointmentId !== intent.appointmentId ||
@@ -351,7 +358,7 @@ export function ClientAppointmentsArea({
                 'Não foi possível confirmar o resultado. Repita a mesma tentativa; ela usará a mesma chave.',
             );
         } finally {
-            setCancelSaving(false);
+            if (active.current && sessionValid.current) setCancelSaving(false);
             cancelGuard.current = false;
         }
     }
