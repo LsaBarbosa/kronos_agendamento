@@ -1584,6 +1584,25 @@ try {
     );
     await navigate(`http://localhost:5173/public/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
     await waitForText(catalogName + ' Editado', evaluate);
+    await waitUntil(() =>
+        evaluate(
+            "Boolean([...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'Fazer outra reserva') || (document.getElementById('public-service') && !document.getElementById('public-service').disabled))",
+        ),
+    );
+    const resolvedPublicIntent = await evaluate(
+        "Boolean([...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'Fazer outra reserva'))",
+    );
+    if (resolvedPublicIntent) {
+        await clickButtonByText('Fazer outra reserva', evaluate);
+    }
+    await waitUntil(() =>
+        evaluate(
+            "Boolean(document.getElementById('public-service') && !document.getElementById('public-service').disabled)",
+        ),
+    );
+    if (resolvedPublicIntent) {
+        console.log('Browser: intenção pública anterior resolvida pela ação explícita antes de iniciar a fixture cliente.');
+    }
     await setSelectById('public-service', publicService.serviceId, evaluate);
     const clientBookingDate = await evaluate(`(async () => {
       const timeZone = ${JSON.stringify(publication.timeZone)};
