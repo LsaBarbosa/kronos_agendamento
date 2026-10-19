@@ -133,6 +133,23 @@ public class PostgresNotificationRepository implements NotificationRepository {
   }
 
   @Override
+  @Transactional(readOnly = true)
+  public boolean authorizeSend(NotificationClaim claim) {
+    return Boolean.TRUE.equals(
+        jdbc.queryForObject(
+            """
+            SELECT EXISTS (
+              SELECT 1 FROM agendamento.notification_intent
+              WHERE notification_id = ? AND state = 'CLAIMED' AND claim_token = ?
+                AND lease_until > clock_timestamp()
+            )
+            """,
+            Boolean.class,
+            claim.notificationId(),
+            claim.claimToken()));
+  }
+
+  @Override
   @Transactional
   public boolean markAccepted(
       NotificationClaim claim, String providerCode, String providerReference) {

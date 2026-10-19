@@ -112,6 +112,10 @@ public class NotificationWorker {
       return;
     }
     phone = recipient.get();
+    if (!notifications.authorizeSend(claim)) {
+      meters.counter("agd.notifications.attempts", "outcome", "claim_not_current").increment();
+      return;
+    }
     try {
       NotificationTransport.TransportResult result =
           transport.send(

@@ -238,6 +238,49 @@ class NotificationPipelineIT {
   }
 
   @Test
+  void expiredClaimDuringPreflightIsNotSent() {
+    Fixture fixture = fixture("claim-expired-preflight");
+    record(fixture, 1, "AppointmentConfirmed");
+    eventConsumer.processBatch();
+    AppointmentNotificationQuery invalidateAfterSnapshot =
+        (tenantId, appointmentId) -> {
+          Optional<AppointmentNotificationQuery.NotificationAppointment> current =
+              appointments.find(tenantId, appointmentId);
+          runtimeJdbc.update(
+              "UPDATE agendamento.notification_intent "
+                  + "SET lease_until = clock_timestamp() - interval '1 second' "
+                  + "WHERE appointment_id = ?",
+              appointmentId);
+          return current;
+        };
+    NotificationWorker guardedWorker =
+        new NotificationWorker(
+            notifications,
+            invalidateAfterSnapshot,
+            contacts,
+            context.getBeanProvider(NotificationTransport.class),
+            new SimpleMeterRegistry(),
+            20,
+            60,
+            8);
+    AtomicInteger sends = new AtomicInteger();
+
+    assertThat(
+            guardedWorker.processBatch(
+                message -> {
+                  sends.incrementAndGet();
+                  return NotificationTransport.TransportResult.accepted(
+                      "test-adapter", "never-sent");
+                }))
+        .isEqualTo(1);
+
+    UUID notificationId = notificationIdForAppointment(fixture.appointmentId());
+    assertThat(sends).hasValue(0);
+    assertThat(attemptState(notificationId)).isEqualTo("OUTCOME_UNKNOWN");
+    assertThat(intentStateByNotificationId(notificationId)).isEqualTo("OUTCOME_UNKNOWN");
+  }
+
+  @Test
   void eventReceiptAndIntentRollbackTogetherWhenIntentInsertFails() {
     Fixture fixture = fixture("rollback");
     record(fixture, 1, "AppointmentConfirmed");

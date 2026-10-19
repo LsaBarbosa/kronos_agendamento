@@ -19,6 +19,8 @@ public interface NotificationRepository {
 
   List<NotificationClaim> claimDue(int batchSize, Duration leaseDuration);
 
+  boolean authorizeSend(NotificationClaim claim);
+
   boolean markAccepted(NotificationClaim claim, String providerCode, String providerReference);
 
   boolean markRetryable(
