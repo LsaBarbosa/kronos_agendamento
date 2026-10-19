@@ -83,6 +83,13 @@ public class SecurityConfiguration {
                     .permitAll()
                     .requestMatchers(HttpMethod.POST, "/api/v1/client/session/logout")
                     .permitAll()
+                    .requestMatchers(
+                        HttpMethod.GET,
+                        "/api/v1/client/appointments",
+                        "/api/v1/client/appointments/*")
+                    .permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/v1/client/appointments/*/cancel")
+                    .permitAll()
                     .requestMatchers("/internal/e2e/access-challenges/**")
                     .access(
                         (authentication, context) -> new AuthorizationDecision(e2eEmitterEnabled))

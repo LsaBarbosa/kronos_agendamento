@@ -1552,6 +1552,15 @@ try {
     await waitForText('Sessão administrativa ativa.', evaluate);
     console.log('Browser: expiração local de 30 min, renovação por atividade e novo login via SSO validados.');
 
+    await waitUntil(() => evaluate("[...document.querySelectorAll('button')].some(button => button.innerText.trim() === 'Publicar página')"));
+    await clickButtonByText('Publicar página', evaluate);
+    await waitForText('Estado: Publicado', evaluate);
+    const republishedPublicPage = await evaluate("fetch('/api/v1/admin/publication', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())");
+    if (republishedPublicPage.published !== true) {
+        throw new Error('Fixture E2E não republicou o tenant pelo fluxo administrativo antes da reserva pública de AGD-025.');
+    }
+    console.log('Browser: fixture legal/comercial controlada foi publicada explicitamente pela UI administrativa para o cenário AGD-025.');
+
     await waitUntil(() =>
         evaluate("Boolean([...document.querySelectorAll('button')].find(button => !button.disabled))"),
     );
@@ -1568,15 +1577,66 @@ try {
     console.log('Browser: logout local/CSRF validado.');
     await command('Network.clearBrowserCookies');
 
-    const clientPhone = '+5511999991122';
+    const clientPhone = '+5511999991236';
     const demoTenantSlug = queryPostgres(
         `SELECT slug FROM agendamento.tenant WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
         appEnvironment,
     );
-    queryPostgres(
-        `INSERT INTO agendamento.client(client_id, tenant_id, display_name, normalized_phone) VALUES ('${randomUUID()}', '${credentials.DEMO_TENANT_ID}', 'Cliente E2E acesso', '${clientPhone}')`,
+    await navigate(`http://localhost:5173/public/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
+    await waitForText(catalogName + ' Editado', evaluate);
+    await waitUntil(() =>
+        evaluate(
+            "Boolean([...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'Fazer outra reserva') || (document.getElementById('public-service') && !document.getElementById('public-service').disabled))",
+        ),
+    );
+    const resolvedPublicIntent = await evaluate(
+        "Boolean([...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'Fazer outra reserva'))",
+    );
+    if (resolvedPublicIntent) {
+        await clickButtonByText('Fazer outra reserva', evaluate);
+    }
+    await waitUntil(() =>
+        evaluate(
+            "Boolean(document.getElementById('public-service') && !document.getElementById('public-service').disabled)",
+        ),
+    );
+    if (resolvedPublicIntent) {
+        console.log('Browser: intenção pública anterior resolvida pela ação explícita antes de iniciar a fixture cliente.');
+    }
+    await setSelectById('public-service', publicService.serviceId, evaluate);
+    const clientBookingDate = await evaluate(`(async () => {
+      const timeZone = ${JSON.stringify(publication.timeZone)};
+      const fields = Object.fromEntries(new Intl.DateTimeFormat('en-US', {timeZone, year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(new Date()).map(part => [part.type, part.value]));
+      const today = new Date(Date.UTC(Number(fields.year), Number(fields.month)-1, Number(fields.day)));
+      for (let offset = 1; offset < 30; offset += 1) {
+        const candidate = new Date(today);
+        candidate.setUTCDate(candidate.getUTCDate() + offset);
+        const date = candidate.toISOString().slice(0, 10);
+        if (date === ${JSON.stringify(publicDate)}) continue;
+        const query = new URLSearchParams({serviceId:${JSON.stringify(publicService.serviceId)}, from:date, to:date});
+        const response = await fetch('/api/v1/public/' + encodeURIComponent(${JSON.stringify(publication.slug)}) + '/availability?' + query);
+        if (!response.ok) throw new Error('Consulta de disponibilidade da fixture cliente falhou: ' + response.status);
+        const availability = await response.json();
+        if (availability.days?.[0]?.slots?.length) return date;
+      }
+      return null;
+    })()`);
+    if (!clientBookingDate) {
+        throw new Error('Não foi encontrada data futura elegível e não consumida para a reserva real da área do cliente.');
+    }
+    await setFieldById('public-date', clientBookingDate, evaluate);
+    await waitUntil(() => evaluate("[...document.querySelectorAll('.public-page__slot')].some(button => !button.disabled)"));
+    await evaluate("[...document.querySelectorAll('.public-page__slot')].find(button => !button.disabled)?.click()");
+    await setFieldById('public-client-name', 'Cliente da área E2E', evaluate);
+    await setFieldById('public-client-phone', clientPhone, evaluate);
+    await clickButtonByText('Confirmar reserva', evaluate);
+    await waitForText('Reserva confirmada', evaluate);
+    const clientBookingId = queryPostgres(
+        `SELECT a.appointment_id FROM agendamento.appointment a JOIN agendamento.client c USING (tenant_id, client_id) WHERE a.tenant_id = '${credentials.DEMO_TENANT_ID}' AND c.normalized_phone = '${clientPhone}' AND a.status = 'CONFIRMED' ORDER BY a.created_at DESC LIMIT 1`,
         appEnvironment,
     );
+    if (!clientBookingId) throw new Error('O fluxo público não persistiu a reserva da área do cliente.');
+    console.log('Browser: preparou reserva pública real vinculada ao telefone que será verificado pelo challenge AGD-024.');
     await navigate(`http://localhost:5173/client-access/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
     await waitForText('Entre com seu telefone', evaluate);
     await waitUntil(() => evaluate("!document.querySelector('button[type=submit]')?.disabled"));
@@ -1783,7 +1843,7 @@ try {
     await clickButtonByText('Tentar novamente', evaluate);
     await waitForText('A resposta de recuperação é inválida.', evaluate);
     await clickButtonByText('Tentar novamente', evaluate);
-    await waitForText('Acesso verificado neste tenant.', evaluate);
+    await waitForText('Suas reservas', evaluate);
     if (!(await evaluate('window.__clientVerifyResponseLost === true'))) {
         throw new Error('A resposta perdida da verificação não foi simulada.');
     }
@@ -1815,14 +1875,165 @@ try {
         throw new Error('Retry de verificação duplicou a sessão ou não consumiu o challenge uma única vez.');
     }
 
+    await waitForText('Suas reservas', evaluate);
+    const ownedBookingId = queryPostgres(
+        `SELECT a.appointment_id FROM agendamento.appointment a JOIN agendamento.client c USING (tenant_id, client_id) WHERE a.tenant_id = '${credentials.DEMO_TENANT_ID}' AND c.normalized_phone = '${clientPhone}' AND a.status = 'CONFIRMED' ORDER BY a.created_at DESC LIMIT 1`,
+        appEnvironment,
+    );
+    if (!ownedBookingId) throw new Error('Reserva pública persistida não foi vinculada ao telefone verificado.');
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('li[data-appointment-id="${ownedBookingId}"]'))`));
+    await evaluate(`(() => {
+      window.__clientListOriginalFetch = window.fetch.bind(window);
+      window.__releaseClientPage = null;
+      window.__releaseClientRefresh = null;
+      window.__holdClientPage = false;
+      window.__holdClientRefresh = false;
+      window.fetch = async (...args) => {
+        const url = args[0] instanceof Request ? args[0].url : String(args[0]);
+        const method = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
+        if (new URL(url, window.location.href).pathname !== '/api/v1/client/appointments' || method.toUpperCase() !== 'GET') {
+          return window.__clientListOriginalFetch(...args);
+        }
+        if (url.includes('cursor=') && window.__holdClientPage) {
+          window.__holdClientPage = false;
+          window.__clientPagePending = true;
+          await new Promise(resolve => { window.__releaseClientPage = resolve; });
+          return new Response(JSON.stringify({items:[], nextCursor:'e2e-next-cursor', hasMore:true}), {status:200, headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
+        }
+        const response = await window.__clientListOriginalFetch(...args);
+        if (!url.includes('cursor=') && window.__holdClientRefresh) {
+          window.__holdClientRefresh = false;
+          window.__clientRefreshPending = true;
+          await new Promise(resolve => { window.__releaseClientRefresh = resolve; });
+        }
+        if (!url.includes('cursor=') && window.__exposeClientNextPage) {
+          window.__exposeClientNextPage = false;
+          const page = await response.json();
+          return new Response(JSON.stringify({...page, nextCursor:'e2e-controlled-cursor', hasMore:true}), {status:200, headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
+        }
+        return response;
+      };
+      window.__exposeClientNextPage = true;
+    })()`);
+    await waitUntil(() => evaluate("Boolean([...document.querySelectorAll('button')].find(button => button.innerText === 'Atualizar reservas' && !button.disabled))"));
+    await clickButtonByText('Atualizar reservas', evaluate);
+    await waitUntil(() => evaluate("[...document.querySelectorAll('button')].some(button => button.innerText === 'Carregar mais')"));
+    await evaluate("window.__holdClientPage = true");
+    await clickButtonByText('Carregar mais', evaluate);
+    await waitUntil(() => evaluate('window.__clientPagePending === true'));
+    await clickButtonByText('Ver detalhes', evaluate);
+    await waitForText('Detalhes da reserva', evaluate);
+    await evaluate('window.__releaseClientPage()');
+    await waitUntil(() => evaluate("Boolean([...document.querySelectorAll('button')].find(button => button.innerText === 'Carregar mais' && !button.disabled))"));
+    const paginationAfterDetails = await evaluate(`({
+      details: document.body.innerText.includes('Detalhes da reserva'),
+      loading: [...document.querySelectorAll('output')].some(node => node.innerText.includes('Carregando…')),
+      loadMoreDisabled: [...document.querySelectorAll('button')].find(button => button.innerText === 'Carregar mais')?.disabled,
+    })`);
+    if (!paginationAfterDetails.details || paginationAfterDetails.loading || paginationAfterDetails.loadMoreDisabled) {
+      throw new Error(`Abrir detalhes deixou a paginação presa após resposta tardia: ${JSON.stringify(paginationAfterDetails)}`);
+    }
+    await evaluate("window.__holdClientRefresh = true; window.__releaseClientRefresh = null");
+    await clickButtonByText('Atualizar reservas', evaluate);
+    await waitUntil(() => evaluate('window.__clientRefreshPending === true'));
+    await clickButtonByText('Ver detalhes', evaluate);
+    await waitForText('Detalhes da reserva', evaluate);
+    await evaluate('window.__releaseClientRefresh()');
+    await waitUntil(() => evaluate("![...document.querySelectorAll('output')].some(node => node.innerText.includes('Atualizando reservas…'))"));
+    const refreshAfterDetails = await evaluate(`({
+      details: document.body.innerText.includes('Detalhes da reserva'),
+      loading: [...document.querySelectorAll('output')].some(node => node.innerText.includes('Atualizando reservas…')),
+      refreshEnabled: ![...document.querySelectorAll('button')].find(button => button.innerText === 'Atualizar reservas')?.disabled,
+    })`);
+    if (!refreshAfterDetails.details || refreshAfterDetails.loading || !refreshAfterDetails.refreshEnabled) {
+      throw new Error(`Abrir detalhes deixou refresh da lista preso: ${JSON.stringify(refreshAfterDetails)}`);
+    }
+    await evaluate('window.fetch = window.__clientListOriginalFetch');
+    console.log('Browser: paginação e refresh da lista permaneceram utilizáveis após abrir detalhes com respostas controladamente pendentes.');
+    const listedBooking = await evaluate(`fetch('/api/v1/client/appointments', {credentials:'same-origin', cache:'no-store'}).then(response => response.json()).then(page => page.items.find(item => item.appointmentId === '${ownedBookingId}'))`);
+    if (listedBooking?.version !== 1) throw new Error(`A lista deveria manter a versão 1 antes da atualização do detalhe: ${JSON.stringify(listedBooking)}`);
+    const detailVersionFixture = queryPostgres(
+        `UPDATE agendamento.appointment SET version = 2 WHERE appointment_id = '${ownedBookingId}' AND version = 1 RETURNING version`,
+        appEnvironment,
+    );
+    if (detailVersionFixture !== '2') throw new Error('A fixture concorrente não avançou a versão da reserva para 2.');
+    await clickButtonByText('Ver detalhes', evaluate);
+    await waitUntil(() => evaluate("document.body.innerText.includes('Versão: 2')"));
+    const detailVersionDom = await evaluate(`({
+      detailVersion: [...document.querySelectorAll('section')].find(section => section.innerText.includes('Detalhes da reserva'))?.innerText.match(/Versão:\\s*(\\d+)/)?.[1] ?? null,
+    })`);
+    if (detailVersionDom.detailVersion !== '2' || listedBooking.version !== 1) {
+      throw new Error(`A regressão não reproduziu lista v1 versus detalhe v2: lista=${listedBooking.version}, detalhe=${JSON.stringify(detailVersionDom)}`);
+    }
+    await clickButtonByText('Cancelar esta reserva', evaluate);
+    await evaluate(`(() => {
+      window.__clientCancellationAttempts = [];
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const url = args[0] instanceof Request ? args[0].url : String(args[0]);
+        const method = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
+        if (url.endsWith('/api/v1/client/appointments/${ownedBookingId}/cancel') && method.toUpperCase() === 'POST') {
+          const headers = new Headers(args[1]?.headers ?? (args[0] instanceof Request ? args[0].headers : undefined));
+          window.__clientCancellationAttempts.push({url, body: args[1]?.body ?? null, key: headers.get('Idempotency-Key'), status: response.status});
+          if (response.ok && window.__dropClientCancellationResponse) {
+            window.__dropClientCancellationResponse = false;
+            throw new TypeError('Simulated lost client cancellation response after commit');
+          }
+        }
+        return response;
+      };
+      window.__dropClientCancellationResponse = true;
+    })()`);
+    await clickButtonByText('Confirmar cancelamento', evaluate);
+    await waitForText('Não foi possível confirmar o resultado.', evaluate);
+    await waitUntil(() =>
+        evaluate(
+            "Boolean([...document.querySelectorAll('button')].find(button => button.innerText === 'Repetir a mesma tentativa' && !button.disabled))",
+        ),
+    );
+    const cancellationPendingDom = await evaluate(`({
+      message: [...document.querySelectorAll('output[aria-live="polite"], [role=status]')].map(node => node.innerText).join(' '),
+      retry: [...document.querySelectorAll('button')].find(button => button.innerText === 'Repetir a mesma tentativa')?.disabled,
+      attempts: window.__clientCancellationAttempts,
+    })`);
+    if (!cancellationPendingDom.message.includes('mesma chave') || cancellationPendingDom.retry) {
+      throw new Error('A UI não preservou a intenção de cancelamento após perda da resposta.');
+    }
+    await clickButtonByText('Repetir a mesma tentativa', evaluate);
+    await waitForText('Reserva cancelada.', evaluate);
+    const cancellationRetry = await evaluate('window.__clientCancellationAttempts');
+    if (cancellationRetry.length !== 2 || cancellationRetry[0].url !== cancellationRetry[1].url ||
+        cancellationRetry[0].body !== cancellationRetry[1].body || cancellationRetry[0].key !== cancellationRetry[1].key ||
+        !cancellationRetry[0].key || cancellationRetry[0].body !== JSON.stringify({expectedVersion:2}) ||
+        cancellationRetry[0].status !== 200 || cancellationRetry[1].status !== 200) {
+      throw new Error(`Retry do cancelamento mudou a intenção original: ${JSON.stringify(cancellationRetry)}`);
+    }
+    const cancellationEffects = queryPostgres(
+        `SELECT CASE WHEN (SELECT status = 'CANCELLED_BY_CLIENT' AND version = 3 FROM agendamento.appointment WHERE appointment_id = '${ownedBookingId}') AND (SELECT count(*) = 2 FROM agendamento.appointment_history WHERE appointment_id = '${ownedBookingId}') AND (SELECT count(*) = 1 FROM agendamento.audit_event WHERE target_id = '${ownedBookingId}' AND action = 'APPOINTMENT_CANCELLED_BY_CLIENT') AND (SELECT count(*) = 1 FROM agendamento.outbox_event WHERE aggregate_id = '${ownedBookingId}' AND event_type = 'AppointmentCancelled') AND (SELECT count(*) = 1 FROM agendamento.idempotency_record i WHERE i.command_scope LIKE 'appointments.client.cancel.%' AND i.state = 'COMPLETED' AND i.operation_id = (SELECT operation_id FROM agendamento.outbox_event WHERE aggregate_id = '${ownedBookingId}' AND event_type = 'AppointmentCancelled')) THEN 1 ELSE 0 END`,
+        appEnvironment,
+    );
+    if (cancellationEffects !== '1') throw new Error('Cancelamento/replay não produziu um único conjunto transacional de efeitos.');
+    await command('Page.reload');
+    await waitForText('Suas reservas', evaluate);
+    await waitForText('CANCELLED_BY_CLIENT', evaluate);
+    const restoredCancellation = await evaluate(`({
+      status: document.querySelector('li[data-appointment-id="${ownedBookingId}"]')?.innerText,
+      hasCancelAction: [...(document.querySelector('li[data-appointment-id="${ownedBookingId}"]')?.querySelectorAll('button') ?? [])].some(button => button.innerText === 'Cancelar'),
+      hasPrivateDataInUrl: location.href.includes('${clientPhone}') || location.href.includes('${ownedBookingId}'),
+    })`);
+    if (!restoredCancellation.status?.includes('CANCELLED_BY_CLIENT') || restoredCancellation.hasCancelAction || restoredCancellation.hasPrivateDataInUrl) {
+      throw new Error(`Reload não recuperou o estado terminal com segurança: ${JSON.stringify(restoredCancellation)}`);
+    }
+    console.log('Browser: área autenticada listou reserva pública persistida, cancelou após cutoff permitido, recuperou resposta perdida com a mesma intenção, recarregou o estado terminal; PostgreSQL confirmou efeitos únicos.');
+
     const differentPhone = '+5511999991133';
     queryPostgres(
         `INSERT INTO agendamento.client(client_id, tenant_id, display_name, normalized_phone) VALUES ('${randomUUID()}', '${credentials.DEMO_TENANT_ID}', 'Cliente E2E outro telefone', '${differentPhone}')`,
         appEnvironment,
     );
     await navigate(`http://localhost:5173/client-access/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
-    await waitForText('Entre com seu telefone', evaluate);
-    await setFieldById('client-phone', differentPhone, evaluate);
+    await waitForText('Suas reservas', evaluate);
     await evaluate(`(() => {
       const originalFetch = window.fetch.bind(window);
       window.__oldSessionVerifyResponseLost = false;
@@ -1830,9 +2041,6 @@ try {
         const response = await originalFetch(...args);
         const requestUrl = args[0] instanceof Request ? args[0].url : String(args[0]);
         const requestMethod = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
-        if (requestUrl.includes('/access-challenges') && !requestUrl.endsWith('/verify') && requestMethod.toUpperCase() === 'POST') {
-          window.__clientAccessChallengeId = (await response.clone().json()).challengeId;
-        }
         if (requestUrl.endsWith('/verify') && requestMethod.toUpperCase() === 'POST' && response.status === 401 && !window.__oldSessionVerifyResponseLost) {
           window.__oldSessionVerifyResponseLost = true;
           throw new TypeError('Simulated lost rejected verification response');
@@ -1840,12 +2048,18 @@ try {
         return response;
       };
     })()`);
-    await clickButtonByText('Solicitar código', evaluate);
-    await waitUntil(() => evaluate("Boolean(document.querySelector('#client-code'))"));
-    const rejectedChallengeId = await evaluate('window.__clientAccessChallengeId ?? null');
-    if (!rejectedChallengeId) {
-        throw new Error('E2E não capturou o challenge para testar sessão antiga.');
-    }
+    const challenge = await evaluate(`(async () => {
+      const csrf = await fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'}).then(response => response.json());
+      const response = await fetch('/api/v1/public/${encodeURIComponent(demoTenantSlug)}/access-challenges', {
+        method:'POST', credentials:'same-origin', cache:'no-store',
+        headers:{'Content-Type':'application/json', [csrf.headerName]:csrf.token, 'Idempotency-Key':${JSON.stringify(randomUUID())}},
+        body:JSON.stringify({phone:${JSON.stringify(differentPhone)}}),
+      });
+      if (!response.ok) throw new Error('Challenge do telefone diferente foi rejeitado: ' + response.status);
+      return response.json();
+    })()`);
+    const rejectedChallengeId = challenge.challengeId;
+    if (!rejectedChallengeId) throw new Error('E2E não recebeu challenge para testar sessão antiga.');
     const rejectedCodeResponse = await fetch(`http://localhost:${appPort}/internal/e2e/access-challenges/${rejectedChallengeId}/code`, {
         headers: { 'X-E2E-Emitter-Secret': emitterSecret },
         cache: 'no-store',
@@ -1853,20 +2067,25 @@ try {
     if (!rejectedCodeResponse.ok) throw new Error('Emissor E2E não retornou código para o challenge de sessão antiga.');
     const rejectedCode = (await rejectedCodeResponse.json()).code;
     const rejectedWrongCode = rejectedCode === '000000' ? '000001' : '000000';
-    await setFieldById('client-code', rejectedWrongCode, evaluate);
-    await clickButtonByText('Verificar código', evaluate);
-    await waitForText('Não foi possível confirmar o resultado.', evaluate);
-    await clickButtonByText('Tentar novamente', evaluate);
-    await waitForText('Código inválido, expirado ou temporariamente bloqueado.', evaluate);
+    const rejectedVerification = await evaluate(`(async () => {
+      const csrf = await fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'}).then(response => response.json());
+      const url = '/api/v1/public/${encodeURIComponent(demoTenantSlug)}/access-challenges/${rejectedChallengeId}/verify';
+      const options = {method:'POST', credentials:'same-origin', cache:'no-store', headers:{'Content-Type':'application/json', [csrf.headerName]:csrf.token}, body:JSON.stringify({code:${JSON.stringify(rejectedWrongCode)}})};
+      let responseLost = false;
+      try { await fetch(url, options); } catch { responseLost = true; }
+      const retry = await fetch(url, options);
+      const sessionForChallenge = await fetch('/api/v1/client/session?slug=${encodeURIComponent(demoTenantSlug)}&challengeId=${rejectedChallengeId}', {credentials:'same-origin', cache:'no-store'}).then(result => result.json());
+      const previousSession = await fetch('/api/v1/client/session', {credentials:'same-origin', cache:'no-store'}).then(result => result.json());
+      return {responseLost, retryStatus:retry.status, sessionForChallenge, previousSession};
+    })()`);
     const oldSessionDom = await evaluate(`(async () => ({
       rejectedResponseLost: window.__oldSessionVerifyResponseLost,
-      successVisible: document.body.innerText.includes('Acesso verificado neste tenant.'),
-      rejectionVisible: document.body.innerText.includes('Código inválido, expirado ou temporariamente bloqueado.'),
-      session: await fetch('/api/v1/client/session?slug=${encodeURIComponent(demoTenantSlug)}&challengeId=${rejectedChallengeId}', {credentials:'same-origin', cache:'no-store'}).then(response => response.json()),
+      clientAreaVisible: document.body.innerText.includes('Suas reservas'),
     }))()`);
-    if (!oldSessionDom.rejectedResponseLost || oldSessionDom.successVisible || !oldSessionDom.rejectionVisible ||
-        oldSessionDom.session.authenticated) {
-        throw new Error(`Sessão anterior confirmou indevidamente challenge de outro telefone: ${JSON.stringify(oldSessionDom)}`);
+    if (!oldSessionDom.rejectedResponseLost || !oldSessionDom.clientAreaVisible ||
+        rejectedVerification.retryStatus !== 401 || rejectedVerification.sessionForChallenge.authenticated ||
+        !rejectedVerification.previousSession.authenticated) {
+        throw new Error(`Sessão anterior confirmou indevidamente challenge de outro telefone: ${JSON.stringify({oldSessionDom, rejectedVerification})}`);
     }
     const sessionRowsAfterRejectedRecovery = queryPostgres(
         `SELECT count(*) FROM agendamento.client_access_session WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
@@ -1874,17 +2093,46 @@ try {
     );
     if (sessionRowsAfterRejectedRecovery !== '1') throw new Error('Challenge rejeitado criou sessão adicional.');
 
-    const clientLogoutStatus = await evaluate(`(async () => {
-      const csrf = await fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'}).then(response => response.json());
-      return fetch('/api/v1/client/session/logout', {
-        method:'POST', credentials:'same-origin', cache:'no-store',
-        headers:{[csrf.headerName]:csrf.token},
-      }).then(response => response.status);
+    await waitUntil(() => evaluate("Boolean(document.getElementById('client-appointment-filter'))"));
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__clientListJsonPending = false;
+      window.__clientListDelayIntercepted = false;
+      window.__releaseClientListJson = null;
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const requestUrl = args[0] instanceof Request ? args[0].url : String(args[0]);
+        const requestMethod = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
+        if (requestUrl.includes('/api/v1/client/appointments?') && requestMethod.toUpperCase() === 'GET' && !window.__clientListDelayIntercepted) {
+          window.__clientListDelayIntercepted = true;
+          return new Proxy(response, {get(target, property) {
+            if (property === 'json') return () => new Promise((resolve, reject) => {
+              window.__clientListJsonPending = true;
+              window.__releaseClientListJson = () => target.json().then(resolve, reject);
+            });
+            return Reflect.get(target, property, target);
+          }});
+        }
+        return response;
+      };
     })()`);
-    if (clientLogoutStatus !== 204) throw new Error(`Logout de cliente retornou HTTP ${clientLogoutStatus}.`);
+    await setSelectById('client-appointment-filter', 'all', evaluate);
+    await waitUntil(() => evaluate('window.__clientListJsonPending === true'));
+    await clickButtonByText('Sair', evaluate);
+    await waitForText('Sessão encerrada.', evaluate);
+    await evaluate('window.__releaseClientListJson?.()');
+    await waitUntil(() => evaluate("!document.body.innerText.includes('Suas reservas')"));
+    const privateStateAfterDelayedResponse = await evaluate(`({
+      clientAreaVisible: document.body.innerText.includes('Suas reservas'),
+      appointmentVisible: Boolean(document.querySelector('li[data-appointment-id="${ownedBookingId}"]')),
+      sessionEnded: document.body.innerText.includes('Sessão encerrada.'),
+    })`);
+    if (privateStateAfterDelayedResponse.clientAreaVisible || privateStateAfterDelayedResponse.appointmentVisible || !privateStateAfterDelayedResponse.sessionEnded) {
+      throw new Error(`Resposta atrasada restaurou dados privados após logout: ${JSON.stringify(privateStateAfterDelayedResponse)}`);
+    }
     const loggedOutClient = await evaluate("fetch('/api/v1/client/session', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())");
     if (loggedOutClient.authenticated) throw new Error('Logout não revogou a sessão do cliente.');
-    console.log('Browser: solicitação neutra, expiração, bloqueio após cinco erros, sessão isolada e logout de cliente verificados com emissor privado E2E.');
+    console.log('Browser: área consultou/cancelou a reserva própria, recuperou resposta perdida, limpou sessão no logout mesmo com lista atrasada; emissor privado também comprovou limites, expiração e isolamento.');
 
     await command('Network.clearBrowserCookies');
     await navigate('http://localhost:5173/admin', command, evaluate);

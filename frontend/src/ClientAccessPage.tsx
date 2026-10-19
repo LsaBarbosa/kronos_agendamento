@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { apiBaseUrl } from './config';
+import { ClientAppointmentsArea } from './ClientAppointmentsArea';
 import './ClientAccessPage.css';
 
 type Csrf = { headerName: string; token: string };
@@ -15,6 +16,7 @@ export function ClientAccessPage({ slug }: { slug: string }) {
         'phone',
     );
     const [busy, setBusy] = useState(false);
+    const [sessionChecking, setSessionChecking] = useState(true);
     const [uncertain, setUncertain] = useState(false);
     const [verifyUncertain, setVerifyUncertain] = useState(false);
     const [verifyRejected, setVerifyRejected] = useState(false);
@@ -48,21 +50,41 @@ export function ClientAccessPage({ slug }: { slug: string }) {
 
     useEffect(() => {
         let active = true;
-        void fetch(apiBaseUrl + '/v1/csrf', {
-            credentials: 'same-origin',
-            cache: 'no-store',
-        })
-            .then(async (response) => {
-                if (!response.ok) throw new Error('csrf');
-                const token = (await response.json()) as Csrf;
-                if (active) setCsrf(token);
-            })
-            .catch(() => {
+        void (async () => {
+            try {
+                const [csrfResponse, sessionResponse] = await Promise.all([
+                    fetch(apiBaseUrl + '/v1/csrf', {
+                        credentials: 'same-origin',
+                        cache: 'no-store',
+                    }),
+                    fetch(apiBaseUrl + '/v1/client/session', {
+                        credentials: 'same-origin',
+                        cache: 'no-store',
+                    }),
+                ]);
+                if (!csrfResponse.ok || !sessionResponse.ok)
+                    throw new Error('session');
+                const [csrfToken, session] = await Promise.all([
+                    csrfResponse.json() as Promise<Csrf>,
+                    sessionResponse.json() as Promise<{
+                        authenticated?: unknown;
+                    }>,
+                ]);
+                if (!active) return;
+                setCsrf(csrfToken);
+                if (session.authenticated === true) {
+                    setPhase('authenticated');
+                    setMessage('Sessão cliente ativa.');
+                }
+            } catch {
                 if (active)
                     setMessage(
-                        'Não foi possível preparar a proteção da sessão. Tente novamente.',
+                        'Não foi possível verificar a sessão agora. Tente novamente.',
                     );
-            });
+            } finally {
+                if (active) setSessionChecking(false);
+            }
+        })();
         return () => {
             active = false;
         };
@@ -276,8 +298,12 @@ export function ClientAccessPage({ slug }: { slug: string }) {
             );
             if (!response.ok) throw new Error('logout');
             setPhase('phone');
+            setPhone('');
             setChallengeId('');
             setCode('');
+            setVerifyUncertain(false);
+            setUncertain(false);
+            requestIntent.current = null;
             setMessage('Sessão encerrada.');
         } catch {
             setMessage('Não foi possível confirmar o encerramento.');
@@ -285,6 +311,20 @@ export function ClientAccessPage({ slug }: { slug: string }) {
             setBusy(false);
         }
     }
+
+    const handleSessionEnded = useCallback(() => {
+        setPhase('phone');
+        setPhone('');
+        setCode('');
+        setChallengeId('');
+        setVerifyUncertain(false);
+        setVerifyRejected(false);
+        setUncertain(false);
+        requestIntent.current = null;
+        setMessage(
+            'Sua sessão expirou. Autentique-se novamente para acessar suas reservas.',
+        );
+    }, []);
 
     return (
         <main className="client-access">
@@ -297,21 +337,13 @@ export function ClientAccessPage({ slug }: { slug: string }) {
             >
                 <p className="client-access__eyebrow">Acesso do cliente</p>
                 <h1 id="client-access-title">Entre com seu telefone</h1>
-                {phase === 'authenticated' ? (
-                    <>
-                        <output aria-live="polite">{message}</output>
-                        <p>
-                            Esta verificação não abre a área de reservas nesta
-                            etapa.
-                        </p>
-                        <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void logout()}
-                        >
-                            Sair
-                        </button>
-                    </>
+                {sessionChecking ? (
+                    <output>Verificando sessão…</output>
+                ) : phase === 'authenticated' ? (
+                    <ClientAppointmentsArea
+                        onLogout={logout}
+                        onSessionEnded={handleSessionEnded}
+                    />
                 ) : phase === 'phone' ? (
                     <form onSubmit={(event) => void requestCode(event)}>
                         <label htmlFor="client-phone">

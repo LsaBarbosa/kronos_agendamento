@@ -50,6 +50,9 @@ public class SecurityErrorWriter implements AuthenticationEntryPoint, AccessDeni
     response.setContentType(MediaType.APPLICATION_JSON_VALUE);
     response.setCharacterEncoding("UTF-8");
     response.setHeader(CorrelationIdFilter.HEADER, traceId);
+    if (request.getRequestURI().startsWith("/api/v1/client/")) {
+      response.setHeader("Cache-Control", "no-store");
+    }
     objectMapper.writeValue(
         response.getOutputStream(), ApiErrorResponse.of(code, message, traceId));
   }

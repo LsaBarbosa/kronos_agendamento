@@ -6,9 +6,11 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+import com.appagendamento.appointments.application.CancelClientAppointment;
 import com.appagendamento.appointments.application.CreateAdministrativeAppointment;
 import com.appagendamento.appointments.application.CreatePublicAppointment;
 import com.appagendamento.appointments.application.GetAdminAppointments;
+import com.appagendamento.appointments.application.GetClientAppointments;
 import com.appagendamento.appointments.application.GetPublicBookingIntent;
 import com.appagendamento.appointments.application.PreparePublicBookingIntent;
 import com.appagendamento.appointments.application.RescheduleAdministrativeAppointment;
@@ -91,6 +93,8 @@ class SecurityBoundaryTest {
   @MockitoBean private CalculateAvailabilityForDateRange calculateAvailability;
   @MockitoBean private MeterRegistry meterRegistry;
   @MockitoBean private ClientAccessService clientAccessService;
+  @MockitoBean private GetClientAppointments getClientAppointments;
+  @MockitoBean private CancelClientAppointment cancelClientAppointment;
 
   @Test
   void anonymousBusinessRequestReceivesConsistentError() throws Exception {
@@ -111,10 +115,13 @@ class SecurityBoundaryTest {
 
   @Test
   void e2eCodeEmitterAndClientAppointmentRoutesStayClosedOutsideTheirContracts() throws Exception {
+    org.mockito.Mockito.when(auditCorrelationId.currentTraceId()).thenReturn(UUID.randomUUID());
     mvc.perform(
             get("/internal/e2e/access-challenges/" + UUID.randomUUID() + "/code")
                 .header("X-E2E-Emitter-Secret", "synthetic-secret"))
         .andExpect(status().isUnauthorized());
+    org.mockito.Mockito.when(getClientAppointments.list(null, null, null))
+        .thenThrow(new com.appagendamento.appointments.domain.ClientAppointmentAccessException());
     mvc.perform(get("/api/v1/client/appointments")).andExpect(status().isUnauthorized());
   }
 

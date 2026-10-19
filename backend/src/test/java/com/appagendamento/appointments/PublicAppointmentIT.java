@@ -30,6 +30,7 @@ import com.appagendamento.catalog.application.CreateService;
 import com.appagendamento.catalog.application.SetServiceStatus;
 import com.appagendamento.catalog.application.UpdateService;
 import com.appagendamento.catalog.domain.ServiceStatus;
+import com.appagendamento.clientaccess.api.AccessCodeSender;
 import com.appagendamento.clients.api.ClientBookingRestrictionQuery;
 import com.appagendamento.clients.api.ClientBookingRestrictionStatus;
 import com.appagendamento.idempotency.api.IdempotentCommandResult;
@@ -67,6 +68,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 import tools.jackson.databind.ObjectMapper;
 
@@ -107,6 +109,7 @@ class PublicAppointmentIT {
   @MockitoBean private java.time.Clock clock;
   @MockitoBean private PublicationEvidence publicationEvidence;
   @MockitoBean private ClientBookingRestrictionQuery clientRestrictions;
+  @MockitoBean private AccessCodeSender accessCodeSender;
 
   private JdbcTemplate migrationJdbc;
   private UUID tenantId;
@@ -116,6 +119,7 @@ class PublicAppointmentIT {
   private LocalDate bookingDate;
   private String requestedStart;
   private final Map<String, String> recoveryCapabilities = new ConcurrentHashMap<>();
+  private final Map<UUID, String> clientAccessCodes = new ConcurrentHashMap<>();
 
   @DynamicPropertySource
   static void database(DynamicPropertyRegistry registry) {
@@ -124,6 +128,18 @@ class PublicAppointmentIT {
 
   @BeforeEach
   void preparePublishedTenant() throws Exception {
+    clientAccessCodes.clear();
+    org.mockito.Mockito.doAnswer(
+            invocation -> {
+              clientAccessCodes.put(invocation.getArgument(1), invocation.getArgument(3));
+              return AccessCodeSender.DeliveryResult.ACCEPTED;
+            })
+        .when(accessCodeSender)
+        .send(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any());
     org.mockito.Mockito.when(clock.instant()).thenReturn(Instant.now());
     org.mockito.Mockito.when(
             publicationEvidence.unavailableEvidence(org.mockito.ArgumentMatchers.any()))
@@ -2716,6 +2732,92 @@ class PublicAppointmentIT {
   }
 
   @Test
+  void clientCancellationWinningSharedTenantLockRejectsConcurrentReschedule() throws Exception {
+    String phone = "+5511999992197";
+    submitBooking(
+            "client-cancel-reschedule-race-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Corrida cliente", phone))
+        .andExpect(status().isCreated());
+    UUID appointmentId = appointmentForPhone(phone);
+    String clientCookie = verifiedClientCookie(phone);
+    long revision = currentScheduleRevision();
+    String destination =
+        bookingDate.plusWeeks(1).atTime(9, 0).atZone(ZONE).toOffsetDateTime().toString();
+    installClientCommandPause(appointmentId, "cancel");
+    try (ExecutorService commands = Executors.newFixedThreadPool(2)) {
+      var cancellation =
+          commands.submit(
+              () -> submitClientCancellation(appointmentId, clientCookie, 1).andReturn());
+      awaitAppointmentUpdateInProgress();
+      var reschedule =
+          commands.submit(
+              () ->
+                  submitReschedule(
+                          appointmentId,
+                          "client-cancel-race-admin-" + UUID.randomUUID(),
+                          rescheduleBody(1, revision, destination))
+                      .andReturn());
+      assertThat(cancellation.get().getResponse().getStatus()).isEqualTo(200);
+      assertThat(reschedule.get().getResponse().getStatus()).isEqualTo(409);
+    } finally {
+      removeClientCommandPause();
+    }
+    assertThat(statusOf(appointmentId)).isEqualTo("CANCELLED_BY_CLIENT");
+    assertThat(versionOf(appointmentId)).isEqualTo(2);
+    assertThat(countHistory(appointmentId)).isEqualTo(2);
+    assertThat(countAuditForTarget(appointmentId, "APPOINTMENT_CANCELLED_BY_CLIENT")).isEqualTo(1);
+    assertThat(countAuditForTarget(appointmentId, "APPOINTMENT_RESCHEDULED")).isZero();
+    assertThat(countOutboxForAggregate(appointmentId, "AppointmentCancelled")).isEqualTo(1);
+    assertThat(countOutboxForAggregate(appointmentId, "AppointmentRescheduled")).isZero();
+  }
+
+  @Test
+  void rescheduleWinningSharedTenantLockRejectsConcurrentClientCancellation() throws Exception {
+    String phone = "+5511999992198";
+    submitBooking(
+            "reschedule-client-cancel-race-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Corrida remarcação", phone))
+        .andExpect(status().isCreated());
+    UUID appointmentId = appointmentForPhone(phone);
+    String clientCookie = verifiedClientCookie(phone);
+    long revision = currentScheduleRevision();
+    String destination =
+        bookingDate.plusWeeks(1).atTime(9, 0).atZone(ZONE).toOffsetDateTime().toString();
+    installClientCommandPause(appointmentId, "reschedule");
+    try (ExecutorService commands = Executors.newFixedThreadPool(2)) {
+      var reschedule =
+          commands.submit(
+              () ->
+                  submitReschedule(
+                          appointmentId,
+                          "reschedule-client-race-admin-" + UUID.randomUUID(),
+                          rescheduleBody(1, revision, destination))
+                      .andReturn());
+      awaitAppointmentUpdateInProgress();
+      var cancellation =
+          commands.submit(
+              () -> submitClientCancellation(appointmentId, clientCookie, 1).andReturn());
+      assertThat(reschedule.get().getResponse().getStatus()).isEqualTo(200);
+      assertThat(cancellation.get().getResponse().getStatus()).isEqualTo(409);
+    } finally {
+      removeClientCommandPause();
+    }
+    assertThat(statusOf(appointmentId)).isEqualTo("CONFIRMED");
+    assertThat(versionOf(appointmentId)).isEqualTo(2);
+    assertThat(countHistory(appointmentId)).isEqualTo(2);
+    assertThat(countAuditForTarget(appointmentId, "APPOINTMENT_RESCHEDULED")).isEqualTo(1);
+    assertThat(countAuditForTarget(appointmentId, "APPOINTMENT_CANCELLED_BY_CLIENT")).isZero();
+    assertThat(countOutboxForAggregate(appointmentId, "AppointmentRescheduled")).isEqualTo(1);
+    assertThat(countOutboxForAggregate(appointmentId, "AppointmentCancelled")).isZero();
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT starts_at FROM agendamento.appointment WHERE appointment_id = ?",
+                java.time.OffsetDateTime.class,
+                appointmentId))
+        .isEqualTo(java.time.OffsetDateTime.parse(destination));
+  }
+
+  @Test
   void conflictingReschedulePreservesOriginalIntervalAndCreatesNoSuccessEffects() throws Exception {
     submitBooking(
             "reschedule-conflict-source-" + UUID.randomUUID(),
@@ -2841,6 +2943,129 @@ class PublicAppointmentIT {
             .header("Idempotency-Key", key)
             .contentType(MediaType.APPLICATION_JSON)
             .content(body));
+  }
+
+  private ResultActions submitClientCancellation(UUID id, String cookie, long expectedVersion)
+      throws Exception {
+    return mvc.perform(
+        post("/api/v1/client/appointments/{id}/cancel", id)
+            .with(csrf())
+            .header("Cookie", cookie)
+            .header("Idempotency-Key", "client-race-cancel-" + UUID.randomUUID())
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"expectedVersion\":" + expectedVersion + "}"));
+  }
+
+  private String verifiedClientCookie(String phone) throws Exception {
+    MvcResult requested =
+        mvc.perform(
+                post("/api/v1/public/" + slug + "/access-challenges")
+                    .with(csrf())
+                    .header("Idempotency-Key", "client-race-challenge-" + UUID.randomUUID())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"phone\":\"" + phone + "\"}"))
+            .andExpect(status().isAccepted())
+            .andReturn();
+    UUID challengeId =
+        UUID.fromString(
+            objectMapper
+                .readTree(requested.getResponse().getContentAsString())
+                .get("challengeId")
+                .asText());
+    String code = clientAccessCodes.get(challengeId);
+    assertThat(code).isNotBlank();
+    MvcResult verified =
+        mvc.perform(
+                post("/api/v1/public/" + slug + "/access-challenges/" + challengeId + "/verify")
+                    .with(csrf())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"code\":\"" + code + "\"}"))
+            .andExpect(status().isNoContent())
+            .andReturn();
+    String setCookie = verified.getResponse().getHeader("Set-Cookie");
+    assertThat(setCookie).startsWith("AGDCLIENT=");
+    return setCookie.substring(0, setCookie.indexOf(';'));
+  }
+
+  private UUID appointmentForPhone(String phone) {
+    return appJdbc.queryForObject(
+        "SELECT appointment_id FROM agendamento.appointment a JOIN agendamento.client c USING (tenant_id, client_id) WHERE a.tenant_id = ? AND c.normalized_phone = ?",
+        UUID.class,
+        tenantId,
+        phone);
+  }
+
+  private void installClientCommandPause(UUID appointmentId, String winningCommand) {
+    String predicate =
+        winningCommand.equals("cancel")
+            ? "NEW.status = 'CANCELLED_BY_CLIENT'"
+            : "NEW.starts_at IS DISTINCT FROM OLD.starts_at";
+    migrationJdbc.execute(
+        "CREATE FUNCTION agendamento.pause_client_command_race() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.appointment_id = '"
+            + appointmentId
+            + "'::uuid AND "
+            + predicate
+            + " THEN PERFORM pg_sleep(1); END IF; RETURN NEW; END $$");
+    migrationJdbc.execute(
+        "CREATE TRIGGER pause_client_command_race BEFORE UPDATE ON agendamento.appointment FOR EACH ROW EXECUTE FUNCTION agendamento.pause_client_command_race()");
+  }
+
+  private void awaitAppointmentUpdateInProgress() throws InterruptedException {
+    long deadline = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
+    while (System.nanoTime() < deadline) {
+      Integer active =
+          migrationJdbc.queryForObject(
+              "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND wait_event = 'PgSleep' AND query ILIKE '%UPDATE agendamento.appointment%'",
+              Integer.class);
+      if (active != null && active > 0) return;
+      Thread.sleep(20);
+    }
+    throw new IllegalStateException("O comando não chegou ao UPDATE PostgreSQL sob lock");
+  }
+
+  private void removeClientCommandPause() {
+    migrationJdbc.execute("DROP TRIGGER pause_client_command_race ON agendamento.appointment");
+    migrationJdbc.execute("DROP FUNCTION agendamento.pause_client_command_race()");
+  }
+
+  private int countAuditForTarget(UUID appointmentId, String action) {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.audit_event WHERE target_id = ?::uuid AND action = ?",
+        Integer.class,
+        appointmentId,
+        action);
+  }
+
+  private int countOutboxForAggregate(UUID appointmentId, String eventType) {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = ? AND event_type = ?",
+        Integer.class,
+        appointmentId,
+        eventType);
+  }
+
+  private String statusOf(UUID appointmentId) {
+    return appJdbc.queryForObject(
+        "SELECT status FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+        String.class,
+        tenantId,
+        appointmentId);
+  }
+
+  private long versionOf(UUID appointmentId) {
+    return appJdbc.queryForObject(
+        "SELECT version FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+        Long.class,
+        tenantId,
+        appointmentId);
+  }
+
+  private int countHistory(UUID appointmentId) {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.appointment_history WHERE tenant_id = ? AND appointment_id = ?",
+        Integer.class,
+        tenantId,
+        appointmentId);
   }
 
   private static String rescheduleBody(

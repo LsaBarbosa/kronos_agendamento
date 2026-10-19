@@ -8,6 +8,7 @@ import com.appagendamento.appointments.application.AdminAppointmentView;
 import com.appagendamento.appointments.application.AppointmentCreationContext;
 import com.appagendamento.appointments.application.AppointmentHistoryEntry;
 import com.appagendamento.appointments.application.AppointmentRepository;
+import com.appagendamento.appointments.application.ClientAppointmentView;
 import com.appagendamento.appointments.domain.Appointment;
 import com.appagendamento.appointments.domain.AppointmentDataUnavailableException;
 import com.appagendamento.appointments.domain.AppointmentStatus;
@@ -238,6 +239,80 @@ public class PostgresAppointmentRepository
   }
 
   @Override
+  public List<ClientAppointmentView> findClientAppointments(
+      UUID tenantId,
+      UUID clientId,
+      boolean futureOnly,
+      Instant now,
+      Instant afterStartsAt,
+      UUID afterAppointmentId,
+      int limit) {
+    try {
+      return jdbc.query(
+          """
+          SELECT appointment_id, service_name_snapshot, starts_at, service_ends_at,
+                 time_zone, status, version
+          FROM agendamento.appointment
+          WHERE tenant_id = ? AND client_id = ?
+            AND (? = FALSE OR starts_at >= ?)
+            AND (CAST(? AS timestamptz) IS NULL OR (starts_at, appointment_id) > (?, ?))
+          ORDER BY starts_at ASC, appointment_id ASC
+          LIMIT ?
+          """,
+          (row, index) ->
+              new ClientAppointmentView(
+                  row.getObject("appointment_id", UUID.class),
+                  row.getString("service_name_snapshot"),
+                  row.getTimestamp("starts_at").toInstant(),
+                  row.getTimestamp("service_ends_at").toInstant(),
+                  row.getString("time_zone"),
+                  row.getString("status"),
+                  row.getLong("version")),
+          tenantId,
+          clientId,
+          futureOnly,
+          Timestamp.from(now),
+          afterStartsAt == null ? null : Timestamp.from(afterStartsAt),
+          afterStartsAt == null ? null : Timestamp.from(afterStartsAt),
+          afterAppointmentId,
+          limit);
+    } catch (DataAccessException exception) {
+      throw new AppointmentDataUnavailableException(exception);
+    }
+  }
+
+  @Override
+  public Optional<ClientAppointmentView> findClientAppointment(
+      UUID tenantId, UUID clientId, UUID appointmentId) {
+    try {
+      return jdbc
+          .query(
+              """
+              SELECT appointment_id, service_name_snapshot, starts_at, service_ends_at,
+                     time_zone, status, version
+              FROM agendamento.appointment
+              WHERE tenant_id = ? AND client_id = ? AND appointment_id = ?
+              """,
+              (row, index) ->
+                  new ClientAppointmentView(
+                      row.getObject("appointment_id", UUID.class),
+                      row.getString("service_name_snapshot"),
+                      row.getTimestamp("starts_at").toInstant(),
+                      row.getTimestamp("service_ends_at").toInstant(),
+                      row.getString("time_zone"),
+                      row.getString("status"),
+                      row.getLong("version")),
+              tenantId,
+              clientId,
+              appointmentId)
+          .stream()
+          .findFirst();
+    } catch (DataAccessException exception) {
+      throw new AppointmentDataUnavailableException(exception);
+    }
+  }
+
+  @Override
   public Optional<AdminAppointmentView> findAdminAppointment(UUID tenantId, UUID appointmentId) {
     try {
       List<AdminAppointmentView> result =
@@ -401,6 +476,45 @@ public class PostgresAppointmentRepository
           outcome.status().name(),
           outcome.historyReason(),
           reason,
+          expectedVersion,
+          expectedVersion + 1);
+      return true;
+    } catch (DataAccessException exception) {
+      throw new AppointmentDataUnavailableException(exception);
+    }
+  }
+
+  @Override
+  public boolean transitionClientCancellation(
+      Appointment current, UUID clientId, long expectedVersion) {
+    try {
+      int updated =
+          jdbc.update(
+              """
+              UPDATE agendamento.appointment
+              SET status = 'CANCELLED_BY_CLIENT', version = version + 1
+              WHERE tenant_id = ? AND client_id = ? AND appointment_id = ?
+                AND status = 'CONFIRMED' AND version = ?
+              """,
+              current.tenantId(),
+              clientId,
+              current.appointmentId(),
+              expectedVersion);
+      if (updated != 1) return false;
+      jdbc.update(
+          """
+          INSERT INTO agendamento.appointment_history (
+            history_id, tenant_id, appointment_id, from_status, to_status,
+            actor_type, actor_ref, reason_code, reason, occurred_at,
+            previous_starts_at, previous_occupied_until, new_starts_at, new_occupied_until,
+            version_before, version_after
+          ) VALUES (?, ?, ?, 'CONFIRMED', 'CANCELLED_BY_CLIENT', 'CLIENT', 'VERIFIED_CLIENT',
+                    'APPOINTMENT_CANCELLED_BY_CLIENT', NULL, clock_timestamp(),
+                    NULL, NULL, NULL, NULL, ?, ?)
+          """,
+          UUID.randomUUID(),
+          current.tenantId(),
+          current.appointmentId(),
           expectedVersion,
           expectedVersion + 1);
       return true;
