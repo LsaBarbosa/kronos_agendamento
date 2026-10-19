@@ -408,6 +408,11 @@ class NotificationPipelineIT {
                       }));
       assertThat(staleSnapshotRead.await(10, TimeUnit.SECONDS)).isTrue();
       updateAppointment(fixture, 2, "COMPLETED", Instant.parse("2027-01-10T10:00:00Z"));
+      record(fixture, 2, "AppointmentCompleted");
+      reminderEventConsumer.processBatch();
+      assertThat(reminderEligible(reminder)).isFalse();
+      assertThat(reminderState(reminder)).isEqualTo("CLAIMED");
+      assertThat(attemptState(reminder)).isEqualTo("STARTED");
       releaseSnapshot.countDown();
       assertThat(processing.get(10, TimeUnit.SECONDS)).isEqualTo(1);
     } finally {
@@ -444,6 +449,18 @@ class NotificationPipelineIT {
                       }));
       assertThat(transportStarted.await(10, TimeUnit.SECONDS)).isTrue();
       updateAppointment(fixture, 2, "CANCELLED_BY_PROVIDER", Instant.parse("2027-01-10T10:00:00Z"));
+      record(fixture, 2, "AppointmentCancelled");
+      reminderEventConsumer.processBatch();
+      assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(2);
+      assertThat(reminderState(reminder)).isEqualTo("CLAIMED");
+      assertThat(reminderEligible(reminder)).isFalse();
+      assertThat(attemptState(reminder)).isEqualTo("STARTED");
+      assertThat(
+              runtimeJdbc.queryForObject(
+                  "SELECT claim_token IS NOT NULL FROM agendamento.notification_intent WHERE notification_id = ?",
+                  Boolean.class,
+                  reminder))
+          .isTrue();
       releaseTransport.countDown();
       assertThat(processing.get(10, TimeUnit.SECONDS)).isEqualTo(1);
     } finally {
@@ -451,7 +468,86 @@ class NotificationPipelineIT {
     }
 
     assertThat(reminderState(reminder)).isEqualTo("ACCEPTED");
+    assertThat(attemptState(reminder)).isEqualTo("ACCEPTED");
+    assertThat(
+            runtimeJdbc.queryForObject(
+                "SELECT provider_message_reference FROM agendamento.notification_intent WHERE notification_id = ?",
+                String.class,
+                reminder))
+        .isEqualTo("already-in-flight");
     assertThat(attemptCountFor(reminder)).isEqualTo(1);
+
+    NotificationWebhookAdmission admission = webhookAdmission();
+    Map<String, String> headers =
+        evidenceHeaders("in-flight-delivery", "3", "DELIVERED", "already-in-flight");
+    byte[] body = "evidence".getBytes(StandardCharsets.UTF_8);
+    assertThat(admission.admit("test-adapter", headers, body))
+        .isEqualTo(NotificationWebhookAdmission.AdmissionResult.ADMITTED);
+    assertThat(reminderState(reminder)).isEqualTo("DELIVERED");
+    assertThat(
+            runtimeJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.notification_delivery_evidence WHERE notification_id = ? AND provider_event_id = 'in-flight-delivery'",
+                Integer.class,
+                reminder))
+        .isEqualTo(1);
+    assertThat(admission.admit("test-adapter", headers, body))
+        .isEqualTo(NotificationWebhookAdmission.AdmissionResult.DUPLICATE);
+    assertThat(attemptCountFor(reminder)).isEqualTo(1);
+  }
+
+  @Test
+  void invalidatedInFlightAmbiguousReminderKeepsUnknownOutcomeWithoutRetry() throws Exception {
+    Fixture fixture = fixture("reminder-ambiguous-in-flight");
+    insertReminderPolicy(fixture, 2);
+    record(fixture, 1, "AppointmentConfirmed");
+    reminderEventConsumer.processBatch();
+    UUID reminder = reminderId(fixture.appointmentId(), 1);
+    migrationJdbc.update(
+        "UPDATE agendamento.notification_intent SET due_at = clock_timestamp() - interval '1 second', next_attempt_at = clock_timestamp() - interval '1 second' WHERE notification_id = ?",
+        reminder);
+    CountDownLatch transportStarted = new CountDownLatch(1);
+    CountDownLatch releaseTransport = new CountDownLatch(1);
+    NotificationWorker worker = workerWithoutTransport();
+    AtomicInteger sends = new AtomicInteger();
+    try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+      Future<Integer> processing =
+          executor.submit(
+              () ->
+                  worker.processBatch(
+                      message -> {
+                        sends.incrementAndGet();
+                        transportStarted.countDown();
+                        await(releaseTransport);
+                        return NotificationTransport.TransportResult.failed(
+                            com.appagendamento.notifications.domain.TransportFailure.AMBIGUOUS);
+                      }));
+      assertThat(transportStarted.await(10, TimeUnit.SECONDS)).isTrue();
+      updateAppointment(fixture, 2, "CONFIRMED", Instant.parse("2027-01-10T11:00:00Z"));
+      record(fixture, 2, "AppointmentRescheduled");
+      reminderEventConsumer.processBatch();
+      assertThat(reminderState(reminder)).isEqualTo("CLAIMED");
+      assertThat(reminderEligible(reminder)).isFalse();
+      assertThat(attemptState(reminder)).isEqualTo("STARTED");
+      releaseTransport.countDown();
+      assertThat(processing.get(10, TimeUnit.SECONDS)).isEqualTo(1);
+    } finally {
+      releaseTransport.countDown();
+    }
+
+    assertThat(sends).hasValue(1);
+    assertThat(reminderState(reminder)).isEqualTo("OUTCOME_UNKNOWN");
+    assertThat(attemptState(reminder)).isEqualTo("OUTCOME_UNKNOWN");
+    assertThat(attemptCountFor(reminder)).isEqualTo(1);
+    assertThat(
+            worker.processBatch(
+                message -> {
+                  sends.incrementAndGet();
+                  return NotificationTransport.TransportResult.accepted(
+                      "test-adapter", "must-not-retry");
+                }))
+        .isZero();
+    assertThat(sends).hasValue(1);
+    assertThat(reminderState(reminder)).isEqualTo("OUTCOME_UNKNOWN");
   }
 
   @Test
@@ -1369,6 +1465,13 @@ class NotificationPipelineIT {
     return runtimeJdbc.queryForObject(
         "SELECT state FROM agendamento.notification_intent WHERE notification_id = ?",
         String.class,
+        notificationId);
+  }
+
+  private boolean reminderEligible(UUID notificationId) {
+    return runtimeJdbc.queryForObject(
+        "SELECT reminder_eligible FROM agendamento.notification_intent WHERE notification_id = ?",
+        Boolean.class,
         notificationId);
   }
 

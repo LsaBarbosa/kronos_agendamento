@@ -99,26 +99,14 @@ public class PostgresNotificationRepository implements NotificationRepository {
 
   private int obsoleteReminders(
       UUID tenantId, UUID appointmentId, long currentVersion, boolean allVersions) {
-    jdbc.update(
-        """
-        UPDATE agendamento.notification_attempt a
-        SET state = 'OBSOLETE', error_code = NULL, completed_at = clock_timestamp()
-        FROM agendamento.notification_intent n
-        WHERE a.notification_id = n.notification_id AND a.claim_token = n.claim_token
-          AND a.state = 'STARTED' AND n.tenant_id = ? AND n.appointment_id = ?
-          AND n.message_type = 'APPOINTMENT_REMINDER'
-          AND n.state = 'CLAIMED' AND (? OR n.appointment_version < ?)
-        """,
-        tenantId,
-        appointmentId,
-        allVersions,
-        currentVersion);
     return jdbc.update(
         """
         UPDATE agendamento.notification_intent
-        SET state = 'OBSOLETE', claim_token = NULL, lease_until = NULL
+        SET reminder_eligible = FALSE,
+            state = CASE WHEN state IN ('PENDING', 'RETRY') THEN 'OBSOLETE' ELSE state END
         WHERE tenant_id = ? AND appointment_id = ? AND message_type = 'APPOINTMENT_REMINDER'
-          AND state IN ('PENDING', 'RETRY', 'CLAIMED') AND (? OR appointment_version < ?)
+          AND state IN ('PENDING', 'RETRY', 'CLAIMED') AND reminder_eligible
+          AND (? OR appointment_version < ?)
         """,
         tenantId,
         appointmentId,
@@ -178,6 +166,7 @@ public class PostgresNotificationRepository implements NotificationRepository {
             SELECT notification_id FROM agendamento.notification_intent
             WHERE state IN ('PENDING', 'RETRY') AND next_attempt_at <= clock_timestamp()
               AND (message_type <> 'APPOINTMENT_REMINDER' OR due_at <= clock_timestamp())
+              AND (message_type <> 'APPOINTMENT_REMINDER' OR reminder_eligible)
             ORDER BY next_attempt_at, created_at, notification_id
             LIMIT ? FOR UPDATE SKIP LOCKED
             """,
@@ -195,6 +184,7 @@ public class PostgresNotificationRepository implements NotificationRepository {
               WHERE notification_id = ? AND state IN ('PENDING', 'RETRY')
                 AND next_attempt_at <= clock_timestamp()
                 AND (message_type <> 'APPOINTMENT_REMINDER' OR due_at <= clock_timestamp())
+                AND (message_type <> 'APPOINTMENT_REMINDER' OR reminder_eligible)
               RETURNING notification_id, tenant_id, appointment_id, appointment_version,
                         recipient_client_id, message_type, external_idempotency_key, attempt_count
               """,
@@ -247,6 +237,7 @@ public class PostgresNotificationRepository implements NotificationRepository {
                 AND ((n.message_type = 'APPOINTMENT_CANCELLED'
                       AND a.status IN ('CANCELLED_BY_CLIENT', 'CANCELLED_BY_PROVIDER'))
                      OR (n.message_type <> 'APPOINTMENT_CANCELLED' AND a.status = 'CONFIRMED'))
+                AND (n.message_type <> 'APPOINTMENT_REMINDER' OR n.reminder_eligible)
                 AND (n.message_type <> 'APPOINTMENT_REMINDER' OR a.starts_at > ?)
             )
             """,
@@ -299,21 +290,28 @@ public class PostgresNotificationRepository implements NotificationRepository {
       throw new IllegalArgumentException("Retry de notificação inválido");
     }
     String nextState = claim.attemptNumber() >= maxAttempts ? "FAILED_FINAL" : "RETRY";
-    int updated =
-        jdbc.update(
+    List<String> updatedStates =
+        jdbc.query(
             """
             UPDATE agendamento.notification_intent
-            SET state = ?, next_attempt_at = clock_timestamp() + (? * interval '1 millisecond'),
+            SET state = CASE
+                  WHEN message_type = 'APPOINTMENT_REMINDER' AND NOT reminder_eligible
+                    THEN 'OBSOLETE'
+                  ELSE ?
+                END,
+                next_attempt_at = clock_timestamp() + (? * interval '1 millisecond'),
                 claim_token = NULL, lease_until = NULL, last_error_code = ?
             WHERE notification_id = ? AND state = 'CLAIMED' AND claim_token = ?
               AND lease_until > clock_timestamp()
+            RETURNING state
             """,
+            (row, index) -> row.getString("state"),
             nextState,
             backoff.toMillis(),
             errorCode,
             claim.notificationId(),
             claim.claimToken());
-    if (updated == 1) {
+    if (!updatedStates.isEmpty()) {
       finishAttempt(claim, "RETRYABLE_NO_EFFECT", errorCode);
       return true;
     }
@@ -366,12 +364,17 @@ public class PostgresNotificationRepository implements NotificationRepository {
         jdbc.update(
             """
             UPDATE agendamento.notification_intent
-            SET state = ?, claim_token = NULL, lease_until = NULL, last_error_code = ?
+            SET state = ?, claim_token = NULL, lease_until = NULL, last_error_code = ?,
+                reminder_eligible = CASE
+                  WHEN message_type = 'APPOINTMENT_REMINDER' AND ? = 'OBSOLETE' THEN FALSE
+                  ELSE reminder_eligible
+                END
             WHERE notification_id = ? AND state = 'CLAIMED' AND claim_token = ?
               AND lease_until > clock_timestamp()
             """,
             state,
             errorCode,
+            state,
             claim.notificationId(),
             claim.claimToken());
     if (updated == 1) {
