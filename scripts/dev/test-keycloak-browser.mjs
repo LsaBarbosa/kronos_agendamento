@@ -1913,7 +1913,7 @@ try {
         ),
     );
     const cancellationPendingDom = await evaluate(`({
-      message: [...document.querySelectorAll('[role=status]')].map(node => node.innerText).join(' '),
+      message: [...document.querySelectorAll('output[aria-live="polite"], [role=status]')].map(node => node.innerText).join(' '),
       retry: [...document.querySelectorAll('button')].find(button => button.innerText === 'Repetir a mesma tentativa')?.disabled,
       attempts: window.__clientCancellationAttempts,
     })`);
