@@ -1915,6 +1915,7 @@ try {
       };
       window.__exposeClientNextPage = true;
     })()`);
+    await waitUntil(() => evaluate("Boolean([...document.querySelectorAll('button')].find(button => button.innerText === 'Atualizar reservas' && !button.disabled))"));
     await clickButtonByText('Atualizar reservas', evaluate);
     await waitUntil(() => evaluate("[...document.querySelectorAll('button')].some(button => button.innerText === 'Carregar mais')"));
     await evaluate("window.__holdClientPage = true");
