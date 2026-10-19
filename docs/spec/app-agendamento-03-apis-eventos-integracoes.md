@@ -219,6 +219,8 @@ Resposta neutra `202`, exista ou não vínculo elegível:
 
 O `challengeId` pode ser devolvido quando não facilitar enumeração; alternativamente, usar cookie seguro/identificador opaco.
 
+`phone` aceita no máximo 32 caracteres. Campo ausente/em branco, entrada acima do limite ou número internacional inválido retorna HTTP 400 com `error.code=INVALID_PHONE`; o servidor nunca trunca o valor. Essa rejeição é definitiva e permite corrigir o campo e iniciar nova intenção. Falha de transporte ou resposta ambígua não equivale a esse erro e conserva a identidade lógica da solicitação. Violações de outros parâmetros de transporte/contrato retornam `INVALID_REQUEST`, não devem ser interpretadas pela UI como rejeição de telefone.
+
 ### Validar código
 
 `POST /api/v1/public/{slug}/access-challenges/{challengeId}/verify`
@@ -230,6 +232,8 @@ O `challengeId` pode ser devolvido quando não facilitar enumeração; alternati
 ```
 
 Resposta cria sessão limitada via cookie `HttpOnly`, `Secure`, `SameSite` adequado ou token de curta duração protegido contra exfiltração.
+
+O challengeId, quando retornado, é opaco e sempre consultado junto do tenant resolvido pelo slug; ele não é uma credencial de sessão. A verificação aceita somente o código no body e emite cookie de cliente separado da sessão OIDC administrativa, restrito a `/api/v1/client`. A sessão emitida persiste o vínculo ao challenge consumido. `GET /api/v1/client/session` retorna apenas estado booleano; para reconciliar uma verificação de resultado incerto, aceita `slug` e `challengeId` juntos e retorna verdadeiro somente se o cookie ativo foi emitido pelo challenge `VERIFIED` desse tenant. Nenhum telefone, código ou token é exposto; sessão antiga de outro telefone/tenant não confirma a tentativa. Se a resposta da verificação se perder, essa recuperação depende de o cookie resultante ter chegado ao navegador; a consulta não recria nem reemite um cookie perdido. Falha de transporte, HTTP 503 ou resposta inválida da consulta mantém o resultado incerto e permite repetir a recuperação com o mesmo challenge, sem aceitar `authenticated:false` como sucesso. `POST /api/v1/client/session/logout` revoga a sessão. CSRF continua ativo para mutações autenticadas por cookie. O contrato OpenAPI versionado está em `docs/openapi/public-client-access.yaml`. TTL/renovação da sessão e comprimento do OTP não estão definidos pela especificação e permanecem decisões de produto pendentes; não inferir valores das sessões administrativa ou da capability de AGD-016.
 
 ### Reservas do cliente
 

@@ -1,0 +1,147 @@
+openapi: 3.1.0
+info:
+  title: Kronos client access
+  version: 1.0.0
+  description: >-
+    Public OTP challenge contract for AGD-024. The challenge does not establish
+    access to appointment routes, which remain out of scope until AGD-025.
+servers:
+  - url: /
+paths:
+  /api/v1/public/{slug}/access-challenges:
+    post:
+      summary: Request a neutral client access challenge
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              additionalProperties: false
+              properties:
+                phone:
+                  type: string
+                  maxLength: 32
+                  description: Explicit international number; country is never inferred.
+                  example: '+5511999999999'
+      responses:
+        '202':
+          description: Same neutral result whether or not a client can receive a message.
+          headers:
+            Cache-Control:
+              schema: { type: string, example: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [challengeAccepted, expiresInSeconds, challengeId]
+                properties:
+                  challengeAccepted: { type: boolean, const: true }
+                  expiresInSeconds: { type: integer, const: 300 }
+                  challengeId:
+                    type: [string, 'null']
+                    format: uuid
+                    description: Opaque, tenant-bound handle; null if secure challenge configuration is unavailable.
+        '400':
+          description: INVALID_PHONE definitively rejects blank, over-32-character, or invalid international numbers without truncation; the user may correct and resubmit. Other request/header validation uses INVALID_REQUEST.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: object
+                    properties:
+                      code: { type: string, enum: [INVALID_PHONE, INVALID_REQUEST] }
+                      message: { type: string }
+        '403': { description: CSRF validation failed }
+        '409': { description: Idempotency key reused with different command }
+  /api/v1/public/{slug}/access-challenges/{challengeId}/verify:
+    post:
+      summary: Verify and atomically consume a client challenge
+      parameters:
+        - $ref: '#/components/parameters/Slug'
+        - name: challengeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              additionalProperties: false
+              properties:
+                code:
+                  type: string
+                  pattern: '^[0-9]{6}$'
+                  writeOnly: true
+      responses:
+        '204':
+          description: Verified; sets a restricted AGDCLIENT cookie, no appointment authority.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                description: HttpOnly, SameSite=Lax, scoped to /api/v1/client; Secure in HTTPS.
+            Cache-Control:
+              schema: { type: string, example: no-store }
+        '401': { description: Generic invalid, expired, blocked, consumed, or foreign challenge }
+        '403': { description: CSRF validation failed }
+  /api/v1/client/session:
+    get:
+      summary: Read client session state, optionally bound to a consumed challenge
+      parameters:
+        - name: slug
+          in: query
+          required: false
+          schema: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+          description: Tenant is resolved server-side; required together with challengeId for verification recovery.
+        - name: challengeId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+          description: Restricts true to the session created by this consumed challenge.
+      security: [{ clientCookie: [] }]
+      responses:
+        '200':
+          description: Read-only; challenge-bound recovery returns true only for the active session issued by that verified challenge. Does not expose tenant, phone, challenge secret, or appointments. Supplying only one query parameter returns authenticated=false. The browser must have received the resulting session cookie; this endpoint does not recreate a lost cookie.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authenticated]
+                properties:
+                  authenticated: { type: boolean }
+        '503':
+          description: Recovery temporarily unavailable; preserve the uncertain verification intent and retry recovery.
+  /api/v1/client/session/logout:
+    post:
+      summary: Revoke the current client access session
+      security: [{ clientCookie: [] }]
+      responses:
+        '204': { description: Session revoked; cookie cleared }
+        '403': { description: CSRF validation failed }
+components:
+  parameters:
+    Slug:
+      name: slug
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 16, maxLength: 128 }
+  securitySchemes:
+    clientCookie:
+      type: apiKey
+      in: cookie
+      name: AGDCLIENT

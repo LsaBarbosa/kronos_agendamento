@@ -20,6 +20,19 @@ public final class PostgresTestEnvironment {
     registry.add(
         "app.public-booking.digest.keys",
         () -> "test-v1=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+    registry.add("app.client-access.keys.verifier-active-id", () -> "test-verifier-v1");
+    registry.add("app.client-access.keys.phone-encryption-active-id", () -> "test-phone-v1");
+    registry.add("app.client-access.keys.fingerprint-id", () -> "test-fingerprint-v1");
+    registry.add(
+        "app.client-access.keys.verifier-ring",
+        () -> "test-verifier-v1=AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=");
+    registry.add(
+        "app.client-access.keys.fingerprint", () -> "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=");
+    registry.add(
+        "app.client-access.keys.phone-encryption-ring",
+        () -> "test-phone-v1=AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=");
+    registry.add("app.client-access.session.ttl-seconds", () -> 900);
+    registry.add("app.client-access.session.cookie-secure", () -> false);
     String externalUrl = System.getenv("TEST_DATABASE_URL");
     if (externalUrl != null && !externalUrl.isBlank()) {
       if (!externalUrl.startsWith("jdbc:postgresql://")) {

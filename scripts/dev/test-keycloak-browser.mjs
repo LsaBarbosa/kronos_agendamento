@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 
 const chromePath = process.env.CHROME_BIN || '/usr/bin/google-chrome';
@@ -1566,13 +1567,340 @@ try {
     }
     console.log('Browser: logout local/CSRF validado.');
     await command('Network.clearBrowserCookies');
+
+    const clientPhone = '+5511999991122';
+    const demoTenantSlug = queryPostgres(
+        `SELECT slug FROM agendamento.tenant WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
+        appEnvironment,
+    );
+    queryPostgres(
+        `INSERT INTO agendamento.client(client_id, tenant_id, display_name, normalized_phone) VALUES ('${randomUUID()}', '${credentials.DEMO_TENANT_ID}', 'Cliente E2E acesso', '${clientPhone}')`,
+        appEnvironment,
+    );
+    await navigate(`http://localhost:5173/client-access/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
+    await waitForText('Entre com seu telefone', evaluate);
+    await waitUntil(() => evaluate("!document.querySelector('button[type=submit]')?.disabled"));
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__clientAccessRequestAttempts = [];
+      window.__clientAccessDropNextRequestResponse = true;
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const requestUrl = args[0] instanceof Request ? args[0].url : String(args[0]);
+        const requestMethod = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
+        if (requestUrl.endsWith('/api/v1/csrf') && requestMethod.toUpperCase() === 'GET' && response.ok) {
+          const csrf = await response.clone().json();
+          window.__clientAccessLatestCsrf = {headerName: csrf.headerName, token: csrf.token};
+        }
+        if (requestUrl.includes('/access-challenges') && !requestUrl.endsWith('/verify') && requestMethod.toUpperCase() === 'POST') {
+          const requestHeaders = new Headers(args[1]?.headers ?? (args[0] instanceof Request ? args[0].headers : undefined));
+          const result = await response.clone().json();
+          const csrf = window.__clientAccessLatestCsrf;
+          window.__clientAccessRequestAttempts.push({
+            body: args[1]?.body ?? null,
+            idempotencyKey: requestHeaders.get('Idempotency-Key'),
+            status: response.status,
+            challengeId: result.challengeId ?? null,
+          });
+          window.__clientAccessRequestResult = {
+            status: response.status,
+            challengeAccepted: result.challengeAccepted,
+            hasChallengeId: Boolean(result.challengeId),
+            errorCode: typeof result.error?.code === 'string' ? result.error.code : null,
+            csrfHeaderPresent: Boolean(csrf && requestHeaders.has(csrf.headerName)),
+            csrfMatchesLatestResponse: Boolean(csrf && requestHeaders.get(csrf.headerName) === csrf.token),
+          };
+          window.__clientAccessChallengeId = result.challengeId;
+          if (response.ok && window.__clientAccessDropNextRequestResponse) {
+            window.__clientAccessDropNextRequestResponse = false;
+            window.__clientAccessRequestResponseLost = true;
+            throw new TypeError('Simulated lost access request response');
+          }
+        }
+        return response;
+      };
+    })()`);
+    await setFieldById('client-phone', '+' + '1'.repeat(32), evaluate);
+    await clickButtonByText('Solicitar código', evaluate);
+    await waitForText('Telefone inválido.', evaluate);
+    const invalidPhoneState = await evaluate(`(() => ({
+      disabled: document.querySelector('#client-phone')?.disabled,
+      retry: document.querySelector('button[type=submit]')?.textContent,
+      errorCode: window.__clientAccessRequestResult?.errorCode,
+      requestBodyLength: JSON.parse(window.__clientAccessRequestAttempts.at(-1)?.body ?? '{}').phone?.length,
+    }))()`);
+    if (invalidPhoneState.disabled || invalidPhoneState.errorCode !== 'INVALID_PHONE' || invalidPhoneState.requestBodyLength !== 33) {
+        throw new Error(`Telefone inválido foi tratado como resultado incerto: ${JSON.stringify(invalidPhoneState)}`);
+    }
+    await evaluate('window.__clientAccessRequestResult = null; window.__clientAccessChallengeId = null');
+    await setFieldById('client-phone', clientPhone, evaluate);
+    await clickButtonByText('Solicitar código', evaluate);
+    await waitForText('Mantenha os dados e repita a mesma solicitação', evaluate);
+    await clickButtonByText('Repetir mesma solicitação', evaluate);
+    await waitUntil(() => evaluate('window.__clientAccessRequestAttempts.length === 3'));
+    const clientAccessRequestResult = await evaluate('window.__clientAccessRequestResult');
+    if (!clientAccessRequestResult.hasChallengeId) {
+        throw new Error(`Solicitação neutra sem challengeId para fixture E2E: HTTP ${clientAccessRequestResult.status}, accepted=${clientAccessRequestResult.challengeAccepted}, error=${clientAccessRequestResult.errorCode}, csrfHeader=${clientAccessRequestResult.csrfHeaderPresent}, csrfMatches=${clientAccessRequestResult.csrfMatchesLatestResponse}.`);
+    }
+    const requestRetryEvidence = await evaluate(`(() => ({
+      responseLost: window.__clientAccessRequestResponseLost === true,
+      attempts: window.__clientAccessRequestAttempts,
+      challengeId: window.__clientAccessChallengeId,
+    }))()`);
+    if (!requestRetryEvidence.responseLost || requestRetryEvidence.attempts.length !== 3 ||
+        requestRetryEvidence.attempts[1].body !== requestRetryEvidence.attempts[2].body ||
+        requestRetryEvidence.attempts[1].idempotencyKey !== requestRetryEvidence.attempts[2].idempotencyKey ||
+        requestRetryEvidence.attempts[1].challengeId !== requestRetryEvidence.attempts[2].challengeId ||
+        requestRetryEvidence.attempts[1].challengeId !== requestRetryEvidence.challengeId) {
+        throw new Error(`Retry após resposta perdida da solicitação mudou a intenção original: ${JSON.stringify(requestRetryEvidence)}`);
+    }
+    const expiredChallengeId = await evaluate('window.__clientAccessChallengeId');
+    const emitterSecret = 'e2e-only-synthetic-emitter-secret-000000000000';
+    const appPort = appEnvironment.APP_PORT || '8080';
+    const expiredCodeResponse = await fetch(`http://localhost:${appPort}/internal/e2e/access-challenges/${expiredChallengeId}/code`, {
+        headers: { 'X-E2E-Emitter-Secret': emitterSecret },
+        cache: 'no-store',
+    });
+    if (!expiredCodeResponse.ok) throw new Error('Emissor privado E2E não retornou o código do desafio.');
+    const expiredCode = (await expiredCodeResponse.json()).code;
+    queryPostgres(
+        `UPDATE agendamento.client_access_challenge SET expires_at = clock_timestamp() WHERE challenge_id = '${expiredChallengeId}'`,
+        appEnvironment,
+    );
+    await setFieldById('client-code', expiredCode, evaluate);
+    const clientAccessStorageSafe = await evaluate(`(() => {
+      const storedValues = [localStorage, sessionStorage].flatMap(store => Array.from({length: store.length}, (_, index) => store.getItem(store.key(index))));
+      const persisted = [location.href, JSON.stringify(history.state), ...storedValues].join('|');
+      return !persisted.includes(${JSON.stringify(clientPhone)}) && !persisted.includes(${JSON.stringify(expiredCode)});
+    })()`);
+    if (!clientAccessStorageSafe) throw new Error('Telefone ou código apareceu em URL, histórico ou storage do navegador.');
+    await clickButtonByText('Verificar código', evaluate);
+    await waitForText('Código inválido, expirado ou temporariamente bloqueado.', evaluate);
+    if (await cookies(command).then((items) => items.some((cookie) => cookie.name === 'AGDCLIENT'))) {
+        throw new Error('Desafio expirado emitiu cookie de cliente.');
+    }
+
+    await clickButtonByText('Solicitar novo código', evaluate);
+    await evaluate('window.__clientAccessChallengeId = null');
+    await clickButtonByText('Solicitar código', evaluate);
+    await waitUntil(() => evaluate('Boolean(window.__clientAccessChallengeId)'));
+    const blockedChallengeId = await evaluate('window.__clientAccessChallengeId');
+    const blockedCodeResponse = await fetch(`http://localhost:${appPort}/internal/e2e/access-challenges/${blockedChallengeId}/code`, {
+        headers: { 'X-E2E-Emitter-Secret': emitterSecret },
+        cache: 'no-store',
+    });
+    if (!blockedCodeResponse.ok) throw new Error('Emissor privado E2E não retornou o código para o teste de tentativas.');
+    const blockedCode = (await blockedCodeResponse.json()).code;
+    const wrongCode = blockedCode === '000000' ? '000001' : '000000';
+    await setFieldById('client-code', wrongCode, evaluate);
+    await clickButtonByText('Verificar código', evaluate);
+    await waitForText('Código inválido, expirado ou temporariamente bloqueado.', evaluate);
+    const csrf = await evaluate("fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())");
+    const lockoutStatuses = await evaluate(`(async () => {
+      const statuses = [];
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const response = await fetch(${JSON.stringify(`/api/v1/public/${demoTenantSlug}/access-challenges/${blockedChallengeId}/verify`)}, {
+          method: 'POST', credentials: 'same-origin', cache: 'no-store',
+          headers: {'Content-Type':'application/json', [${JSON.stringify(csrf.headerName)}]:${JSON.stringify(csrf.token)}},
+          body: JSON.stringify({code:${JSON.stringify(wrongCode)}})
+        });
+        statuses.push(response.status);
+      }
+      return statuses;
+    })()`);
+    if (lockoutStatuses.some((status) => status !== 401)) {
+        throw new Error(`As tentativas inválidas não produziram o bloqueio esperado: ${JSON.stringify(lockoutStatuses)}`);
+    }
+    const challengeStatus = queryPostgres(
+        `SELECT status FROM agendamento.client_access_challenge WHERE challenge_id = '${blockedChallengeId}'`,
+        appEnvironment,
+    );
+    if (challengeStatus !== 'BLOCKED') throw new Error('Quinto erro não bloqueou o desafio no PostgreSQL.');
+
+    await clickButtonByText('Solicitar novo código', evaluate);
+    await evaluate('window.__clientAccessChallengeId = null');
+    await clickButtonByText('Solicitar código', evaluate);
+    await waitUntil(() => evaluate('Boolean(window.__clientAccessChallengeId)'));
+    const validChallengeId = await evaluate('window.__clientAccessChallengeId');
+    const validCodeResponse = await fetch(`http://localhost:${appPort}/internal/e2e/access-challenges/${validChallengeId}/code`, {
+        headers: { 'X-E2E-Emitter-Secret': emitterSecret },
+        cache: 'no-store',
+    });
+    if (!validCodeResponse.ok) throw new Error('Emissor privado E2E não retornou código para verificação válida.');
+    const validCode = (await validCodeResponse.json()).code;
+    await setFieldById('client-code', validCode, evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__clientVerifyAttempts = [];
+      window.__clientRecoveryAttempts = [];
+      window.fetch = async (...args) => {
+        const requestUrl = args[0] instanceof Request ? args[0].url : String(args[0]);
+        const requestMethod = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
+        if (requestUrl.startsWith('/api/v1/client/session?slug=') && requestMethod.toUpperCase() === 'GET') {
+          window.__clientRecoveryAttempts.push('attempted');
+          if (window.__clientRecoveryAttempts.length === 1) throw new TypeError('Simulated recovery transport failure');
+          if (window.__clientRecoveryAttempts.length === 2) {
+            return new Response(JSON.stringify({error: {code: 'TEMPORARILY_UNAVAILABLE'}}), {
+              status: 503, headers: {'Content-Type': 'application/json'},
+            });
+          }
+          if (window.__clientRecoveryAttempts.length === 3) {
+            return new Response('{invalid-json', {status: 200, headers: {'Content-Type': 'application/json'}});
+          }
+        }
+        const response = await originalFetch(...args);
+        if (requestUrl.endsWith('/verify') && requestMethod.toUpperCase() === 'POST') {
+          window.__clientVerifyAttempts.push({url: String(args[0]), body: args[1]?.body ?? null});
+          if (response.ok && !window.__clientVerifyResponseLost) {
+            window.__clientVerifyResponseLost = true;
+            throw new TypeError('Simulated lost verification response after session commit');
+          }
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Verificar código', evaluate);
+    await waitForText('Não foi possível confirmar o resultado. Mantenha o mesmo código', evaluate);
+    await clickButtonByText('Tentar novamente', evaluate);
+    await waitForText('A verificação ainda não pôde ser reconciliada.', evaluate);
+    const uncertainAfterRecoveryNetwork = await evaluate(`({
+      verifyButton: [...document.querySelectorAll('button')].find(button => button.innerText === 'Tentar novamente')?.disabled,
+      pendingMessage: document.body.innerText.includes('A verificação ainda não pôde ser reconciliada.'),
+    })`);
+    if (uncertainAfterRecoveryNetwork.verifyButton || !uncertainAfterRecoveryNetwork.pendingMessage) {
+        throw new Error(`Falha de transporte na recuperação foi tratada como definitiva: ${JSON.stringify(uncertainAfterRecoveryNetwork)}`);
+    }
+    await clickButtonByText('Tentar novamente', evaluate);
+    await waitForText('A verificação ainda não pôde ser reconciliada.', evaluate);
+    const uncertainAfterRecovery503 = await evaluate(`({
+      verifyButton: [...document.querySelectorAll('button')].find(button => button.innerText === 'Tentar novamente')?.disabled,
+      pendingMessage: document.body.innerText.includes('A verificação ainda não pôde ser reconciliada.'),
+      recoveryAttempts: window.__clientRecoveryAttempts.length,
+    })`);
+    if (uncertainAfterRecovery503.verifyButton || !uncertainAfterRecovery503.pendingMessage || uncertainAfterRecovery503.recoveryAttempts !== 2) {
+        throw new Error(`HTTP 503 na recuperação foi tratado como definitiva: ${JSON.stringify(uncertainAfterRecovery503)}`);
+    }
+    await clickButtonByText('Tentar novamente', evaluate);
+    await waitForText('A resposta de recuperação é inválida.', evaluate);
+    await clickButtonByText('Tentar novamente', evaluate);
+    await waitForText('Acesso verificado neste tenant.', evaluate);
+    if (!(await evaluate('window.__clientVerifyResponseLost === true'))) {
+        throw new Error('A resposta perdida da verificação não foi simulada.');
+    }
+    const clientCookie = (await cookies(command)).find((cookie) => cookie.name === 'AGDCLIENT');
+    if (!clientCookie || !clientCookie.httpOnly || clientCookie.sameSite !== 'Lax' || clientCookie.path !== '/api/v1/client') {
+        throw new Error('Cookie de cliente não tem escopo e atributos esperados.');
+    }
+    const clientSession = await evaluate("fetch('/api/v1/client/session', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())");
+    const boundRecovery = await evaluate(`fetch('/api/v1/client/session?slug=' + encodeURIComponent(${JSON.stringify(demoTenantSlug)}) + '&challengeId=' + encodeURIComponent(${JSON.stringify(validChallengeId)}), {credentials:'same-origin', cache:'no-store'}).then(response => response.json())`);
+    const adminSessionStatus = await evaluate("fetch('/api/v1/admin/session', {credentials:'same-origin', cache:'no-store'}).then(response => response.status)");
+    const verificationRetry = await evaluate('window.__clientVerifyAttempts');
+    const recoveryAttempts = await evaluate('window.__clientRecoveryAttempts.length');
+    const verificationIntentPreserved = verificationRetry.every(
+      attempt => attempt.url === verificationRetry[0]?.url && attempt.body === verificationRetry[0]?.body,
+    );
+    if (!clientSession.authenticated || !boundRecovery.authenticated || adminSessionStatus !== 401 ||
+        verificationRetry.length !== 5 || !verificationIntentPreserved || recoveryAttempts !== 5) {
+        throw new Error(`Recuperação de cliente divergiu: client=${clientSession.authenticated}, bound=${boundRecovery.authenticated}, adminStatus=${adminSessionStatus}, verifyAttempts=${verificationRetry.length}, sameIntent=${verificationIntentPreserved}, recoveryAttempts=${recoveryAttempts}.`);
+    }
+    const clientEffects = queryPostgres(
+        `SELECT count(*) FROM agendamento.client_access_session WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
+        appEnvironment,
+    );
+    const consumedChallengeStatus = queryPostgres(
+        `SELECT status FROM agendamento.client_access_challenge WHERE challenge_id = '${validChallengeId}'`,
+        appEnvironment,
+    );
+    if (clientEffects !== '1' || consumedChallengeStatus !== 'VERIFIED') {
+        throw new Error('Retry de verificação duplicou a sessão ou não consumiu o challenge uma única vez.');
+    }
+
+    const differentPhone = '+5511999991133';
+    queryPostgres(
+        `INSERT INTO agendamento.client(client_id, tenant_id, display_name, normalized_phone) VALUES ('${randomUUID()}', '${credentials.DEMO_TENANT_ID}', 'Cliente E2E outro telefone', '${differentPhone}')`,
+        appEnvironment,
+    );
+    await navigate(`http://localhost:5173/client-access/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
+    await waitForText('Entre com seu telefone', evaluate);
+    await setFieldById('client-phone', differentPhone, evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__oldSessionVerifyResponseLost = false;
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const requestUrl = args[0] instanceof Request ? args[0].url : String(args[0]);
+        const requestMethod = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
+        if (requestUrl.includes('/access-challenges') && !requestUrl.endsWith('/verify') && requestMethod.toUpperCase() === 'POST') {
+          window.__clientAccessChallengeId = (await response.clone().json()).challengeId;
+        }
+        if (requestUrl.endsWith('/verify') && requestMethod.toUpperCase() === 'POST' && response.status === 401 && !window.__oldSessionVerifyResponseLost) {
+          window.__oldSessionVerifyResponseLost = true;
+          throw new TypeError('Simulated lost rejected verification response');
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Solicitar código', evaluate);
+    await waitUntil(() => evaluate("Boolean(document.querySelector('#client-code'))"));
+    const rejectedChallengeId = await evaluate('window.__clientAccessChallengeId ?? null');
+    if (!rejectedChallengeId) {
+        throw new Error('E2E não capturou o challenge para testar sessão antiga.');
+    }
+    const rejectedCodeResponse = await fetch(`http://localhost:${appPort}/internal/e2e/access-challenges/${rejectedChallengeId}/code`, {
+        headers: { 'X-E2E-Emitter-Secret': emitterSecret },
+        cache: 'no-store',
+    });
+    if (!rejectedCodeResponse.ok) throw new Error('Emissor E2E não retornou código para o challenge de sessão antiga.');
+    const rejectedCode = (await rejectedCodeResponse.json()).code;
+    const rejectedWrongCode = rejectedCode === '000000' ? '000001' : '000000';
+    await setFieldById('client-code', rejectedWrongCode, evaluate);
+    await clickButtonByText('Verificar código', evaluate);
+    await waitForText('Não foi possível confirmar o resultado.', evaluate);
+    await clickButtonByText('Tentar novamente', evaluate);
+    await waitForText('Código inválido, expirado ou temporariamente bloqueado.', evaluate);
+    const oldSessionDom = await evaluate(`(async () => ({
+      rejectedResponseLost: window.__oldSessionVerifyResponseLost,
+      successVisible: document.body.innerText.includes('Acesso verificado neste tenant.'),
+      rejectionVisible: document.body.innerText.includes('Código inválido, expirado ou temporariamente bloqueado.'),
+      session: await fetch('/api/v1/client/session?slug=${encodeURIComponent(demoTenantSlug)}&challengeId=${rejectedChallengeId}', {credentials:'same-origin', cache:'no-store'}).then(response => response.json()),
+    }))()`);
+    if (!oldSessionDom.rejectedResponseLost || oldSessionDom.successVisible || !oldSessionDom.rejectionVisible ||
+        oldSessionDom.session.authenticated) {
+        throw new Error(`Sessão anterior confirmou indevidamente challenge de outro telefone: ${JSON.stringify(oldSessionDom)}`);
+    }
+    const sessionRowsAfterRejectedRecovery = queryPostgres(
+        `SELECT count(*) FROM agendamento.client_access_session WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
+        appEnvironment,
+    );
+    if (sessionRowsAfterRejectedRecovery !== '1') throw new Error('Challenge rejeitado criou sessão adicional.');
+
+    const clientLogoutStatus = await evaluate(`(async () => {
+      const csrf = await fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'}).then(response => response.json());
+      return fetch('/api/v1/client/session/logout', {
+        method:'POST', credentials:'same-origin', cache:'no-store',
+        headers:{[csrf.headerName]:csrf.token},
+      }).then(response => response.status);
+    })()`);
+    if (clientLogoutStatus !== 204) throw new Error(`Logout de cliente retornou HTTP ${clientLogoutStatus}.`);
+    const loggedOutClient = await evaluate("fetch('/api/v1/client/session', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())");
+    if (loggedOutClient.authenticated) throw new Error('Logout não revogou a sessão do cliente.');
+    console.log('Browser: solicitação neutra, expiração, bloqueio após cinco erros, sessão isolada e logout de cliente verificados com emissor privado E2E.');
+
+    await command('Network.clearBrowserCookies');
     await navigate('http://localhost:5173/admin', command, evaluate);
     await waitForText('Entrar como administrador', evaluate);
     await evaluate("document.querySelector('a[href*=oauth2]').click()");
     await waitForText('username', evaluate, true);
     await submitLogin(credentials.KEYCLOAK_UNLINKED_USERNAME, credentials.KEYCLOAK_UNLINKED_PASSWORD, evaluate);
     await waitForText('ADMIN_ACCESS_DENIED', evaluate);
-    assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, credentials);
+    assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, credentials, [
+        clientPhone,
+        differentPhone,
+        expiredCode,
+        blockedCode,
+        validCode,
+        rejectedCode,
+    ]);
     console.log(
         'Browser E2E passed: OIDC login, tenant, 30-minute idle expiry, SSO reauthentication, revocation, CSRF logout, unlinked denial, no test credentials in backend logs.',
     );
@@ -1885,7 +2213,7 @@ function queryPostgres(query, environment) {
     ).trim();
 }
 
-function assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, credentials) {
+function assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, credentials, sensitiveValues = []) {
     const logs = execFileSync(
         'docker',
         [
@@ -1916,6 +2244,7 @@ function assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, c
         keycloakEnvironment.OIDC_CLIENT_SECRET,
         credentials.KEYCLOAK_DEMO_PASSWORD,
         credentials.KEYCLOAK_UNLINKED_PASSWORD,
+        ...sensitiveValues,
     ].filter(Boolean);
     if (secretValues.some((secret) => logs.includes(secret))) {
         throw new Error('Log do backend contém uma credencial de teste.');

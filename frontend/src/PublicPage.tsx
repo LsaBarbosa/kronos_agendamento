@@ -1431,6 +1431,11 @@ function PublicPageContent({
 
             <footer className="public-page__footer">
                 <p>
+                    <a href={'/client-access/' + encodeURIComponent(slug)}>
+                        Acessar com código
+                    </a>
+                </p>
+                <p>
                     Somente uma resposta válida do servidor confirma uma
                     reserva.
                 </p>

@@ -33,7 +33,8 @@ public class SecurityConfiguration {
       ObjectProvider<AdminOidcUserService> adminOidcUserService,
       ObjectProvider<AdminAccessPolicy> adminAccessPolicy,
       @Value("${identity.oidc.enabled:false}") boolean oidcEnabled,
-      @Value("${identity.oidc.frontend-url:http://localhost:5173/admin}") String frontendUrl)
+      @Value("${identity.oidc.frontend-url:http://localhost:5173/admin}") String frontendUrl,
+      @Value("${app.client-access.e2e-emitter-enabled:false}") boolean e2eEmitterEnabled)
       throws Exception {
     http.sessionManagement(
             session ->
@@ -74,6 +75,17 @@ public class SecurityConfiguration {
                     .permitAll()
                     .requestMatchers(HttpMethod.POST, "/api/v1/public/*/appointments")
                     .permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/v1/public/*/access-challenges")
+                    .permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/v1/public/*/access-challenges/*/verify")
+                    .permitAll()
+                    .requestMatchers(HttpMethod.GET, "/api/v1/client/session")
+                    .permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/v1/client/session/logout")
+                    .permitAll()
+                    .requestMatchers("/internal/e2e/access-challenges/**")
+                    .access(
+                        (authentication, context) -> new AuthorizationDecision(e2eEmitterEnabled))
                     .requestMatchers(HttpMethod.POST, "/api/v1/public/*/booking-intents/current")
                     .permitAll()
                     .requestMatchers("/oauth2/**", "/login/**")
