@@ -50,7 +50,7 @@
 | Migração/permissões | `TenantPersistenceIT` e boot PostgreSQL real | instalação/upgrade, validate/rerun e grants mínimos | Passou no gate completo; V22 funcional, instalação limpa, upgrades Flyway, validate/rerun e grants runtime; V1–V21 preservadas |
 | Validação local | `./mvnw -B -ntp spotless:check verify` em `backend/` | formatação e suíte completa | `BUILD SUCCESS` em 19/10/2026: 73 testes unitários/arquiteturais e 178 integrações PostgreSQL 16.13/Testcontainers; `NotificationPipelineIT` 11/11 e `TenantPersistenceIT` 21/21 |
 | Revisão | leitura sequencial de código, contrato e diff | bloqueadores corrigidos e limites registrados | Revisão sequencial pelo coordenador. Subagentes indisponíveis por limite de threads; não equivale a revisão independente nem aprovação humana |
-| CI remoto | App CI e CodeQL push/PR no head final | todos os jobs concluídos com sucesso | Pendente da publicação do head final |
+| CI remoto | App CI e CodeQL push/PR no SHA `07e657a666a6acf92b6d931ad967e108108e7c6f` | todos os jobs concluídos com sucesso | Passou: App CI push [39294080889](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39294080889) e PR [39294115689](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39294115689); CodeQL push [39294081135](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39294081135) e PR [39294115634](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39294115634), todos os jobs concluídos com sucesso. |
 | Homologação WhatsApp | fornecedor, templates e ambiente aprovados | envio/consulta/webhook reais | Pendente; nenhum envio real ou template aprovado declarado |
 
 ## Descobertas e trade-offs
@@ -61,7 +61,7 @@
 
 ## Retomada
 
-- Validação local concluída; publicar a branch, abrir PR para `main` e registrar App CI/CodeQL no SHA final.
+- PR [#18](https://github.com/LsaBarbosa/kronos_agendamento/pull/18) aberto, sem merge/deploy; código e CI push/PR validados em `07e657a666a6acf92b6d931ad967e108108e7c6f`.
 - AGD-030 permanecerá parcial até fornecedor, templates aprovados, segredos, política de reconciliação suportada e homologação real.
 - AGD-031 continua separada; não declarar lembretes invalidados/enviados.
 - Revisão por subagentes não disponível por limite de threads nesta sessão; revisão sequencial será registrada sem alegação de independência ou aprovação humana.
