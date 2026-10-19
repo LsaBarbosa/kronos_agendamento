@@ -176,7 +176,7 @@ try {
     await setSelectByLabel('Lembrete único antes do atendimento (horas)', '6', evaluate);
     await clickButtonByText('Salvar políticas', evaluate);
     await waitForText('Políticas salvas.', evaluate);
-    await setSelectByLabel('Faltas na janela móvel de 12 meses (limite 1 a 5)', '3', evaluate);
+    await setSelectById('no-show-threshold', '3', evaluate);
     await clickButtonByText('Salvar limite', evaluate);
     await waitForText('Limite salvo. A aplicação efetiva de restrições depende de AGD-033.', evaluate);
     await clickButtonByText('Recarregar configuração persistida', evaluate);
