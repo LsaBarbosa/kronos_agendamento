@@ -1796,10 +1796,12 @@ try {
     const adminSessionStatus = await evaluate("fetch('/api/v1/admin/session', {credentials:'same-origin', cache:'no-store'}).then(response => response.status)");
     const verificationRetry = await evaluate('window.__clientVerifyAttempts');
     const recoveryAttempts = await evaluate('window.__clientRecoveryAttempts.length');
+    const verificationIntentPreserved = verificationRetry.every(
+      attempt => attempt.url === verificationRetry[0]?.url && attempt.body === verificationRetry[0]?.body,
+    );
     if (!clientSession.authenticated || !boundRecovery.authenticated || adminSessionStatus !== 401 ||
-        verificationRetry.length !== 5 || verificationRetry.some(attempt => attempt.url !== verificationRetry[0].url || attempt.body !== verificationRetry[0].body) ||
-        recoveryAttempts !== 4) {
-        throw new Error('Sessão de cliente não está isolada da autoridade administrativa.');
+        verificationRetry.length !== 5 || !verificationIntentPreserved || recoveryAttempts !== 4) {
+        throw new Error(`Recuperação de cliente divergiu: client=${clientSession.authenticated}, bound=${boundRecovery.authenticated}, adminStatus=${adminSessionStatus}, verifyAttempts=${verificationRetry.length}, sameIntent=${verificationIntentPreserved}, recoveryAttempts=${recoveryAttempts}.`);
     }
     const clientEffects = queryPostgres(
         `SELECT count(*) FROM agendamento.client_access_session WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
