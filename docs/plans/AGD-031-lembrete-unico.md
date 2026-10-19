@@ -58,8 +58,9 @@
 
 - [x] PR #18 integrado por merge commit; App CI e CodeQL pós-merge concluídos com sucesso.
 - [x] Implementação funcional e migration V24; V1–V23 imutáveis.
-- [x] Validação de backend/PostgreSQL no commit `59966fa`; revisão final sequencial. Revisores independentes indisponíveis por limite de threads.
-- [ ] Publicação, revisão humana e App CI/CodeQL push/PR no SHA final.
+- [x] Validação de backend/PostgreSQL no commit `d63b3eb`; revisão final sequencial. Revisores independentes indisponíveis por limite de threads.
+- [x] Regressão de teste corrigida após App CI push no head `2017f3c` observar total global 2 em vez de 1; a causa era evento pendente alheio no batch global. A assertion agora verifica receipts do tenant sem relaxar asserções de intent/estado; suíte integral repetida com sucesso.
+- [ ] Publicação do head corrigido, revisão humana e App CI/CodeQL push/PR no SHA final.
 - [ ] Homologação/fornecedor real permanecem fora do ambiente autorizado e pendentes.
 
 ## Encerramento ou retomada
