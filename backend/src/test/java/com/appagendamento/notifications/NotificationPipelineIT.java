@@ -134,12 +134,14 @@ class NotificationPipelineIT {
     record(fixture, 1, "AppointmentConfirmed");
     assertThat(eventConsumer.processBatch()).isEqualTo(1);
 
-    assertThat(reminderEventConsumer.processBatch()).isEqualTo(1);
+    reminderEventConsumer.processBatch();
+    assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(1);
     UUID originalReminder = reminderId(fixture.appointmentId(), 1);
     Instant startsAt = Instant.parse("2027-01-10T10:00:00Z");
     assertThat(reminderDueAt(originalReminder)).isEqualTo(startsAt.minus(Duration.ofHours(6)));
     assertThat(intentCount(fixture.tenant().tenantId())).isEqualTo(2);
-    assertThat(reminderEventConsumer.processBatch()).isZero();
+    reminderEventConsumer.processBatch();
+    assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(1);
 
     migrationJdbc.update(
         "UPDATE agendamento.availability_policy SET reminder_offset_hours = 12, version = version + 1 WHERE tenant_id = ?",
@@ -148,7 +150,8 @@ class NotificationPipelineIT {
     updateAppointment(fixture, 2, "CONFIRMED", rescheduledStarts);
     record(fixture, 2, "AppointmentRescheduled");
 
-    assertThat(reminderEventConsumer.processBatch()).isEqualTo(1);
+    reminderEventConsumer.processBatch();
+    assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(2);
     UUID rescheduledReminder = reminderId(fixture.appointmentId(), 2);
     assertThat(reminderState(originalReminder)).isEqualTo("OBSOLETE");
     assertThat(reminderDueAt(rescheduledReminder))
@@ -164,20 +167,23 @@ class NotificationPipelineIT {
     record(fixture, 1, "AppointmentConfirmed");
     record(fixture, 2, "AppointmentRescheduled");
 
-    assertThat(reminderEventConsumer.processBatch()).isEqualTo(2);
+    reminderEventConsumer.processBatch();
+    assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(2);
 
     assertThat(reminderCount(fixture.appointmentId())).isEqualTo(1);
     UUID reminder = reminderId(fixture.appointmentId(), 2);
     assertThat(reminderState(reminder)).isEqualTo("PENDING");
     assertThat(reminderDueAt(reminder)).isEqualTo(Instant.parse("2027-01-10T05:00:00Z"));
-    assertThat(reminderEventConsumer.processBatch()).isZero();
+    reminderEventConsumer.processBatch();
+    assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(2);
   }
 
   @Test
   void absentPolicyDoesNotCreateReminderAndTerminalAppointmentEventsObsoleteIt() {
     Fixture absentPolicy = fixture("reminder-policy-absent");
     record(absentPolicy, 1, "AppointmentConfirmed");
-    assertThat(reminderEventConsumer.processBatch()).isEqualTo(1);
+    reminderEventConsumer.processBatch();
+    assertThat(reminderReceiptsForTenant(absentPolicy.tenant().tenantId())).isEqualTo(1);
     assertThat(reminderCount(absentPolicy.appointmentId())).isZero();
 
     for (String terminalEvent :
@@ -185,7 +191,8 @@ class NotificationPipelineIT {
       Fixture fixture = fixture("reminder-terminal-" + terminalEvent.toLowerCase());
       insertReminderPolicy(fixture, 2);
       record(fixture, 1, "AppointmentConfirmed");
-      assertThat(reminderEventConsumer.processBatch()).isEqualTo(1);
+      reminderEventConsumer.processBatch();
+      assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(1);
       UUID reminder = reminderId(fixture.appointmentId(), 1);
       String terminalStatus =
           switch (terminalEvent) {
@@ -196,9 +203,11 @@ class NotificationPipelineIT {
       updateAppointment(fixture, 2, terminalStatus, Instant.parse("2027-01-10T10:00:00Z"));
       record(fixture, 2, terminalEvent);
 
-      assertThat(reminderEventConsumer.processBatch()).isEqualTo(1);
+      reminderEventConsumer.processBatch();
+      assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(2);
       assertThat(reminderState(reminder)).isEqualTo("OBSOLETE");
-      assertThat(reminderEventConsumer.processBatch()).isZero();
+      reminderEventConsumer.processBatch();
+      assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(2);
     }
   }
 
@@ -233,7 +242,8 @@ class NotificationPipelineIT {
       migrationJdbc.execute("DROP FUNCTION IF EXISTS agendamento.reject_reminder_intent()");
     }
 
-    assertThat(reminderEventConsumer.processBatch()).isEqualTo(1);
+    reminderEventConsumer.processBatch();
+    assertThat(reminderReceiptsForTenant(fixture.tenant().tenantId())).isEqualTo(1);
     assertThat(reminderCount(fixture.appointmentId())).isEqualTo(1);
   }
 
@@ -1367,6 +1377,16 @@ class NotificationPipelineIT {
         "SELECT count(*) FROM agendamento.notification_intent WHERE appointment_id = ? AND message_type = 'APPOINTMENT_REMINDER'",
         Integer.class,
         appointmentId);
+  }
+
+  private int reminderReceiptsForTenant(UUID tenantId) {
+    return runtimeJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.processed_event p "
+            + "JOIN agendamento.outbox_event e USING (event_id) "
+            + "WHERE p.consumer_name = ? AND e.tenant_id = ?",
+        Integer.class,
+        NotificationReminderEventConsumer.CONSUMER_NAME,
+        tenantId);
   }
 
   private NotificationWorker worker(Clock clock) {
