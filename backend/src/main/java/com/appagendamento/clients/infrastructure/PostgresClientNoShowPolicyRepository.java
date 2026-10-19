@@ -34,28 +34,40 @@ public class PostgresClientNoShowPolicyRepository implements ClientNoShowPolicyR
   @Override
   public Optional<ClientNoShowPolicy> replacePolicy(
       UUID tenantId, int threshold, long expectedVersion) {
+    if (expectedVersion == 0) {
+      return jdbc
+          .query(
+              """
+              INSERT INTO agendamento.client_no_show_policy (tenant_id, threshold, version)
+              VALUES (?, ?, 1)
+              ON CONFLICT (tenant_id) DO NOTHING
+              RETURNING tenant_id, threshold, version
+              """,
+              PostgresClientNoShowPolicyRepository::mapPolicy,
+              tenantId,
+              threshold)
+          .stream()
+          .findFirst();
+    }
     return jdbc
         .query(
             """
-            INSERT INTO agendamento.client_no_show_policy (tenant_id, threshold, version)
-            SELECT ?, ?, 1 WHERE ? = 0
-            ON CONFLICT (tenant_id) DO UPDATE
-            SET threshold = EXCLUDED.threshold,
-                version = agendamento.client_no_show_policy.version + 1,
-                updated_at = clock_timestamp()
-            WHERE agendamento.client_no_show_policy.version = ?
+            UPDATE agendamento.client_no_show_policy
+            SET threshold = ?, version = version + 1, updated_at = clock_timestamp()
+            WHERE tenant_id = ? AND version = ?
             RETURNING tenant_id, threshold, version
             """,
-            (row, index) ->
-                new ClientNoShowPolicy(
-                    row.getObject("tenant_id", UUID.class),
-                    row.getInt("threshold"),
-                    row.getLong("version")),
-            tenantId,
+            PostgresClientNoShowPolicyRepository::mapPolicy,
             threshold,
-            expectedVersion,
+            tenantId,
             expectedVersion)
         .stream()
         .findFirst();
+  }
+
+  private static ClientNoShowPolicy mapPolicy(java.sql.ResultSet row, int index)
+      throws java.sql.SQLException {
+    return new ClientNoShowPolicy(
+        row.getObject("tenant_id", UUID.class), row.getInt("threshold"), row.getLong("version"));
   }
 }

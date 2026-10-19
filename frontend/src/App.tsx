@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { apiBaseUrl } from './config';
 import { commandKey } from './commandKey';
@@ -60,6 +60,18 @@ function AdminApp() {
     const [editing, setEditing] = useState<Service | null>(null);
     const [saving, setSaving] = useState(false);
     const pendingKeys = useRef(new Map<string, string>());
+    const handleNoShowPolicySessionInvalid = useCallback(
+        (responseStatus: number) => {
+            setSession(null);
+            setCsrf(null);
+            setStatus(
+                responseStatus === 401
+                    ? 'Sua sessão expirou. Entre novamente para continuar.'
+                    : 'Sua associação administrativa foi revogada ou o acesso foi negado.',
+            );
+        },
+        [],
+    );
 
     useEffect(() => {
         let active = true;
@@ -527,15 +539,7 @@ function AdminApp() {
                     <ClientNoShowPolicyPanel
                         enabled
                         csrf={csrf}
-                        onSessionInvalid={(responseStatus) => {
-                            setSession(null);
-                            setCsrf(null);
-                            setStatus(
-                                responseStatus === 401
-                                    ? 'Sua sessão expirou. Entre novamente para continuar.'
-                                    : 'Sua associação administrativa foi revogada ou o acesso foi negado.',
-                            );
-                        }}
+                        onSessionInvalid={handleNoShowPolicySessionInvalid}
                     />
                 )}
                 <AdminAgendaPanel

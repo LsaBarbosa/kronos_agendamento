@@ -39,39 +39,68 @@ export function ClientNoShowPolicyPanel({
     const [uncertain, setUncertain] = useState(false);
     const pending = useRef<{ body: object; key: string } | null>(null);
     const keys = useRef(new Map<string, string>());
+    const readGeneration = useRef(0);
+    const readController = useRef<AbortController | null>(null);
+
+    function invalidateReads() {
+        readGeneration.current += 1;
+        readController.current?.abort();
+        readController.current = null;
+        setLoading(false);
+    }
 
     const load = useCallback(async () => {
         if (!enabled || pending.current) return;
+        const generation = ++readGeneration.current;
+        readController.current?.abort();
+        const controller = new AbortController();
+        readController.current = controller;
         setLoading(true);
         setError('');
         try {
             const response = await fetch(
                 apiBaseUrl + '/v1/admin/no-show-policy',
-                { credentials: 'same-origin', cache: 'no-store' },
+                {
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    signal: controller.signal,
+                },
             );
+            if (generation !== readGeneration.current) return;
             if (response.status === 401 || response.status === 403) {
                 onSessionInvalid(response.status);
                 return;
             }
             if (!response.ok) throw new Error(await errorMessage(response));
             const result = (await response.json()) as Policy;
+            if (generation !== readGeneration.current) return;
             setPolicy(result);
             setThreshold(result.configured ? String(result.threshold) : '');
         } catch (loadError) {
-            setError(
-                loadError instanceof Error
-                    ? loadError.message
-                    : 'Não foi possível carregar a política.',
-            );
+            if (generation === readGeneration.current) {
+                setError(
+                    loadError instanceof Error
+                        ? loadError.message
+                        : 'Não foi possível carregar a política.',
+                );
+            }
         } finally {
-            setLoading(false);
+            if (generation === readGeneration.current) {
+                readController.current = null;
+                setLoading(false);
+            }
         }
     }, [enabled, onSessionInvalid]);
 
     useEffect(() => {
         if (!enabled) return;
         const timer = window.setTimeout(() => void load(), 0);
-        return () => window.clearTimeout(timer);
+        return () => {
+            window.clearTimeout(timer);
+            readGeneration.current += 1;
+            readController.current?.abort();
+            readController.current = null;
+        };
     }, [enabled, load]);
 
     async function save() {
@@ -90,6 +119,7 @@ export function ClientNoShowPolicyPanel({
         const key =
             pending.current?.key ??
             commandKey(keys.current, 'client-no-show-policy', body);
+        invalidateReads();
         pending.current = { body, key };
         setSaving(true);
         setError('');
@@ -125,9 +155,19 @@ export function ClientNoShowPolicyPanel({
                 return;
             }
             if (!response.ok) {
+                const message = await errorMessage(response);
+                if (response.status === 408 || response.status >= 500) {
+                    setUncertain(true);
+                    setError(
+                        'O servidor/gateway não confirmou o resultado. ' +
+                            message +
+                            ' Tente recuperar a mesma operação; não altere o comando.',
+                    );
+                    return;
+                }
                 pending.current = null;
                 setUncertain(false);
-                setError(await errorMessage(response));
+                setError(message);
                 return;
             }
             const saved = (await response.json()) as Policy;
@@ -189,7 +229,7 @@ export function ClientNoShowPolicyPanel({
                     <div className="admin-agenda__actions">
                         <button
                             type="button"
-                            disabled={saving || loading || !threshold}
+                            disabled={saving || !threshold}
                             onClick={() => void save()}
                         >
                             {saving
@@ -200,7 +240,7 @@ export function ClientNoShowPolicyPanel({
                         </button>
                         <button
                             type="button"
-                            disabled={loading || saving || uncertain}
+                            disabled={saving || uncertain}
                             onClick={() => void load()}
                         >
                             Atualizar política

@@ -1,6 +1,7 @@
 package com.appagendamento.clients;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -170,8 +172,33 @@ class ClientNoShowPolicyIT {
         .andExpect(header().string("Idempotency-Replayed", "true"))
         .andExpect(jsonPath("$.version").value(1));
 
+    String updateKey = "no-show-policy-update-" + UUID.randomUUID();
+    String updateBody = "{\"expectedVersion\":1,\"threshold\":4}";
+    mvc.perform(
+            put(PATH)
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", updateKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(updateBody))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.threshold").value(4))
+        .andExpect(jsonPath("$.version").value(2));
+
+    mvc.perform(
+            put(PATH)
+                .with(authentication(token(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", updateKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(updateBody))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.version").value(2));
+
     assertThat(count("client_no_show_policy")).isEqualTo(1);
-    assertThat(count("audit_event")).isEqualTo(1);
+    assertThat(count("audit_event")).isEqualTo(2);
+    assertThat(count("idempotency_record")).isEqualTo(2);
   }
 
   @Test
@@ -232,11 +259,61 @@ class ClientNoShowPolicyIT {
         .isEqualTo(1L);
   }
 
+  @Test
+  void concurrentUpdatesOfExistingPolicyHaveOneCasWinner() throws Exception {
+    replacePolicy.execute(actor, "seed-existing-" + UUID.randomUUID(), 0, 2);
+    CyclicBarrier start = new CyclicBarrier(2);
+    ExecutorService executor = Executors.newFixedThreadPool(2);
+    try {
+      Future<Boolean> first =
+          executor.submit(() -> updateAfterBarrier(start, "existing-a-" + UUID.randomUUID(), 1, 3));
+      Future<Boolean> second =
+          executor.submit(() -> updateAfterBarrier(start, "existing-b-" + UUID.randomUUID(), 1, 5));
+      assertThat(List.of(first.get(), second.get())).containsExactlyInAnyOrder(true, false);
+    } finally {
+      executor.shutdownNow();
+    }
+
+    assertThat(count("client_no_show_policy")).isEqualTo(1);
+    assertThat(count("audit_event")).isEqualTo(2);
+    assertThat(count("idempotency_record")).isEqualTo(2);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT version FROM agendamento.client_no_show_policy WHERE tenant_id = ?",
+                Long.class,
+                tenantId))
+        .isEqualTo(2L);
+  }
+
+  @Test
+  void auditFailureRollsBackPolicyAndIdempotencyReceipt() {
+    migrationJdbc.execute(
+        "CREATE FUNCTION agendamento.reject_no_show_policy_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action = 'CLIENT_NO_SHOW_POLICY_UPDATED' THEN RAISE EXCEPTION 'injected policy audit failure'; END IF; RETURN NEW; END $$");
+    migrationJdbc.execute(
+        "CREATE TRIGGER reject_no_show_policy_audit BEFORE INSERT ON agendamento.audit_event FOR EACH ROW EXECUTE FUNCTION agendamento.reject_no_show_policy_audit()");
+    try {
+      assertThatThrownBy(
+              () -> replacePolicy.execute(actor, "audit-failure-" + UUID.randomUUID(), 0, 3))
+          .isInstanceOf(DataAccessException.class);
+      assertThat(count("client_no_show_policy")).isZero();
+      assertThat(count("audit_event")).isZero();
+      assertThat(count("idempotency_record")).isZero();
+    } finally {
+      migrationJdbc.execute("DROP TRIGGER reject_no_show_policy_audit ON agendamento.audit_event");
+      migrationJdbc.execute("DROP FUNCTION agendamento.reject_no_show_policy_audit()");
+    }
+  }
+
   private boolean updateAfterBarrier(CyclicBarrier barrier, String key, int threshold)
       throws Exception {
+    return updateAfterBarrier(barrier, key, 0, threshold);
+  }
+
+  private boolean updateAfterBarrier(
+      CyclicBarrier barrier, String key, long expectedVersion, int threshold) throws Exception {
     barrier.await();
     try {
-      replacePolicy.execute(actor, key, 0, threshold);
+      replacePolicy.execute(actor, key, expectedVersion, threshold);
       return true;
     } catch (ClientNoShowPolicyVersionConflictException conflict) {
       return false;

@@ -176,13 +176,111 @@ try {
     await setSelectByLabel('Lembrete único antes do atendimento (horas)', '6', evaluate);
     await clickButtonByText('Salvar políticas', evaluate);
     await waitForText('Políticas salvas.', evaluate);
+
+    await waitForText('Limite ainda não configurado.', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.__noShowRequests = [];
+      window.__noShowCalls = [];
+      window.__holdNoShowReads = true;
+      window.__noShowGatewayFault = false;
+      window.__noShowOriginalFetch = originalFetch;
+      window.fetch = async (...args) => {
+        const url = String(args[0]);
+        const method = args[1]?.method ?? 'GET';
+        if (url.endsWith('/v1/admin/no-show-policy') && method === 'GET' && window.__holdNoShowReads) {
+          return new Promise(resolve => window.__noShowRequests.push({
+            release: () => resolve(new Response(JSON.stringify({configured:false, version:0, threshold:null, restrictionStatus:'NOT_TRACKED'}), {status:200, headers:{'Content-Type':'application/json'}}))
+          }));
+        }
+        if (url.endsWith('/v1/admin/no-show-policy') && method === 'PUT') {
+          const response = await originalFetch(...args);
+          const call = {body: args[1].body, key: args[1].headers['Idempotency-Key'], status: response.status, replayed: response.headers.get('Idempotency-Replayed')};
+          if (window.__noShowGatewayFault && response.ok) {
+            window.__noShowGatewayFault = false;
+            call.status = 503;
+            call.replayed = null;
+            window.__noShowCalls.push(call);
+            return new Response(JSON.stringify({error:{code:'GATEWAY_UNAVAILABLE',message:'Resposta substituída pelo gateway E2E'}}), {status:503, headers:{'Content-Type':'application/json'}});
+          }
+          window.__noShowCalls.push(call);
+          return response;
+        }
+        return originalFetch(...args);
+      };
+    })()`);
+    await clickButtonByText('Atualizar política', evaluate);
+    await clickButtonByText('Atualizar política', evaluate);
+    await waitUntil(() => evaluate('window.__noShowRequests.length === 2'));
+    await evaluate('window.__noShowRequests[0].release()');
     await setSelectById('no-show-threshold', '3', evaluate);
     await clickButtonByText('Salvar limite', evaluate);
     await waitForText('Limite salvo. A aplicação efetiva de restrições depende de AGD-033.', evaluate);
+    await evaluate(`(() => {
+      window.__holdNoShowReads = false;
+      window.__noShowRequests[1].release();
+    })()`);
+    const policyAfterStaleRead = await evaluate(`(() => ({
+      text: document.querySelector('#no-show-policy-title')?.parentElement?.innerText ?? '',
+      threshold: document.getElementById('no-show-threshold')?.value,
+      loading: [...document.querySelectorAll('output')].some(output => output.innerText.includes('Carregando política'))
+    }))()`);
+    if (
+        !policyAfterStaleRead.text.includes('Limite configurado: 3 falta(s), versão 1.') ||
+        policyAfterStaleRead.threshold !== '3' ||
+        policyAfterStaleRead.loading
+    ) {
+        throw new Error(`GET obsoleto substituiu a política salva ou manteve loading: ${JSON.stringify(policyAfterStaleRead)}`);
+    }
+
+    await setSelectById('no-show-threshold', '4', evaluate);
+    await evaluate('window.__noShowCalls = []; window.__noShowGatewayFault = true');
+    await clickButtonByText('Salvar limite', evaluate);
+    await waitForText('O servidor/gateway não confirmou o resultado.', evaluate);
+    const uncertainNoShow = await evaluate(`(() => ({
+      text: document.querySelector('#no-show-policy-title')?.parentElement?.innerText ?? '',
+      thresholdDisabled: document.getElementById('no-show-threshold')?.disabled,
+      retryText: [...document.querySelectorAll('button')].find(button => button.innerText.includes('Recuperar operação'))?.innerText,
+      calls: window.__noShowCalls
+    }))()`);
+    if (
+        !uncertainNoShow.thresholdDisabled ||
+        !uncertainNoShow.retryText ||
+        uncertainNoShow.calls.length !== 1 ||
+        uncertainNoShow.calls[0].status !== 503 ||
+        JSON.parse(uncertainNoShow.calls[0].body).expectedVersion !== 1 ||
+        JSON.parse(uncertainNoShow.calls[0].body).threshold !== 4
+    ) {
+        throw new Error(`UI não preservou o comando após 503: ${JSON.stringify(uncertainNoShow)}`);
+    }
+    await clickButtonByText('Recuperar operação', evaluate);
+    await waitForText('Limite salvo. A aplicação efetiva de restrições depende de AGD-033.', evaluate);
+    const recoveredNoShow = await evaluate(`(() => ({
+      text: document.querySelector('#no-show-policy-title')?.parentElement?.innerText ?? '',
+      threshold: document.getElementById('no-show-threshold')?.value,
+      calls: window.__noShowCalls
+    }))()`);
+    if (
+        !recoveredNoShow.text.includes('Limite configurado: 4 falta(s), versão 2.') ||
+        recoveredNoShow.threshold !== '4' ||
+        recoveredNoShow.calls.length !== 2 ||
+        recoveredNoShow.calls[0].body !== recoveredNoShow.calls[1].body ||
+        recoveredNoShow.calls[0].key !== recoveredNoShow.calls[1].key ||
+        recoveredNoShow.calls[1].replayed !== 'true'
+    ) {
+        throw new Error(`Retry após 503 mudou intenção ou não recuperou o receipt: ${JSON.stringify(recoveredNoShow)}`);
+    }
+    const noShowEffects = Number(queryPostgres(
+        `SELECT CASE WHEN (SELECT count(*) FROM agendamento.client_no_show_policy WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND threshold = 4 AND version = 2) = 1 AND (SELECT count(*) FROM agendamento.audit_event WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND action = 'CLIENT_NO_SHOW_POLICY_UPDATED') = 2 AND (SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND command_scope = 'clients.no-show-policy.replace.v1' AND state = 'COMPLETED') = 2 THEN 1 ELSE 0 END`,
+        appEnvironment,
+    ));
+    if (noShowEffects !== 1) throw new Error('Retries da política criaram mais de uma mutação, auditoria ou receipt por comando.');
+    console.log('Browser: GET obsoleto não substituiu v1; 503 após commit recuperou o mesmo body/chave, receipt e versão v2.');
+
     await clickButtonByText('Recarregar configuração persistida', evaluate);
     await waitForText('Configuração recarregada.', evaluate);
     await clickButtonByText('Atualizar política', evaluate);
-    await waitForText('Limite configurado: 3 falta(s), versão 1.', evaluate);
+    await waitForText('Limite configurado: 4 falta(s), versão 2.', evaluate);
     const persistedSchedule = await evaluate(
         "fetch('/api/v1/admin/schedule/weekly-periods', {credentials:'same-origin'}).then(response => response.json())",
     );
@@ -203,8 +301,8 @@ try {
         persistedPolicy.cancellationCutoffHours !== 4 ||
         persistedPolicy.reminderOffsetHours !== 6 ||
         !persistedNoShowPolicy.configured ||
-        persistedNoShowPolicy.threshold !== 3 ||
-        persistedNoShowPolicy.version !== 1 ||
+        persistedNoShowPolicy.threshold !== 4 ||
+        persistedNoShowPolicy.version !== 2 ||
         persistedNoShowPolicy.restrictionStatus !== 'NOT_TRACKED'
     ) {
         throw new Error('Grade/políticas não persistiram ou divergiram após recarregar.');
