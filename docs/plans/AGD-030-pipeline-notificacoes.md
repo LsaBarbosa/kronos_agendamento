@@ -58,7 +58,7 @@
 - A outbox atual já tem worker genérico, mas nenhum provider; sua lease recuperável após crash foi desenhada para publicação idempotente e não deve ser reutilizada para reenviar cegamente mensagens de resultado ambíguo.
 - O adapter controlado prova composição e transações, não entrega, template ou autenticidade de fornecedor real.
 - Não há mecanismo genérico suficiente para declarar ordenação de webhook sem protocolo selecionado; a camada normalizada exige sequência monotônica do adapter e permanece fechada em produção.
-- Claims são adquiridos um a um imediatamente antes do processamento externo; o limite de lote não reserva leases antecipadamente.
+- Claims são adquiridos um a um; após preflight, token e lease são revalidados imediatamente antes da chamada externa. Claim inválido não inicia transporte; o sweeper ainda classifica lease expirada como `OUTCOME_UNKNOWN` conservadoramente.
 - Inbox persiste somente campos normalizados mínimos. Evidência recebida antes de `markAccepted` fica pendente e é reconciliada atomicamente após a referência persistir. Duplicatas mantêm identidade única antes da correlação; sequência antiga não regride estado.
 - Para `OUTCOME_UNKNOWN` sem referência e sem consulta/idempotência suportada pelo fornecedor, a evidência não pode ser associada com segurança. Mantém-se o estado desconhecido para reconciliação operacional; não há retry cego.
 
@@ -73,4 +73,4 @@
 
 - Corrigir reivindicação em lote para uma intenção por vez, preservando lease/fencing e tratamento conservador da chamada em curso cujo lease expire.
 - V23 cria `notification_evidence_inbox`, deduplicação por provedor/evento e vínculo posterior à intenção; migra evidências já persistidas de V22 sem payload bruto.
-- Evidência local executada no código `23e502b`: `spotless:check verify` em Java 21 — 73 unitários/arquiteturais e 182 integrações PostgreSQL 16.13/Testcontainers; `NotificationPipelineIT` 14/14 e `TenantPersistenceIT` 22/22. Inclui corrida com latch/lease vencida, fake send admitindo webhook antes do aceite, dedupe/ordem/rollback, instalação limpa, upgrade V22→V23, validate/rerun e privilégios runtime. CI remoto do head documental será registrado após conclusão.
+- Evidência local executada no código `561bde7`: `spotless:check verify` em Java 21 — 73 unitários/arquiteturais e 183 integrações PostgreSQL 16.13/Testcontainers; `NotificationPipelineIT` 15/15 e `TenantPersistenceIT` 22/22. Inclui corrida com latch/lease vencida, rejeição de claim expirado no preflight, fake send admitindo webhook antes do aceite, dedupe/ordem/rollback, instalação limpa, upgrade V22→V23, validate/rerun e privilégios runtime. CI remoto dos commits documentais será confirmado em VALIDATION.
