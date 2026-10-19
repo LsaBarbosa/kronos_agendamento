@@ -1843,7 +1843,7 @@ try {
     await clickButtonByText('Tentar novamente', evaluate);
     await waitForText('A resposta de recuperação é inválida.', evaluate);
     await clickButtonByText('Tentar novamente', evaluate);
-    await waitForText('Acesso verificado neste tenant.', evaluate);
+    await waitForText('Suas reservas', evaluate);
     if (!(await evaluate('window.__clientVerifyResponseLost === true'))) {
         throw new Error('A resposta perdida da verificação não foi simulada.');
     }
