@@ -1952,8 +1952,7 @@ try {
         appEnvironment,
     );
     await navigate(`http://localhost:5173/client-access/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
-    await waitForText('Entre com seu telefone', evaluate);
-    await setFieldById('client-phone', differentPhone, evaluate);
+    await waitForText('Suas reservas', evaluate);
     await evaluate(`(() => {
       const originalFetch = window.fetch.bind(window);
       window.__oldSessionVerifyResponseLost = false;
@@ -1961,9 +1960,6 @@ try {
         const response = await originalFetch(...args);
         const requestUrl = args[0] instanceof Request ? args[0].url : String(args[0]);
         const requestMethod = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
-        if (requestUrl.includes('/access-challenges') && !requestUrl.endsWith('/verify') && requestMethod.toUpperCase() === 'POST') {
-          window.__clientAccessChallengeId = (await response.clone().json()).challengeId;
-        }
         if (requestUrl.endsWith('/verify') && requestMethod.toUpperCase() === 'POST' && response.status === 401 && !window.__oldSessionVerifyResponseLost) {
           window.__oldSessionVerifyResponseLost = true;
           throw new TypeError('Simulated lost rejected verification response');
@@ -1971,12 +1967,18 @@ try {
         return response;
       };
     })()`);
-    await clickButtonByText('Solicitar código', evaluate);
-    await waitUntil(() => evaluate("Boolean(document.querySelector('#client-code'))"));
-    const rejectedChallengeId = await evaluate('window.__clientAccessChallengeId ?? null');
-    if (!rejectedChallengeId) {
-        throw new Error('E2E não capturou o challenge para testar sessão antiga.');
-    }
+    const challenge = await evaluate(`(async () => {
+      const csrf = await fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'}).then(response => response.json());
+      const response = await fetch('/api/v1/public/${encodeURIComponent(demoTenantSlug)}/access-challenges', {
+        method:'POST', credentials:'same-origin', cache:'no-store',
+        headers:{'Content-Type':'application/json', [csrf.headerName]:csrf.token, 'Idempotency-Key':${JSON.stringify(randomUUID())}},
+        body:JSON.stringify({phone:${JSON.stringify(differentPhone)}}),
+      });
+      if (!response.ok) throw new Error('Challenge do telefone diferente foi rejeitado: ' + response.status);
+      return response.json();
+    })()`);
+    const rejectedChallengeId = challenge.challengeId;
+    if (!rejectedChallengeId) throw new Error('E2E não recebeu challenge para testar sessão antiga.');
     const rejectedCodeResponse = await fetch(`http://localhost:${appPort}/internal/e2e/access-challenges/${rejectedChallengeId}/code`, {
         headers: { 'X-E2E-Emitter-Secret': emitterSecret },
         cache: 'no-store',
@@ -1984,20 +1986,25 @@ try {
     if (!rejectedCodeResponse.ok) throw new Error('Emissor E2E não retornou código para o challenge de sessão antiga.');
     const rejectedCode = (await rejectedCodeResponse.json()).code;
     const rejectedWrongCode = rejectedCode === '000000' ? '000001' : '000000';
-    await setFieldById('client-code', rejectedWrongCode, evaluate);
-    await clickButtonByText('Verificar código', evaluate);
-    await waitForText('Não foi possível confirmar o resultado.', evaluate);
-    await clickButtonByText('Tentar novamente', evaluate);
-    await waitForText('Código inválido, expirado ou temporariamente bloqueado.', evaluate);
+    const rejectedVerification = await evaluate(`(async () => {
+      const csrf = await fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'}).then(response => response.json());
+      const url = '/api/v1/public/${encodeURIComponent(demoTenantSlug)}/access-challenges/${rejectedChallengeId}/verify';
+      const options = {method:'POST', credentials:'same-origin', cache:'no-store', headers:{'Content-Type':'application/json', [csrf.headerName]:csrf.token}, body:JSON.stringify({code:${JSON.stringify(rejectedWrongCode)}})};
+      let responseLost = false;
+      try { await fetch(url, options); } catch { responseLost = true; }
+      const retry = await fetch(url, options);
+      const sessionForChallenge = await fetch('/api/v1/client/session?slug=${encodeURIComponent(demoTenantSlug)}&challengeId=${rejectedChallengeId}', {credentials:'same-origin', cache:'no-store'}).then(result => result.json());
+      const previousSession = await fetch('/api/v1/client/session', {credentials:'same-origin', cache:'no-store'}).then(result => result.json());
+      return {responseLost, retryStatus:retry.status, sessionForChallenge, previousSession};
+    })()`);
     const oldSessionDom = await evaluate(`(async () => ({
       rejectedResponseLost: window.__oldSessionVerifyResponseLost,
-      successVisible: document.body.innerText.includes('Acesso verificado neste tenant.'),
-      rejectionVisible: document.body.innerText.includes('Código inválido, expirado ou temporariamente bloqueado.'),
-      session: await fetch('/api/v1/client/session?slug=${encodeURIComponent(demoTenantSlug)}&challengeId=${rejectedChallengeId}', {credentials:'same-origin', cache:'no-store'}).then(response => response.json()),
+      clientAreaVisible: document.body.innerText.includes('Suas reservas'),
     }))()`);
-    if (!oldSessionDom.rejectedResponseLost || oldSessionDom.successVisible || !oldSessionDom.rejectionVisible ||
-        oldSessionDom.session.authenticated) {
-        throw new Error(`Sessão anterior confirmou indevidamente challenge de outro telefone: ${JSON.stringify(oldSessionDom)}`);
+    if (!oldSessionDom.rejectedResponseLost || !oldSessionDom.clientAreaVisible ||
+        rejectedVerification.retryStatus !== 401 || rejectedVerification.sessionForChallenge.authenticated ||
+        !rejectedVerification.previousSession.authenticated) {
+        throw new Error(`Sessão anterior confirmou indevidamente challenge de outro telefone: ${JSON.stringify({oldSessionDom, rejectedVerification})}`);
     }
     const sessionRowsAfterRejectedRecovery = queryPostgres(
         `SELECT count(*) FROM agendamento.client_access_session WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
