@@ -1907,6 +1907,11 @@ try {
     })()`);
     await clickButtonByText('Confirmar cancelamento', evaluate);
     await waitForText('Não foi possível confirmar o resultado.', evaluate);
+    await waitUntil(() =>
+        evaluate(
+            "Boolean([...document.querySelectorAll('button')].find(button => button.innerText === 'Repetir a mesma tentativa' && !button.disabled))",
+        ),
+    );
     const cancellationPendingDom = await evaluate(`({
       message: [...document.querySelectorAll('[role=status]')].map(node => node.innerText).join(' '),
       retry: [...document.querySelectorAll('button')].find(button => button.innerText === 'Repetir a mesma tentativa')?.disabled,
