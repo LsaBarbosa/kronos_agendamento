@@ -15,6 +15,7 @@ AGD-030 persiste notificações imediatas e oferece outbox, receipts, claims ind
 - Eventos que não correspondem à versão/estado corrente não criam intent. Remarcação invalida intents anteriores; estado terminal invalida os lembretes ainda pendentes. O feed inclui `AppointmentCompleted` e `ClientNoShowRecorded` além de confirmação, remarcação e cancelamento.
 - Cada intent é reivindicada imediatamente antes do preflight/transporte, nunca um lote inteiro. Antes de chamar o adapter, o worker verifica token/lease, status, versão e `starts_at > Clock.instant()`. Não existe chamada externa dentro de transação. Uma alteração após o início da chamada não pode cancelar efeito em voo.
 - Falta de transport configurado mantém produção sem claim e sem tentativa. `OUTCOME_UNKNOWN` continua sem retry automático. Métricas são agregadas e não usam PII ou labels tenant/reserva.
+- V25 separa elegibilidade e resultado da tentativa com `notification_intent.reminder_eligible`. Evento de cancelamento/remarcação obsoleta PENDING/RETRY e marca CLAIMED inelegível sem limpar ownership/lease nem alterar attempt STARTED. `authorizeSend` e `claimDue` rejeitam lembrete inelegível. Se o transporte já começou, aceite com referência permanece gravável e a correlação de evidência continua no protocolo comum do ADR-0020; resultado ambíguo permanece `OUTCOME_UNKNOWN`, sem retry automático. Uma falha conhecida sem efeito, retornada depois da invalidação, encerra a intent como obsoleta e preserva o resultado detalhado na tentativa.
 
 ## Questões de produto ainda abertas
 
@@ -26,4 +27,5 @@ AGD-030 persiste notificações imediatas e oferece outbox, receipts, claims ind
 
 - Nenhum novo broker ou fornecedor é necessário para provar o fluxo local. Adapter de teste prova composição e estados, não WhatsApp, template, aceite ou entrega real.
 - A revalidação imediatamente antes do transporte minimiza envio obsoleto, mas não fornece cancelamento de chamada já em voo nem exactly-once externo.
-- Não há expurgo/TTL novo; retenção permanece pendente. V1–V23 permanecem imutáveis.
+- V25 acrescenta somente a elegibilidade persistida; V1–V24 permanecem imutáveis. Instalação limpa, upgrade V24→V25, validate/rerun e privilégios runtime são verificados em PostgreSQL real.
+- Não há expurgo/TTL novo; retenção permanece pendente.

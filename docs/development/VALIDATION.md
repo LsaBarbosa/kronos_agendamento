@@ -1,5 +1,16 @@
 # Evidências de validação — AGD-001
 
+## Follow-up P2 AGD-031 — invalidação durante envio em voo
+
+- Base revisada: `83298afc1e93199f928bf6424ac981ec009c8dd1`; código validado/commit `5da586ce4ca01f3834e2f897b59db1dae10386a0`, mesma branch `agd-031-lembrete-unico` e PR #19. V1–V24 preservadas; migration V25 adiciona elegibilidade persistida separada do estado e resultado do transporte.
+- Causa: `obsoleteReminders` convertia tentativas `STARTED` e claims ainda em execução para `OBSOLETE`, limpando o token/lease. Uma resposta aceita ou ambígua posterior perdia o vínculo ao claim original e podia desaparecer da correlação/telemetria transacional.
+- Correção: invalidação define `reminder_eligible=false`; PENDING/RETRY ficam `OBSOLETE`, mas CLAIMED e attempt STARTED retêm ownership. `claimDue`/`authorizeSend` barram novos envios inelegíveis. Resposta in-flight aceita persiste referência e chama reconciliação de evidência pelo protocolo ADR-0020; AMBIGUOUS persiste `OUTCOME_UNKNOWN` sem retry. Falha conhecida sem efeito não reabre envio após invalidação. Nenhuma transação/lock de banco cobre chamada externa.
+- Regressões PostgreSQL: `NotificationPipelineIT` 26/26. Latches provam evento de cancelamento durante send, aceite/referência e webhook autenticado posterior correlacionado/deduplicado; evento de remarcação durante send e resultado AMBIGUOUS sem retry; evento terminal no preflight antes de `authorizeSend` gera zero chamadas de transporte.
+- Migration: `TenantPersistenceIT` 24/24. V25 executada em instalação limpa e upgrade V24→V25; `validate`, rerun sem alterações e grants de runtime para coluna/tabela verificados. V1–V24 intactas, sem Flyway repair.
+- Gate integral em `backend/`: `env JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` — `BUILD SUCCESS`, 77 unitários/arquiteturais e 196 integrações PostgreSQL 16.13/Testcontainers. Testes focados: `./mvnw -B -ntp -Dit.test=NotificationPipelineIT verify` (26/26) e `./mvnw -B -ntp -Dit.test=TenantPersistenceIT verify` (24/24), ambos com JDK 21.
+- Execuções intermediárias: Docker não estava acessível no sandbox para uma tentativa isolada de `TenantPersistenceIT`; com execução autorizada o teste rodou contra Testcontainers. Uma execução intermediária também revelou expectations antigas de contagem de migration, atualizadas para incluir V25; a suíte final passou sem reduzir assertions. A primeira execução focada da evidência usou um identificador de provedor divergente no fixture; corrigido o fixture para o mesmo provedor configurado, o teste passou.
+- Revisão final sequencial; tentativa de delegação independente recusada pelo limite de threads, portanto não alegada revisão independente nem aprovação humana. Sem mudança HTTP/OpenAPI: estado interno persistido. App CI/CodeQL push e PR para o head documental final ainda pendentes; nenhum envio real ou deploy.
+
 ## AGD-031 — Lembrete único (validação local)
 
 - Base: PR #18/AGD-030 integrado em `ce417455c058a13a3dc3113d89729f3d9d0645af`; branch `agd-031-lembrete-unico`. O merge de AGD-030 teve App CI [39305915505](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39305915505) e CodeQL [39305915408](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39305915408), todos os jobs concluídos com sucesso.
