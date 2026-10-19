@@ -1552,6 +1552,15 @@ try {
     await waitForText('Sessão administrativa ativa.', evaluate);
     console.log('Browser: expiração local de 30 min, renovação por atividade e novo login via SSO validados.');
 
+    await waitUntil(() => evaluate("[...document.querySelectorAll('button')].some(button => button.innerText.trim() === 'Publicar página')"));
+    await clickButtonByText('Publicar página', evaluate);
+    await waitForText('Estado: Publicado', evaluate);
+    const republishedPublicPage = await evaluate("fetch('/api/v1/admin/publication', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())");
+    if (republishedPublicPage.published !== true) {
+        throw new Error('Fixture E2E não republicou o tenant pelo fluxo administrativo antes da reserva pública de AGD-025.');
+    }
+    console.log('Browser: fixture legal/comercial controlada foi publicada explicitamente pela UI administrativa para o cenário AGD-025.');
+
     await waitUntil(() =>
         evaluate("Boolean([...document.querySelectorAll('button')].find(button => !button.disabled))"),
     );
