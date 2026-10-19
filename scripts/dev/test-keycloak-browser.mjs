@@ -1891,7 +1891,7 @@ try {
       window.fetch = async (...args) => {
         const url = args[0] instanceof Request ? args[0].url : String(args[0]);
         const method = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
-        if (new URL(url).pathname !== '/api/v1/client/appointments' || method.toUpperCase() !== 'GET') {
+        if (new URL(url, window.location.href).pathname !== '/api/v1/client/appointments' || method.toUpperCase() !== 'GET') {
           return window.__clientListOriginalFetch(...args);
         }
         if (url.includes('cursor=') && window.__holdClientPage) {
