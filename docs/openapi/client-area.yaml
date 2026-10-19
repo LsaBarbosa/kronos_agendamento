@@ -18,8 +18,10 @@ paths:
         Ordenação startsAt crescente com appointmentId como desempate. Páginas
         de 20 itens. Sem status, lista todas as reservas próprias; status=future
         filtra startsAt maior ou igual ao instante capturado na consulta. Cursor
-        é um appointmentId marcador e só é aceito se pertencer à identidade
-        autenticada. Resposta privada no-store.
+        carrega a tupla (startsAt, appointmentId) emitida originalmente e fica
+        vinculado ao tenant/cliente autenticados; a propriedade do marcador é
+        revalidada sem reconstruir a fronteira a partir do estado atual da
+        reserva. Resposta privada no-store.
       parameters:
         - name: status
           in: query
@@ -32,8 +34,7 @@ paths:
           required: false
           schema:
             type: string
-            format: uuid
-            maxLength: 64
+            maxLength: 256
       responses:
         '200':
           description: Página de reservas próprias
@@ -153,7 +154,10 @@ components:
         items:
           type: array
           items: { $ref: '#/components/schemas/Appointment' }
-        nextCursor: { type: [string, 'null'], format: uuid }
+        nextCursor:
+          type: [string, 'null']
+          maxLength: 256
+          description: Cursor keyset opaco vinculado à identidade cliente autenticada e à tupla de ordenação originalmente emitida.
         hasMore: { type: boolean }
     ApiError:
       type: object

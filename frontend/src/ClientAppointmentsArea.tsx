@@ -56,20 +56,30 @@ export function ClientAppointmentsArea({
     const [loadingMore, setLoadingMore] = useState(false);
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
-    const [confirming, setConfirming] = useState<string | null>(null);
+    const [confirming, setConfirming] = useState<ClientAppointment | null>(
+        null,
+    );
     const [cancelIntent, setCancelIntent] = useState<CancelIntent | null>(null);
     const [cancelSaving, setCancelSaving] = useState(false);
     const [cancelUncertain, setCancelUncertain] = useState(false);
     const cancelGuard = useRef(false);
-    const requestSequence = useRef(0);
+    const listRequestSequence = useRef(0);
+    const detailRequestSequence = useRef(0);
+    const refreshSequence = useRef(0);
+    const loadMoreSequence = useRef(0);
     const active = useRef(true);
     const sessionValid = useRef(true);
 
     const endClientSession = useCallback(() => {
         sessionValid.current = false;
-        requestSequence.current++;
+        listRequestSequence.current++;
+        detailRequestSequence.current++;
+        refreshSequence.current++;
+        loadMoreSequence.current++;
         setItems([]);
         setSelected(null);
+        setLoading(false);
+        setLoadingMore(false);
         setCancelIntent(null);
         setCancelUncertain(false);
         onSessionEnded();
@@ -77,7 +87,10 @@ export function ClientAppointmentsArea({
 
     const loadAppointments = useCallback(
         async (append: boolean, nextCursor?: string | null) => {
-            const sequence = ++requestSequence.current;
+            const sequence = ++listRequestSequence.current;
+            const operationSequence = append
+                ? ++loadMoreSequence.current
+                : ++refreshSequence.current;
             if (append) setLoadingMore(true);
             else {
                 setLoading(true);
@@ -95,7 +108,7 @@ export function ClientAppointmentsArea({
                 if (
                     !active.current ||
                     !sessionValid.current ||
-                    sequence !== requestSequence.current
+                    sequence !== listRequestSequence.current
                 )
                     return;
                 if (response.status === 401 || response.status === 403) {
@@ -112,7 +125,7 @@ export function ClientAppointmentsArea({
                 if (
                     !active.current ||
                     !sessionValid.current ||
-                    sequence !== requestSequence.current
+                    sequence !== listRequestSequence.current
                 )
                     return;
                 if (
@@ -137,19 +150,23 @@ export function ClientAppointmentsArea({
                 if (
                     active.current &&
                     sessionValid.current &&
-                    sequence === requestSequence.current
+                    sequence === listRequestSequence.current
                 )
                     setError(
                         'Serviço indisponível. Suas reservas não foram alteradas.',
                     );
             } finally {
-                if (
-                    active.current &&
-                    sessionValid.current &&
-                    sequence === requestSequence.current
-                ) {
-                    setLoading(false);
-                    setLoadingMore(false);
+                if (active.current && sessionValid.current) {
+                    if (
+                        append &&
+                        operationSequence === loadMoreSequence.current
+                    )
+                        setLoadingMore(false);
+                    if (
+                        !append &&
+                        operationSequence === refreshSequence.current
+                    )
+                        setLoading(false);
                 }
             }
         },
@@ -172,7 +189,7 @@ export function ClientAppointmentsArea({
         setError('');
         setNotice('');
         if (!sessionValid.current) return;
-        const sequence = ++requestSequence.current;
+        const sequence = ++detailRequestSequence.current;
         try {
             const response = await fetch(
                 `${apiBaseUrl}/v1/client/appointments/${encodeURIComponent(appointmentId)}`,
@@ -181,7 +198,7 @@ export function ClientAppointmentsArea({
             if (
                 !active.current ||
                 !sessionValid.current ||
-                sequence !== requestSequence.current
+                sequence !== detailRequestSequence.current
             )
                 return;
             if (response.status === 401 || response.status === 403) {
@@ -197,12 +214,16 @@ export function ClientAppointmentsArea({
             if (
                 !active.current ||
                 !sessionValid.current ||
-                sequence !== requestSequence.current
+                sequence !== detailRequestSequence.current
             )
                 return;
             setSelected(detail);
         } catch {
-            if (active.current && sessionValid.current)
+            if (
+                active.current &&
+                sessionValid.current &&
+                sequence === detailRequestSequence.current
+            )
                 setError(
                     'Não foi possível carregar os detalhes. Tente novamente.',
                 );
@@ -217,7 +238,7 @@ export function ClientAppointmentsArea({
             cancelSaving
         )
             return;
-        setConfirming(appointment.appointmentId);
+        setConfirming({ ...appointment });
         setError('');
         setNotice('');
     }
@@ -225,16 +246,9 @@ export function ClientAppointmentsArea({
     async function confirmCancellation() {
         if (cancelGuard.current || !confirming) return;
         cancelGuard.current = true;
-        const appointment =
-            items.find((item) => item.appointmentId === confirming) ?? selected;
-        if (!appointment || appointment.appointmentId !== confirming) {
-            cancelGuard.current = false;
-            setConfirming(null);
-            return;
-        }
         const intent: CancelIntent = {
-            appointmentId: appointment.appointmentId,
-            body: { expectedVersion: appointment.version },
+            appointmentId: confirming.appointmentId,
+            body: { expectedVersion: confirming.version },
             key: crypto.randomUUID(),
         };
         setCancelIntent(intent);
@@ -400,6 +414,18 @@ export function ClientAppointmentsArea({
                 <option value="future">Próximas</option>
                 <option value="all">Todas</option>
             </select>
+            <button
+                type="button"
+                disabled={
+                    loading ||
+                    Boolean(cancelIntent) ||
+                    cancelSaving ||
+                    cancelUncertain
+                }
+                onClick={() => void loadAppointments(false)}
+            >
+                Atualizar reservas
+            </button>
             {notice && <output aria-live="polite">{notice}</output>}
             {error && <p role="alert">{error}</p>}
             {cancelUncertain && cancelIntent && (
@@ -419,7 +445,7 @@ export function ClientAppointmentsArea({
                     </button>
                 </div>
             )}
-            {loading ? (
+            {loading && items.length === 0 ? (
                 <output>Carregando reservas…</output>
             ) : items.length === 0 ? (
                 <p>Nenhuma reserva encontrada.</p>
@@ -473,6 +499,9 @@ export function ClientAppointmentsArea({
                         </li>
                     ))}
                 </ul>
+            )}
+            {loading && items.length > 0 && (
+                <output aria-live="polite">Atualizando reservas…</output>
             )}
             {hasMore && cursor && !loading && (
                 <button
@@ -542,7 +571,10 @@ export function ClientAppointmentsArea({
                     <h3 id="client-cancel-confirm-title">
                         Confirmar cancelamento?
                     </h3>
-                    <p>Esta ação cancela somente a reserva selecionada.</p>
+                    <p>
+                        Esta ação cancela somente a reserva selecionada ({' '}
+                        {confirming.serviceName}, versão {confirming.version}).
+                    </p>
                     <button
                         type="button"
                         onClick={() => void confirmCancellation()}

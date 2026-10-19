@@ -6,8 +6,10 @@ import com.appagendamento.appointments.domain.ClientAppointmentQueryException;
 import com.appagendamento.clientaccess.api.ClientAccessIdentityQuery;
 import com.appagendamento.clientaccess.api.VerifiedClientIdentity;
 import com.appagendamento.clients.api.ClientAccountLookup;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -56,7 +58,10 @@ public class GetClientAppointments {
     boolean hasMore = fetched.size() > PAGE_SIZE;
     List<ClientAppointmentView> items =
         List.copyOf(fetched.subList(0, Math.min(PAGE_SIZE, fetched.size())));
-    String nextCursor = hasMore && !items.isEmpty() ? Cursor.encode(items.getLast()) : null;
+    String nextCursor =
+        hasMore && !items.isEmpty()
+            ? Cursor.encode(items.getLast(), identity.tenantId(), clientId)
+            : null;
     return new ClientAppointmentPage(items, nextCursor, hasMore);
   }
 
@@ -87,20 +92,35 @@ public class GetClientAppointments {
         String encoded, UUID tenantId, UUID clientId, AppointmentRepository appointments) {
       if (encoded == null || encoded.isBlank()) return null;
       try {
-        if (encoded.length() > 64) throw new IllegalArgumentException();
-        UUID appointmentId = UUID.fromString(encoded);
-        ClientAppointmentView ownerBoundPosition =
-            appointments
-                .findClientAppointment(tenantId, clientId, appointmentId)
-                .orElseThrow(IllegalArgumentException::new);
-        return new Cursor(ownerBoundPosition.startsAt(), appointmentId);
+        if (encoded.length() > 256) throw new IllegalArgumentException();
+        String decoded = new String(Base64.getUrlDecoder().decode(encoded), StandardCharsets.UTF_8);
+        String[] fields = decoded.split("\\|", -1);
+        if (fields.length != 3) throw new IllegalArgumentException();
+        Instant startsAt = Instant.parse(fields[0]);
+        UUID appointmentId = UUID.fromString(fields[1]);
+        String binding = fields[2];
+        if (!binding.equals(tenantId + ":" + clientId)) throw new IllegalArgumentException();
+        appointments
+            .findClientAppointment(tenantId, clientId, appointmentId)
+            .orElseThrow(IllegalArgumentException::new);
+        return new Cursor(startsAt, appointmentId);
       } catch (RuntimeException exception) {
         throw new ClientAppointmentQueryException();
       }
     }
 
-    static String encode(ClientAppointmentView appointment) {
-      return appointment.appointmentId().toString();
+    static String encode(ClientAppointmentView appointment, UUID tenantId, UUID clientId) {
+      String value =
+          appointment.startsAt()
+              + "|"
+              + appointment.appointmentId()
+              + "|"
+              + tenantId
+              + ":"
+              + clientId;
+      return Base64.getUrlEncoder()
+          .withoutPadding()
+          .encodeToString(value.getBytes(StandardCharsets.UTF_8));
     }
   }
 }

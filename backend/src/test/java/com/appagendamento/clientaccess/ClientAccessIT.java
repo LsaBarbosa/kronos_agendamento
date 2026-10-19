@@ -798,6 +798,93 @@ class ClientAccessIT {
   }
 
   @Test
+  void clientCursorKeepsOriginalBoundaryWhenMarkerMovesForwardOrBackward() throws Exception {
+    Instant firstStart = now.plusSeconds(86_400);
+    List<UUID> appointmentIds = new ArrayList<>();
+    for (int index = 0; index < 21; index++) {
+      appointmentIds.add(insertClientAppointment(PHONE, firstStart.plusSeconds(index * 3_600L)));
+    }
+    String cookie = verifiedClientCookie(slug, PHONE);
+
+    var forwardFirst = clientPage(cookie, null);
+    UUID forwardMarker = UUID.fromString(forwardFirst.at("/items/19/appointmentId").asText());
+    UUID forwardRemaining = UUID.fromString(forwardFirst.at("/items/0/appointmentId").asText());
+    Instant originalForwardBoundary = Instant.parse(forwardFirst.at("/items/19/startsAt").asText());
+    UUID remainingAppointment = appointmentIds.get(20);
+    Instant remainingStartsAt = firstStart.plusSeconds(20 * 3_600L);
+    moveClientAppointment(forwardMarker, remainingStartsAt.plusSeconds(3_600));
+
+    var forwardNext = clientPage(cookie, forwardFirst.get("nextCursor").asText());
+    assertThat(forwardNext.at("/items/0/appointmentId").asText())
+        .isEqualTo(remainingAppointment.toString());
+    assertThat(forwardNext.at("/items/0/appointmentId").asText())
+        .isNotEqualTo(forwardRemaining.toString());
+    assertThat(Instant.parse(forwardNext.at("/items/0/startsAt").asText()))
+        .isEqualTo(remainingStartsAt);
+    assertThat(originalForwardBoundary).isBefore(remainingStartsAt);
+
+    moveClientAppointment(forwardMarker, firstStart.plusSeconds(19 * 3_600L));
+    var backwardFirst = clientPage(cookie, null);
+    UUID backwardMarker = UUID.fromString(backwardFirst.at("/items/19/appointmentId").asText());
+    UUID backwardRemaining = appointmentIds.get(20);
+    Instant originalBackwardBoundary =
+        Instant.parse(backwardFirst.at("/items/19/startsAt").asText());
+    moveClientAppointment(backwardMarker, firstStart.minusSeconds(3_600));
+
+    var backwardNext = clientPage(cookie, backwardFirst.get("nextCursor").asText());
+    assertThat(backwardNext.at("/items/0/appointmentId").asText())
+        .isEqualTo(backwardRemaining.toString());
+    assertThat(Instant.parse(backwardNext.at("/items/0/startsAt").asText()))
+        .isEqualTo(firstStart.plusSeconds(20 * 3_600L));
+    assertThat(originalBackwardBoundary)
+        .isBefore(Instant.parse(backwardNext.at("/items/0/startsAt").asText()));
+  }
+
+  @Test
+  void clientCursorFromAnotherAuthenticatedOwnerIsRejected() throws Exception {
+    String otherPhone = "+5511999991189";
+    UUID otherClientId = UUID.randomUUID();
+    ownerJdbc.update(
+        "INSERT INTO agendamento.client(client_id, tenant_id, display_name, normalized_phone) VALUES (?, ?, 'Outro cursor', ?)",
+        otherClientId,
+        tenantId,
+        otherPhone);
+    Instant firstStart = now.plusSeconds(86_400);
+    insertClientAppointment(PHONE, firstStart.minusSeconds(3_600));
+    for (int index = 0; index < 21; index++) {
+      insertAppointmentForClient(otherClientId, firstStart.plusSeconds(index * 3_600L));
+    }
+    String otherCookie = verifiedClientCookie(slug, otherPhone);
+    String foreignCursor = clientPage(otherCookie, null).get("nextCursor").asText();
+    String ownCookie = verifiedClientCookie(slug, PHONE);
+
+    mvc.perform(
+            get("/api/v1/client/appointments")
+                .header("Cookie", ownCookie)
+                .param("cursor", foreignCursor))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
+  }
+
+  private tools.jackson.databind.JsonNode clientPage(String cookie, String cursor)
+      throws Exception {
+    var request = get("/api/v1/client/appointments").header("Cookie", cookie);
+    if (cursor != null) request.param("cursor", cursor);
+    MvcResult result = mvc.perform(request).andExpect(status().isOk()).andReturn();
+    return mapper.readTree(result.getResponse().getContentAsString());
+  }
+
+  private void moveClientAppointment(UUID appointmentId, Instant startsAt) {
+    ownerJdbc.update(
+        "UPDATE agendamento.appointment SET starts_at = ?, service_ends_at = ?, occupied_until = ? WHERE tenant_id = ? AND appointment_id = ?",
+        java.sql.Timestamp.from(startsAt),
+        java.sql.Timestamp.from(startsAt.plusSeconds(1_800)),
+        java.sql.Timestamp.from(startsAt.plusSeconds(1_800)),
+        tenantId,
+        appointmentId);
+  }
+
+  @Test
   void verificationUsesClockInstantAfterWaitingForChallengeRowLock() throws Exception {
     UUID challengeId = requestChallenge(slug, PHONE, "access-expiry-lock-" + UUID.randomUUID());
     String code = sentCodes.get(challengeId);

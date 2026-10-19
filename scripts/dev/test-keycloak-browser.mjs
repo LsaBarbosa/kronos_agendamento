@@ -1883,6 +1883,88 @@ try {
     if (!ownedBookingId) throw new Error('Reserva pública persistida não foi vinculada ao telefone verificado.');
     await waitUntil(() => evaluate(`Boolean(document.querySelector('li[data-appointment-id="${ownedBookingId}"]'))`));
     await evaluate(`(() => {
+      window.__clientListOriginalFetch = window.fetch.bind(window);
+      window.__releaseClientPage = null;
+      window.__releaseClientRefresh = null;
+      window.__holdClientPage = false;
+      window.__holdClientRefresh = false;
+      window.fetch = async (...args) => {
+        const url = args[0] instanceof Request ? args[0].url : String(args[0]);
+        const method = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
+        const response = await window.__clientListOriginalFetch(...args);
+        if (new URL(url).pathname !== '/api/v1/client/appointments' || method.toUpperCase() !== 'GET') return response;
+        if (url.includes('cursor=') && window.__holdClientPage) {
+          window.__holdClientPage = false;
+          window.__clientPagePending = true;
+          await new Promise(resolve => { window.__releaseClientPage = resolve; });
+          return new Response(JSON.stringify({items:[], nextCursor:'e2e-next-cursor', hasMore:true}), {status:200, headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
+        }
+        if (!url.includes('cursor=') && window.__holdClientRefresh) {
+          window.__holdClientRefresh = false;
+          window.__clientRefreshPending = true;
+          await new Promise(resolve => { window.__releaseClientRefresh = resolve; });
+        }
+        if (!url.includes('cursor=') && window.__exposeClientNextPage) {
+          window.__exposeClientNextPage = false;
+          const page = await response.json();
+          return new Response(JSON.stringify({...page, nextCursor:'e2e-controlled-cursor', hasMore:true}), {status:200, headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
+        }
+        return response;
+      };
+      window.__exposeClientNextPage = true;
+    })()`);
+    const clientFilter = await evaluate("document.querySelector('#client-appointment-filter')?.value");
+    await evaluate(`(() => { const select = document.querySelector('#client-appointment-filter'); select.value = ${JSON.stringify(clientFilter === 'future' ? 'all' : 'future')}; select.dispatchEvent(new Event('change', {bubbles:true})); })()`);
+    await waitUntil(() => evaluate("[...document.querySelectorAll('button')].some(button => button.innerText === 'Carregar mais')"));
+    await evaluate("window.__holdClientPage = true");
+    await clickButtonByText('Carregar mais', evaluate);
+    await waitUntil(() => evaluate('window.__clientPagePending === true'));
+    await clickButtonByText('Ver detalhes', evaluate);
+    await waitForText('Detalhes da reserva', evaluate);
+    await evaluate('window.__releaseClientPage()');
+    await waitUntil(() => evaluate("Boolean([...document.querySelectorAll('button')].find(button => button.innerText === 'Carregar mais' && !button.disabled))"));
+    const paginationAfterDetails = await evaluate(`({
+      details: document.body.innerText.includes('Detalhes da reserva'),
+      loading: [...document.querySelectorAll('output')].some(node => node.innerText.includes('Carregando…')),
+      loadMoreDisabled: [...document.querySelectorAll('button')].find(button => button.innerText === 'Carregar mais')?.disabled,
+    })`);
+    if (!paginationAfterDetails.details || paginationAfterDetails.loading || paginationAfterDetails.loadMoreDisabled) {
+      throw new Error(`Abrir detalhes deixou a paginação presa após resposta tardia: ${JSON.stringify(paginationAfterDetails)}`);
+    }
+    await evaluate("window.__holdClientRefresh = true; window.__releaseClientRefresh = null");
+    await clickButtonByText('Atualizar reservas', evaluate);
+    await waitUntil(() => evaluate('window.__clientRefreshPending === true'));
+    await clickButtonByText('Ver detalhes', evaluate);
+    await waitForText('Detalhes da reserva', evaluate);
+    await evaluate('window.__releaseClientRefresh()');
+    await waitUntil(() => evaluate("![...document.querySelectorAll('output')].some(node => node.innerText.includes('Atualizando reservas…'))"));
+    const refreshAfterDetails = await evaluate(`({
+      details: document.body.innerText.includes('Detalhes da reserva'),
+      loading: [...document.querySelectorAll('output')].some(node => node.innerText.includes('Atualizando reservas…')),
+      refreshEnabled: ![...document.querySelectorAll('button')].find(button => button.innerText === 'Atualizar reservas')?.disabled,
+    })`);
+    if (!refreshAfterDetails.details || refreshAfterDetails.loading || !refreshAfterDetails.refreshEnabled) {
+      throw new Error(`Abrir detalhes deixou refresh da lista preso: ${JSON.stringify(refreshAfterDetails)}`);
+    }
+    window.__clientListOriginalFetch && await evaluate('window.fetch = window.__clientListOriginalFetch');
+    console.log('Browser: paginação e refresh da lista permaneceram utilizáveis após abrir detalhes com respostas controladamente pendentes.');
+    const listedBooking = await evaluate(`fetch('/api/v1/client/appointments', {credentials:'same-origin', cache:'no-store'}).then(response => response.json()).then(page => page.items.find(item => item.appointmentId === '${ownedBookingId}'))`);
+    if (listedBooking?.version !== 1) throw new Error(`A lista deveria manter a versão 1 antes da atualização do detalhe: ${JSON.stringify(listedBooking)}`);
+    const detailVersionFixture = queryPostgres(
+        `UPDATE agendamento.appointment SET version = 2 WHERE appointment_id = '${ownedBookingId}' AND version = 1 RETURNING version`,
+        appEnvironment,
+    );
+    if (detailVersionFixture !== '2') throw new Error('A fixture concorrente não avançou a versão da reserva para 2.');
+    await clickButtonByText('Ver detalhes', evaluate);
+    await waitUntil(() => evaluate("document.body.innerText.includes('Versão: 2')"));
+    const detailVersionDom = await evaluate(`({
+      detailVersion: [...document.querySelectorAll('section')].find(section => section.innerText.includes('Detalhes da reserva'))?.innerText.match(/Versão:\\s*(\\d+)/)?.[1] ?? null,
+    })`);
+    if (detailVersionDom.detailVersion !== '2' || listedBooking.version !== 1) {
+      throw new Error(`A regressão não reproduziu lista v1 versus detalhe v2: lista=${listedBooking.version}, detalhe=${JSON.stringify(detailVersionDom)}`);
+    }
+    await clickButtonByText('Cancelar esta reserva', evaluate);
+    await evaluate(`(() => {
       window.__clientCancellationAttempts = [];
       const originalFetch = window.fetch.bind(window);
       window.fetch = async (...args) => {
@@ -1900,10 +1982,6 @@ try {
         return response;
       };
       window.__dropClientCancellationResponse = true;
-    })()`);
-    await evaluate(`(() => {
-      const row = document.querySelector('li[data-appointment-id="${ownedBookingId}"]');
-      [...row.querySelectorAll('button')].find(button => button.innerText === 'Cancelar').click();
     })()`);
     await clickButtonByText('Confirmar cancelamento', evaluate);
     await waitForText('Não foi possível confirmar o resultado.', evaluate);
@@ -1925,11 +2003,12 @@ try {
     const cancellationRetry = await evaluate('window.__clientCancellationAttempts');
     if (cancellationRetry.length !== 2 || cancellationRetry[0].url !== cancellationRetry[1].url ||
         cancellationRetry[0].body !== cancellationRetry[1].body || cancellationRetry[0].key !== cancellationRetry[1].key ||
-        !cancellationRetry[0].key || cancellationRetry[0].status !== 200 || cancellationRetry[1].status !== 200) {
+        !cancellationRetry[0].key || cancellationRetry[0].body !== JSON.stringify({expectedVersion:2}) ||
+        cancellationRetry[0].status !== 200 || cancellationRetry[1].status !== 200) {
       throw new Error(`Retry do cancelamento mudou a intenção original: ${JSON.stringify(cancellationRetry)}`);
     }
     const cancellationEffects = queryPostgres(
-        `SELECT CASE WHEN (SELECT status = 'CANCELLED_BY_CLIENT' AND version = 2 FROM agendamento.appointment WHERE appointment_id = '${ownedBookingId}') AND (SELECT count(*) = 2 FROM agendamento.appointment_history WHERE appointment_id = '${ownedBookingId}') AND (SELECT count(*) = 1 FROM agendamento.audit_event WHERE target_id = '${ownedBookingId}' AND action = 'APPOINTMENT_CANCELLED_BY_CLIENT') AND (SELECT count(*) = 1 FROM agendamento.outbox_event WHERE aggregate_id = '${ownedBookingId}' AND event_type = 'AppointmentCancelled') AND (SELECT count(*) = 1 FROM agendamento.idempotency_record i WHERE i.command_scope LIKE 'appointments.client.cancel.%' AND i.state = 'COMPLETED' AND i.operation_id = (SELECT operation_id FROM agendamento.outbox_event WHERE aggregate_id = '${ownedBookingId}' AND event_type = 'AppointmentCancelled')) THEN 1 ELSE 0 END`,
+        `SELECT CASE WHEN (SELECT status = 'CANCELLED_BY_CLIENT' AND version = 3 FROM agendamento.appointment WHERE appointment_id = '${ownedBookingId}') AND (SELECT count(*) = 2 FROM agendamento.appointment_history WHERE appointment_id = '${ownedBookingId}') AND (SELECT count(*) = 1 FROM agendamento.audit_event WHERE target_id = '${ownedBookingId}' AND action = 'APPOINTMENT_CANCELLED_BY_CLIENT') AND (SELECT count(*) = 1 FROM agendamento.outbox_event WHERE aggregate_id = '${ownedBookingId}' AND event_type = 'AppointmentCancelled') AND (SELECT count(*) = 1 FROM agendamento.idempotency_record i WHERE i.command_scope LIKE 'appointments.client.cancel.%' AND i.state = 'COMPLETED' AND i.operation_id = (SELECT operation_id FROM agendamento.outbox_event WHERE aggregate_id = '${ownedBookingId}' AND event_type = 'AppointmentCancelled')) THEN 1 ELSE 0 END`,
         appEnvironment,
     );
     if (cancellationEffects !== '1') throw new Error('Cancelamento/replay não produziu um único conjunto transacional de efeitos.');

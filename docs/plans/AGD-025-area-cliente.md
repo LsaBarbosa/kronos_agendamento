@@ -27,7 +27,7 @@ Exclusões: sessão de cliente verificado além do mecanismo existente, busca po
 ## Critérios verificáveis
 
 - [x] Todas as leituras e mutações derivam identidade do cookie persistido e vigente; sessão ausente, inválida, expirada ou revogada não acessa recursos.
-- [x] Consulta por cursor/filtro retorna somente reservas do telefone e tenant autenticados, em ordenação estável; cursor estrangeiro é rejeitado sem revelar registros.
+- [x] Consulta por cursor/filtro retorna somente reservas do telefone e tenant autenticados, em ordenação estável; o cursor preserva a tupla original `(startsAt, appointmentId)` mesmo que a reserva marcadora seja remarcada, e cursor estrangeiro é rejeitado sem revelar registros.
 - [x] Detalhe alheio e inexistente são indistinguíveis e não revelam dados.
 - [x] Consulta/cancelamento não consultam restrição de autoagendamento; serviço inativo não impede cancelamento. A integração de restrições reais não existe e permanece em AGD-032/033.
 - [x] Cancelamento exige reserva própria `CONFIRMED`, versão esperada e chave idempotente; cutoff inclusivo respeita igualdade, antes/depois, sem default ou tolerância.
@@ -40,7 +40,7 @@ Exclusões: sessão de cliente verificado além do mecanismo existente, busca po
 
 - Reutilizar `AGDCLIENT` como única autoridade; expor contexto interno de tenant + telefone verificado através de porta do módulo `clientaccess`, sem entregar segredo/cookie ao JavaScript.
 - Resolver `client_id` por tenant + telefone na fronteira do módulo `clients`; aplicar ownership em cada query de appointment.
-- Consultas usam cursor keyset determinístico `(starts_at, appointment_id)`, páginas limitadas a 20, filtro temporal `status=future` e consultas tenant/client-scoped. V21 adiciona índice `(tenant_id, client_id, starts_at, appointment_id)` para suportar consulta e ordenação sem leitura ilimitada.
+- Consultas usam cursor keyset determinístico `(starts_at, appointment_id)`, páginas limitadas a 20, filtro temporal `status=future` e consultas tenant/client-scoped. O cursor opaco versiona sua fronteira pelo timestamp e ID emitidos e inclui vínculo ao tenant/cliente; a propriedade do marcador é revalidada sem reconstruir a fronteira do estado mutável da reserva. V21 adiciona índice `(tenant_id, client_id, starts_at, appointment_id)` para suportar consulta e ordenação sem leitura ilimitada.
 - Cancelamento reutiliza lock de agenda tenant-first e `IdempotencyCoordinator`; revalida sessão antes de replay e aplica política temporal dentro da transação. Estado, versão, revisão, histórico, auditoria, receipt e outbox confirmam juntos.
 - Migration V21 adiciona o índice de consulta e amplia constraints de `appointment_history`/`audit_event` para a ação de cancelamento do ator `CLIENT`; V1–V20 permanecem imutáveis.
 - Frontend mantém dados somente em memória, verifica `/client/session` após reload, trata 401/403, cancelamento incerto com mesma intenção e limpa dados privados em logout/expiração com proteção contra respostas fora de ordem.
@@ -67,3 +67,11 @@ Exclusões: sessão de cliente verificado além do mecanismo existente, busca po
 ## Retomada
 
 AGD-025 permanece parcial até E2E real no CI e homologação/decisões operacionais aplicáveis. Fixture E2E usa reserva criada pelo fluxo público real e emissor AGD-024 restrito ao ambiente de teste; não prova entrega WhatsApp ou prontidão legal/comercial real.
+
+## Follow-up P2 do PR #17
+
+- Cursor: PostgreSQL/Testcontainers cobre página inicial de 20 entre 21, movimento da reserva marcadora para depois e antes da reserva restante, preservação da fronteira, e rejeição de cursor emitido para outro cliente autenticado. Nenhuma migration nova; V1–V21 permanecem intactas.
+- Confirmação de cancelamento: o snapshot (incluindo `expectedVersion`) é capturado ao abrir a confirmação; detalhe atualizado não é substituído por item antigo da lista. E2E deve demonstrar lista v1/detalhe v2 e envio de v2, sem alterar a intenção diante de conflito real.
+- Concorrência cliente/admin: PostgreSQL/Testcontainers força cada comando a pausar no UPDATE sob o lock compartilhado; prova cancelamento do cliente vencendo remarcação e remarcação vencendo cancelamento, com apenas um estado/história/auditoria/outbox confirmado.
+- Sequências UI: listagem, paginação, detalhe e refresh usam tokens de sequência separados por operação; `finally` limpa somente a flag da chamada responsável, e logout invalida respostas privadas tardias. Browser E2E controla respostas de paginação/refresh e verifica o DOM; o cenário existente de logout com resposta pendente permanece.
+- Revisão independente: tentativa de delegar dois revisores foi recusada pelo limite de threads do ambiente; revisão final sequencial, sem alegar independência ou aprovação humana.

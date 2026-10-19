@@ -1,5 +1,16 @@
 # Evidências de validação — AGD-001
 
+## Follow-up P2 AGD-025 — PR #17
+
+Base verificada: head `e3000721fa9910847ade1928d8817be8312c839a`, PR aberto/mergeable. Sem migration nova; V1–V21 preservadas.
+
+- `backend/`: `export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH; ./mvnw -B -ntp spotless:check verify` — `BUILD SUCCESS`, 73 testes unitários/arquiteturais e 167 integrações com PostgreSQL 16.13/Testcontainers. `ClientAccessIT` 24/24 e `PublicAppointmentIT` 51/51; inclui cursor estável com marcador deslocado para depois/antes do item restante, cursor alheio e corrida integrada cliente-cancelamento/remarcação nas duas ordens.
+- `frontend/`: `export PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH; npm run format:check && npm run lint && npm test -- --run && npm run check && node --check ../scripts/dev/test-keycloak-browser.mjs` — format/lint, 23 Vitest, TypeScript, Vite build e sintaxe E2E passaram. E2E real do Chrome/Keycloak/PostgreSQL não executado localmente nesta etapa; o roteiro CI foi ampliado para controlar paginação/refresh pendentes e verificar o DOM, lista v1/detalhe v2, além de manter o cenário existente de logout com resposta privada atrasada.
+- Browser E2E local não executado: Compose compartilhado foi preservado; o job CI `oidc-browser-e2e` deve validar Chrome/Keycloak/PostgreSQL e o DOM dos três cenários. O teste mantém também o cancelamento com resposta perdida, mesmo alvo/body/chave, receipt e efeitos únicos.
+- Implementação: cursor codifica timestamp/ID emitidos mais vínculo tenant/cliente, valida o marcador sob identidade atual e não relê sua data mutável. A confirmação guarda o DTO/version escolhido ao abrir; listagem e detalhe têm sequências independentes, e cada `finally` limpa apenas a flag do tipo de operação que iniciou.
+- Revisão independente: criação de dois revisores foi recusada pelo limite de threads; revisão sequencial do coordenador não equivale a revisão independente ou aprovação humana.
+- CodeQL/App CI para o head corrigido, jobs completos e E2E remoto: pendentes de commit/publicação nesta rodada.
+
 ## AGD-024 integrada e validação local AGD-025
 
 PR [#16](https://github.com/LsaBarbosa/kronos_agendamento/pull/16), head aprovado `76041e9b85cb351df8a30ce6be7ed445fe61a099`, foi integrado por merge commit `7abb329dca1170348b2ed104ae7cc7d2569de260`. App CI push [39242340846](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39242340846), PR [39242349364](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39242349364), CodeQL push [39242340623](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39242340623) e PR [39242349265](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39242349265) concluíram com sucesso, incluindo jobs de segurança/E2E; App CI pós-merge [39245338731](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39245338731) e CodeQL [39245338736](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39245338736) também passaram no merge SHA. Parecer técnico não é aprovação humana; não havia review humana registrada no GitHub.
