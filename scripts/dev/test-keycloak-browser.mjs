@@ -1620,15 +1620,16 @@ try {
         return response;
       };
     })()`);
-    await setFieldById('client-phone', 'not-a-phone', evaluate);
+    await setFieldById('client-phone', '+' + '1'.repeat(32), evaluate);
     await clickButtonByText('Solicitar código', evaluate);
     await waitForText('Telefone inválido.', evaluate);
     const invalidPhoneState = await evaluate(`(() => ({
       disabled: document.querySelector('#client-phone')?.disabled,
       retry: document.querySelector('button[type=submit]')?.textContent,
       errorCode: window.__clientAccessRequestResult?.errorCode,
+      requestBodyLength: JSON.parse(window.__clientAccessRequestAttempts.at(-1)?.body ?? '{}').phone?.length,
     }))()`);
-    if (invalidPhoneState.disabled || invalidPhoneState.errorCode !== 'INVALID_PHONE') {
+    if (invalidPhoneState.disabled || invalidPhoneState.errorCode !== 'INVALID_PHONE' || invalidPhoneState.requestBodyLength !== 33) {
         throw new Error(`Telefone inválido foi tratado como resultado incerto: ${JSON.stringify(invalidPhoneState)}`);
     }
     await evaluate('window.__clientAccessRequestResult = null; window.__clientAccessChallengeId = null');
@@ -1731,9 +1732,24 @@ try {
     await evaluate(`(() => {
       const originalFetch = window.fetch.bind(window);
       window.__clientVerifyAttempts = [];
+      window.__clientRecoveryAttempts = [];
       window.fetch = async (...args) => {
+        const requestUrl = args[0] instanceof Request ? args[0].url : String(args[0]);
+        const requestMethod = args[1]?.method ?? (args[0] instanceof Request ? args[0].method : 'GET');
+        if (requestUrl.startsWith('/api/v1/client/session?slug=') && requestMethod.toUpperCase() === 'GET') {
+          window.__clientRecoveryAttempts.push('attempted');
+          if (window.__clientRecoveryAttempts.length === 1) throw new TypeError('Simulated recovery transport failure');
+          if (window.__clientRecoveryAttempts.length === 2) {
+            return new Response(JSON.stringify({error: {code: 'TEMPORARILY_UNAVAILABLE'}}), {
+              status: 503, headers: {'Content-Type': 'application/json'},
+            });
+          }
+          if (window.__clientRecoveryAttempts.length === 3) {
+            return new Response('{invalid-json', {status: 200, headers: {'Content-Type': 'application/json'}});
+          }
+        }
         const response = await originalFetch(...args);
-        if (String(args[0]).endsWith('/verify') && args[1]?.method === 'POST') {
+        if (requestUrl.endsWith('/verify') && requestMethod.toUpperCase() === 'POST') {
           window.__clientVerifyAttempts.push({url: String(args[0]), body: args[1]?.body ?? null});
           if (response.ok && !window.__clientVerifyResponseLost) {
             window.__clientVerifyResponseLost = true;
@@ -1745,6 +1761,27 @@ try {
     })()`);
     await clickButtonByText('Verificar código', evaluate);
     await waitForText('Não foi possível confirmar o resultado. Mantenha o mesmo código', evaluate);
+    await clickButtonByText('Tentar novamente', evaluate);
+    await waitForText('A verificação ainda não pôde ser reconciliada.', evaluate);
+    const uncertainAfterRecoveryNetwork = await evaluate(`({
+      verifyButton: [...document.querySelectorAll('button')].find(button => button.innerText === 'Tentar novamente')?.disabled,
+      pendingMessage: document.body.innerText.includes('A verificação ainda não pôde ser reconciliada.'),
+    })`);
+    if (uncertainAfterRecoveryNetwork.verifyButton || !uncertainAfterRecoveryNetwork.pendingMessage) {
+        throw new Error(`Falha de transporte na recuperação foi tratada como definitiva: ${JSON.stringify(uncertainAfterRecoveryNetwork)}`);
+    }
+    await clickButtonByText('Tentar novamente', evaluate);
+    await waitForText('A verificação ainda não pôde ser reconciliada.', evaluate);
+    const uncertainAfterRecovery503 = await evaluate(`({
+      verifyButton: [...document.querySelectorAll('button')].find(button => button.innerText === 'Tentar novamente')?.disabled,
+      pendingMessage: document.body.innerText.includes('A verificação ainda não pôde ser reconciliada.'),
+      recoveryAttempts: window.__clientRecoveryAttempts.length,
+    })`);
+    if (uncertainAfterRecovery503.verifyButton || !uncertainAfterRecovery503.pendingMessage || uncertainAfterRecovery503.recoveryAttempts !== 2) {
+        throw new Error(`HTTP 503 na recuperação foi tratado como definitiva: ${JSON.stringify(uncertainAfterRecovery503)}`);
+    }
+    await clickButtonByText('Tentar novamente', evaluate);
+    await waitForText('A resposta de recuperação é inválida.', evaluate);
     await clickButtonByText('Tentar novamente', evaluate);
     await waitForText('Acesso verificado neste tenant.', evaluate);
     if (!(await evaluate('window.__clientVerifyResponseLost === true'))) {
@@ -1758,9 +1795,10 @@ try {
     const boundRecovery = await evaluate(`fetch('/api/v1/client/session?slug=' + encodeURIComponent(${JSON.stringify(demoTenantSlug)}) + '&challengeId=' + encodeURIComponent(${JSON.stringify(validChallengeId)}), {credentials:'same-origin', cache:'no-store'}).then(response => response.json())`);
     const adminSessionStatus = await evaluate("fetch('/api/v1/admin/session', {credentials:'same-origin', cache:'no-store'}).then(response => response.status)");
     const verificationRetry = await evaluate('window.__clientVerifyAttempts');
+    const recoveryAttempts = await evaluate('window.__clientRecoveryAttempts.length');
     if (!clientSession.authenticated || !boundRecovery.authenticated || adminSessionStatus !== 401 ||
-        verificationRetry.length !== 2 || verificationRetry[0].url !== verificationRetry[1].url ||
-        verificationRetry[0].body !== verificationRetry[1].body) {
+        verificationRetry.length !== 5 || verificationRetry.some(attempt => attempt.url !== verificationRetry[0].url || attempt.body !== verificationRetry[0].body) ||
+        recoveryAttempts !== 4) {
         throw new Error('Sessão de cliente não está isolada da autoridade administrativa.');
     }
     const clientEffects = queryPostgres(

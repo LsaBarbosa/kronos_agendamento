@@ -328,6 +328,36 @@ class ClientAccessIT {
   }
 
   @Test
+  void oversizedPhoneIsDefinitiveValidationErrorAndCorrectedPhoneCanBeSubmitted() throws Exception {
+    String key = "access-phone-size-" + UUID.randomUUID();
+    String oversizedPhone = "+" + "1".repeat(32);
+
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/access-challenges")
+                .with(csrf())
+                .header("Idempotency-Key", "short")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsString(Map.of("phone", PHONE))))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"));
+
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/access-challenges")
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsString(Map.of("phone", oversizedPhone))))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.error.code").value("INVALID_PHONE"));
+    assertThat(count("client_access_challenge")).isZero();
+
+    MvcResult corrected = request(PHONE, key);
+    assertThat(corrected.getResponse().getStatus()).isEqualTo(202);
+    assertThat(count("client_access_challenge")).isEqualTo(1);
+    verify(sender, times(1)).send(any(), any(), any(), any());
+  }
+
+  @Test
   void concurrentSameRequestIntentCreatesOneChallengeAndOneDelivery() throws Exception {
     String key = "access-concurrent-replay-" + UUID.randomUUID();
     try (var executor = Executors.newFixedThreadPool(2)) {

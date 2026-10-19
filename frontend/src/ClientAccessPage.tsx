@@ -198,19 +198,36 @@ export function ClientAccessPage({ slug }: { slug: string }) {
                             encodeURIComponent(challengeId),
                         { credentials: 'same-origin', cache: 'no-store' },
                     ).catch(() => null);
-                    if (sessionResponse?.ok) {
-                        const session = (await sessionResponse.json()) as {
-                            authenticated: boolean;
-                        };
-                        if (session.authenticated) {
-                            setPhase('authenticated');
-                            setMessage('Acesso verificado neste tenant.');
-                            setPhone('');
-                            setCode('');
-                            setVerifyUncertain(false);
-                            requestIntent.current = null;
-                            return;
-                        }
+                    if (!sessionResponse?.ok) {
+                        setVerifyUncertain(true);
+                        setMessage(
+                            'A verificação ainda não pôde ser reconciliada. Tente recuperar novamente; não inicie outra solicitação.',
+                        );
+                        return;
+                    }
+                    const session = (await sessionResponse
+                        .json()
+                        .catch(() => null)) as {
+                        authenticated?: unknown;
+                    } | null;
+                    if (
+                        !session ||
+                        typeof session.authenticated !== 'boolean'
+                    ) {
+                        setVerifyUncertain(true);
+                        setMessage(
+                            'A resposta de recuperação é inválida. Tente recuperar novamente; não inicie outra solicitação.',
+                        );
+                        return;
+                    }
+                    if (session.authenticated) {
+                        setPhase('authenticated');
+                        setMessage('Acesso verificado neste tenant.');
+                        setPhone('');
+                        setCode('');
+                        setVerifyUncertain(false);
+                        requestIntent.current = null;
+                        return;
                     }
                 }
                 setVerifyUncertain(false);

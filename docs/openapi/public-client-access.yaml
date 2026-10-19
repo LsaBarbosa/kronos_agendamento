@@ -47,7 +47,7 @@ paths:
                     format: uuid
                     description: Opaque, tenant-bound handle; null if secure challenge configuration is unavailable.
         '400':
-          description: Definitive phone syntax rejection; the user may correct the input and submit a new intention.
+          description: INVALID_PHONE definitively rejects blank, over-32-character, or invalid international numbers without truncation; the user may correct and resubmit. Other request/header validation uses INVALID_REQUEST.
           content:
             application/json:
               schema:
@@ -56,7 +56,7 @@ paths:
                   error:
                     type: object
                     properties:
-                      code: { type: string, const: INVALID_PHONE }
+                      code: { type: string, enum: [INVALID_PHONE, INVALID_REQUEST] }
                       message: { type: string }
         '403': { description: CSRF validation failed }
         '409': { description: Idempotency key reused with different command }
@@ -111,7 +111,7 @@ paths:
       security: [{ clientCookie: [] }]
       responses:
         '200':
-          description: Read-only; challenge-bound recovery returns true only for the active session issued by that verified challenge. Does not expose tenant, phone, challenge secret, or appointments. Supplying only one query parameter returns authenticated=false.
+          description: Read-only; challenge-bound recovery returns true only for the active session issued by that verified challenge. Does not expose tenant, phone, challenge secret, or appointments. Supplying only one query parameter returns authenticated=false. The browser must have received the resulting session cookie; this endpoint does not recreate a lost cookie.
           content:
             application/json:
               schema:
@@ -119,6 +119,8 @@ paths:
                 required: [authenticated]
                 properties:
                   authenticated: { type: boolean }
+        '503':
+          description: Recovery temporarily unavailable; preserve the uncertain verification intent and retry recovery.
   /api/v1/client/session/logout:
     post:
       summary: Revoke the current client access session
