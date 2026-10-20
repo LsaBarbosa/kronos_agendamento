@@ -1419,6 +1419,63 @@ try {
     if (restrictionPagePublication.published !== true) {
         throw new Error('Fixture pública não estava publicada para testar a rejeição neutra por restrição.');
     }
+    const secondRestrictedClientName = 'Segundo cliente restrito E2E';
+    const secondRestrictedClientPhone = '+5511999991235';
+    const secondRestrictionAppointment = await evaluate(`(async () => {
+      const [scheduleResponse, csrfResponse] = await Promise.all([
+        fetch('/api/v1/admin/schedule/weekly-periods', {credentials:'same-origin', cache:'no-store'}),
+        fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'})
+      ]);
+      const [schedule, csrf] = await Promise.all([scheduleResponse.json(), csrfResponse.json()]);
+      let slot = null;
+      for (let offset = 0; offset <= 25 && !slot; offset++) {
+        const date = new Date(${JSON.stringify(publicDate)} + 'T12:00:00Z');
+        date.setUTCDate(date.getUTCDate() + offset);
+        const localDate = date.toISOString().slice(0, 10);
+        const query = new URLSearchParams({serviceId:${JSON.stringify(publicService.serviceId)}, from:localDate, to:localDate});
+        const response = await fetch('/api/v1/public/' + encodeURIComponent(${JSON.stringify(publication.slug)}) + '/availability?' + query);
+        if (!response.ok) continue;
+        const page = await response.json();
+        slot = page.days?.flatMap(day => day.slots ?? [])[0] ?? null;
+      }
+      if (!slot) return {status:0, error:'No slot found for second restricted fixture'};
+      const response = await fetch('/api/v1/admin/appointments', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json', [csrf.headerName]:csrf.token, 'Idempotency-Key':crypto.randomUUID()},
+        body:JSON.stringify({serviceId:${JSON.stringify(publicService.serviceId)}, startsAt:slot.startsAt, client:{name:${JSON.stringify(secondRestrictedClientName)}, phone:${JSON.stringify(secondRestrictedClientPhone)}}, overridePolicies:[], expectedScheduleVersion:schedule.scheduleRevision})
+      });
+      return {status:response.status, body:await response.json()};
+    })()`);
+    if (secondRestrictionAppointment.status !== 201) {
+        throw new Error(`Não foi possível criar a segunda fixture de cliente restrito: ${JSON.stringify(secondRestrictionAppointment)}`);
+    }
+    const secondRestrictionAppointmentId = secondRestrictionAppointment.body.appointmentId;
+    queryPostgres(
+        `WITH moment AS (SELECT clock_timestamp() AS now) UPDATE agendamento.appointment a SET starts_at = moment.now - interval '2 days', service_ends_at = moment.now - interval '2 days' + make_interval(mins => a.service_duration_minutes), occupied_until = moment.now - interval '2 days' + make_interval(mins => a.service_duration_minutes + a.service_buffer_after_minutes) FROM moment WHERE a.appointment_id = '${secondRestrictionAppointmentId}'::uuid`,
+        appEnvironment,
+    );
+    const secondNoShow = await evaluate(`(async () => {
+      const csrfResponse = await fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'});
+      const csrf = await csrfResponse.json();
+      const response = await fetch('/api/v1/admin/appointments/${secondRestrictionAppointmentId}/mark-no-show', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json', [csrf.headerName]:csrf.token, 'Idempotency-Key':crypto.randomUUID()},
+        body:JSON.stringify({expectedVersion:1, reason:'Fixture restrita de segundo cliente'})
+      });
+      return {status:response.status, body:await response.json()};
+    })()`);
+    if (secondNoShow.status !== 200 || secondNoShow.body.status !== 'NO_SHOW') {
+        throw new Error(`Não foi possível restringir o segundo cliente de teste: ${JSON.stringify(secondNoShow)}`);
+    }
+    const secondRestrictedClientId = queryPostgres(
+        `SELECT client_id FROM agendamento.appointment WHERE appointment_id = '${secondRestrictionAppointmentId}'`,
+        appEnvironment,
+    );
+    const secondActiveRestrictionId = queryPostgres(
+        `SELECT restriction_id FROM agendamento.client_booking_restriction WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${secondRestrictedClientId}' AND status = 'ACTIVE'`,
+        appEnvironment,
+    );
+    if (!secondActiveRestrictionId) throw new Error('Segundo NO_SHOW não materializou a restrição da fixture.');
     await navigate(`http://localhost:5173/public/${encodeURIComponent(publication.slug)}`, secondTab.command, secondTab.evaluate);
     await waitForText(catalogName + ' Editado', secondTab.evaluate);
     await waitUntil(() => secondTab.evaluate("Boolean(document.getElementById('public-service') && !document.getElementById('public-service').disabled)"));
@@ -1477,11 +1534,15 @@ try {
     }
     await navigate(`http://localhost:5173/admin`, secondTab.command, secondTab.evaluate);
     await waitForText('Faltas de clientes', evaluate);
-    await setFieldById('no-show-client-search', 'Reserva administrativa E2E', evaluate);
+    await setFieldById('no-show-client-search', 'E2E', evaluate);
     await clickButtonByText('Buscar', evaluate);
     await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === 'Reserva administrativa E2E')`));
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === '${secondRestrictedClientName}')`));
     await clickButtonByText('Reserva administrativa E2E', evaluate);
     await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('conta na janela')`));
+    if ((await evaluate(`document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId`)) !== noShowClientId) {
+        throw new Error('A seleção inicial dos fatos não corresponde ao cliente A.');
+    }
     await waitForText('Restrição ativa desde', evaluate);
     const activeRestrictionDom = await evaluate(`document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')?.innerText ?? ''`);
     if (!activeRestrictionDom.includes('1 de 1 faltas') || !activeRestrictionDom.includes(`política v${restrictionPolicyUpdate.body.version}`)) {
@@ -1498,6 +1559,9 @@ try {
           const attempt = {url, body:args[1].body, key:args[1].headers['Idempotency-Key'], operationId:response.headers.get('X-Operation-Id'), status:response.status, replayed:response.headers.get('Idempotency-Replayed'), receipt:response.ok ? await response.clone().json() : null};
           window.__restrictionLiftAttempts.push(attempt);
           if (response.ok && window.__restrictionLiftAttempts.length === 1) {
+            window.__restrictionLiftResponseReady = true;
+            await new Promise(resolve => { window.__releaseRestrictionLiftResponse = resolve; });
+            window.fetch = originalFetch;
             throw new TypeError('Simulated lost restriction lift response after commit');
           }
           window.fetch = originalFetch;
@@ -1506,13 +1570,53 @@ try {
       };
     })()`);
     await clickButtonByText('Desbloquear autoagendamento', evaluate);
+    await waitUntil(() => evaluate('window.__restrictionLiftResponseReady === true'));
+    const selectionGuard = await evaluate(`(() => {
+      const buttons = [...document.querySelectorAll('[aria-label="Resultados de clientes"] button')];
+      const clientB = buttons.find(button => button.innerText.trim() === '${secondRestrictedClientName}');
+      const wasDisabled = clientB?.disabled;
+      if (clientB) { clientB.disabled = false; clientB.click(); clientB.disabled = wasDisabled; }
+      return {
+        selectedClientId: document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId,
+        clientBDisabled: wasDisabled,
+        factsClientId: document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId,
+      };
+    })()`);
+    if (selectionGuard.selectedClientId !== noShowClientId || selectionGuard.factsClientId !== noShowClientId || selectionGuard.clientBDisabled !== true) {
+        throw new Error(`A seleção mudou durante o desbloqueio pendente: ${JSON.stringify(selectionGuard)}`);
+    }
+    const pendingLiftRequest = await evaluate('window.__restrictionLiftAttempts[0]');
+    if (!pendingLiftRequest?.url.includes(`/clients/${noShowClientId}/restrictions/${activeRestrictionId}/lift`)) {
+        throw new Error(`A intenção pendente não permaneceu associada ao cliente A: ${JSON.stringify(pendingLiftRequest)}`);
+    }
+    await evaluate('window.__releaseRestrictionLiftResponse?.()');
     await waitForText('Resultado incerto. Repita o mesmo desbloqueio para recuperar a operação original.', evaluate);
     await clickButtonByText('Recuperar mesmo desbloqueio', evaluate);
     await waitForText('Autoagendamento desbloqueado.', evaluate);
     await waitUntil(() => evaluate(`(() => {
       const summary = document.querySelector('section[aria-labelledby="client-no-shows-title"]')?.innerText ?? '';
-      return summary.includes('Situação do autoagendamento: CLEAR') && summary.includes('Bloqueio removido');
+      const facts = document.querySelector('[data-testid="client-no-show-facts"]');
+      return summary.includes('Situação do autoagendamento: CLEAR') && summary.includes('Bloqueio removido') && facts?.dataset.clientId === '${noShowClientId}';
     })()`));
+    const recoveredLiftDom = await evaluate(`(() => {
+      const summary = document.querySelector('section[aria-labelledby="client-no-shows-title"]')?.innerText ?? '';
+      return {
+        clientId: document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId,
+        factsClientId: document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId,
+        active: Boolean(document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')),
+        history: summary.includes('Bloqueio removido'),
+        liftedVersion: summary.includes('versão v2'),
+        alertText: document.querySelector('[role="alert"]')?.innerText ?? '',
+        retryVisible: [...document.querySelectorAll('button')].some(button => button.innerText.includes('Recuperar mesmo desbloqueio')),
+        reasonDisabled: document.getElementById('restriction-lift-reason')?.disabled,
+        clientBDisabled: [...document.querySelectorAll('[aria-label="Resultados de clientes"] button')].find(button => button.innerText.trim() === '${secondRestrictedClientName}')?.disabled,
+      };
+    })()`);
+    if (recoveredLiftDom.clientId !== noShowClientId || recoveredLiftDom.factsClientId !== noShowClientId || recoveredLiftDom.active || !recoveredLiftDom.history || !recoveredLiftDom.liftedVersion || recoveredLiftDom.alertText.includes('incerto') || recoveredLiftDom.retryVisible || recoveredLiftDom.reasonDisabled || recoveredLiftDom.clientBDisabled) {
+        throw new Error(`DOM após replay não reconciliou cliente A/liberou navegação: ${JSON.stringify(recoveredLiftDom)}`);
+    }
+    await evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).find(button => button.innerText.trim() === '${secondRestrictedClientName}')?.click()`);
+    await waitUntil(() => evaluate(`document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId === '${secondRestrictedClientId}' && document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${secondRestrictedClientId}' && document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')`));
     const liftAttempts = await evaluate('window.__restrictionLiftAttempts');
     if (liftAttempts.length !== 2 || liftAttempts[0].url !== liftAttempts[1].url || liftAttempts[0].body !== liftAttempts[1].body || liftAttempts[0].key !== liftAttempts[1].key || !liftAttempts[0].operationId || liftAttempts[0].operationId !== liftAttempts[1].operationId || liftAttempts[1].replayed !== 'true' || liftAttempts[1].receipt?.status !== 'LIFTED') {
         throw new Error(`Retry do desbloqueio não recuperou a intenção original: ${JSON.stringify(liftAttempts)}`);
@@ -1534,6 +1638,35 @@ try {
     if (restrictionAfterReload.includes('Restrição ativa desde') || !restrictionAfterReload.includes('Faltas que contam: 1') || !restrictionAfterReload.includes('Bloqueio removido')) {
         throw new Error(`Desbloqueio/fatos não persistiram após reload: ${restrictionAfterReload}`);
     }
+    await setFieldById('no-show-client-search', 'E2E', evaluate);
+    await clickButtonByText('Buscar', evaluate);
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === '${secondRestrictedClientName}')`));
+    await clickButtonByText(secondRestrictedClientName, evaluate);
+    await waitUntil(() => evaluate(`document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${secondRestrictedClientId}' && document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')`));
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__staleClientFactsReady = false;
+      window.fetch = async (...args) => {
+        const url = String(args[0]);
+        const response = await originalFetch(...args);
+        if (url.includes('/clients/${noShowClientId}/no-shows?') && !args[1]?.method && !window.__staleClientFactsReady) {
+          window.__staleClientFactsReady = true;
+          await new Promise(resolve => { window.__releaseStaleClientFacts = resolve; });
+          window.fetch = originalFetch;
+        }
+        return response;
+      };
+    })()`);
+    await evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).find(button => button.innerText.trim() === 'Reserva administrativa E2E')?.click()`);
+    await waitUntil(() => evaluate('typeof window.__releaseStaleClientFacts === "function"'));
+    await evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).find(button => button.innerText.trim() === '${secondRestrictedClientName}')?.click()`);
+    await waitUntil(() => evaluate(`document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${secondRestrictedClientId}' && document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')`));
+    await evaluate('window.__releaseStaleClientFacts?.(); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+    const staleFactsDom = await evaluate(`({selected:document.querySelector('[data-testid="selected-no-show-client"]')?.innerText, selectedId:document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId, factsId:document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId, restriction:document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')?.innerText ?? ''})`);
+    if (staleFactsDom.selectedId !== secondRestrictedClientId || staleFactsDom.factsId !== secondRestrictedClientId || !staleFactsDom.selected?.includes(secondRestrictedClientName) || !staleFactsDom.restriction) {
+        throw new Error(`Resposta tardia dos fatos do cliente A contaminou o cliente B: ${JSON.stringify(staleFactsDom)}`);
+    }
+    console.log('Browser: desbloqueio incerto permaneceu ligado ao cliente/restrição originais; retry único atualizou A, bloqueou troca durante envio/incerteza e leitura tardia preservou os dados de B.');
     await setTextareaById(`no-show-reason-${administrativeAppointmentId}`, 'Correção compensatória comprovada E2E', evaluate);
     await evaluate(`(() => {
       const originalFetch = window.fetch;

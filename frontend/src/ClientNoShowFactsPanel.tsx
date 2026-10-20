@@ -56,11 +56,12 @@ type Pending = {
     body: { expectedVersion: number; reason: string };
     key: string;
 };
-type PendingLift = {
+type PendingLift = Readonly<{
+    clientId: string;
     restrictionId: string;
-    body: { expectedVersion: number; reason: string };
+    body: Readonly<{ expectedVersion: number; reason: string }>;
     key: string;
-};
+}>;
 
 async function responseMessage(response: Response): Promise<string> {
     try {
@@ -97,8 +98,11 @@ export function ClientNoShowFactsPanel({
     const [liftReason, setLiftReason] = useState('');
     const [liftSaving, setLiftSaving] = useState(false);
     const [liftUncertain, setLiftUncertain] = useState(false);
+    const [liftIntentLocked, setLiftIntentLocked] = useState(false);
     const pending = useRef<Pending | null>(null);
     const pendingLift = useRef<PendingLift | null>(null);
+    const selectedClient = useRef<Client | null>(null);
+    const liftRequestInFlight = useRef(false);
     const keys = useRef(new Map<string, string>());
     const searchGeneration = useRef(0);
     const factsGeneration = useRef(0);
@@ -109,12 +113,19 @@ export function ClientNoShowFactsPanel({
             factsGeneration.current += 1;
             pending.current = null;
             pendingLift.current = null;
+            selectedClient.current = null;
         },
         [],
     );
 
     async function searchClients() {
-        if (!enabled || query.trim().length < 2) return;
+        if (
+            !enabled ||
+            pending.current ||
+            pendingLift.current ||
+            query.trim().length < 2
+        )
+            return;
         const generation = ++searchGeneration.current;
         setLoadingClients(true);
         setError('');
@@ -126,6 +137,7 @@ export function ClientNoShowFactsPanel({
             if (generation !== searchGeneration.current) return;
             if (response.status === 401 || response.status === 403) {
                 onSessionInvalid(response.status);
+                selectedClient.current = null;
                 setSelected(null);
                 setFacts(null);
                 return;
@@ -147,7 +159,7 @@ export function ClientNoShowFactsPanel({
     }
 
     async function loadFacts(client: Client, cursor?: string | null) {
-        if (pending.current) return;
+        if (pending.current || pendingLift.current) return;
         const generation = ++factsGeneration.current;
         setLoadingFacts(true);
         setError('');
@@ -158,9 +170,14 @@ export function ClientNoShowFactsPanel({
                 `${apiBaseUrl}/v1/admin/clients/${encodeURIComponent(client.clientId)}/no-shows?${params}`,
                 { credentials: 'same-origin', cache: 'no-store' },
             );
-            if (generation !== factsGeneration.current) return;
+            if (
+                generation !== factsGeneration.current ||
+                selectedClient.current?.clientId !== client.clientId
+            )
+                return;
             if (response.status === 401 || response.status === 403) {
                 onSessionInvalid(response.status);
+                selectedClient.current = null;
                 setSelected(null);
                 setFacts(null);
                 return;
@@ -169,6 +186,7 @@ export function ClientNoShowFactsPanel({
             const page = (await response.json()) as Facts;
             if (
                 generation !== factsGeneration.current ||
+                selectedClient.current?.clientId !== client.clientId ||
                 page.clientId !== client.clientId
             )
                 return;
@@ -178,7 +196,10 @@ export function ClientNoShowFactsPanel({
                     : page,
             );
         } catch (loadError) {
-            if (generation === factsGeneration.current) {
+            if (
+                generation === factsGeneration.current &&
+                selectedClient.current?.clientId === client.clientId
+            ) {
                 setError(
                     loadError instanceof Error
                         ? loadError.message
@@ -186,13 +207,20 @@ export function ClientNoShowFactsPanel({
                 );
             }
         } finally {
-            if (generation === factsGeneration.current) setLoadingFacts(false);
+            if (
+                generation === factsGeneration.current &&
+                selectedClient.current?.clientId === client.clientId
+            )
+                setLoadingFacts(false);
         }
     }
 
     function chooseClient(client: Client) {
-        if (pending.current) return;
+        if (pending.current || pendingLift.current) return;
+        searchGeneration.current += 1;
+        setLoadingClients(false);
         factsGeneration.current += 1;
+        selectedClient.current = client;
         setSelected(client);
         setFacts(null);
         setNotice('');
@@ -201,7 +229,7 @@ export function ClientNoShowFactsPanel({
     }
 
     async function correct(fact: Fact) {
-        if (!selected || !csrf) return;
+        if (!selected || !csrf || pendingLift.current) return;
         const existing = pending.current;
         if (
             existing &&
@@ -299,47 +327,60 @@ export function ClientNoShowFactsPanel({
     }
 
     async function liftRestriction() {
-        if (!selected || !facts?.activeRestriction || !csrf || locked) return;
-        const active = facts.activeRestriction;
+        if (liftRequestInFlight.current || !csrf) return;
         const existing = pendingLift.current;
-        const body = existing?.body ?? {
-            expectedVersion: active.version,
-            reason: liftReason.trim(),
-        };
+        if (
+            locked ||
+            pending.current ||
+            (!existing && (!selected || !facts?.activeRestriction))
+        )
+            return;
+        const active = facts?.activeRestriction;
+        const body =
+            existing?.body ??
+            Object.freeze({
+                expectedVersion: active!.version,
+                reason: liftReason.trim(),
+            });
         if (!existing && !body.reason) {
             setError('Informe o motivo obrigatório do desbloqueio.');
             return;
         }
+        const restrictionId = existing?.restrictionId ?? active!.restrictionId;
+        const clientId = existing?.clientId ?? selected!.clientId;
         const key =
             existing?.key ??
             commandKey(
                 keys.current,
-                `lift-client-restriction:${active.restrictionId}`,
+                `lift-client-restriction:${restrictionId}`,
                 body,
             );
-        pendingLift.current = {
-            restrictionId: existing?.restrictionId ?? active.restrictionId,
-            body,
-            key,
-        };
+        const intention =
+            existing ?? Object.freeze({ clientId, restrictionId, body, key });
+        pendingLift.current = intention;
+        liftRequestInFlight.current = true;
+        setLiftIntentLocked(true);
         setLiftSaving(true);
         setError('');
         setNotice('');
         try {
             const response = await fetch(
-                `${apiBaseUrl}/v1/admin/clients/${encodeURIComponent(selected.clientId)}/restrictions/${encodeURIComponent(active.restrictionId)}/lift`,
+                `${apiBaseUrl}/v1/admin/clients/${encodeURIComponent(intention.clientId)}/restrictions/${encodeURIComponent(intention.restrictionId)}/lift`,
                 {
                     method: 'POST',
                     credentials: 'same-origin',
                     headers: {
                         'Content-Type': 'application/json',
                         [csrf.headerName]: csrf.token,
-                        'Idempotency-Key': key,
+                        'Idempotency-Key': intention.key,
                     },
-                    body: JSON.stringify(body),
+                    body: JSON.stringify(intention.body),
                 },
             );
             if (response.status === 401 || response.status === 403) {
+                pendingLift.current = null;
+                setLiftUncertain(false);
+                setLiftIntentLocked(false);
                 onSessionInvalid(response.status);
                 return;
             }
@@ -354,8 +395,13 @@ export function ClientNoShowFactsPanel({
                 const message = await responseMessage(response);
                 pendingLift.current = null;
                 setLiftUncertain(false);
+                setLiftIntentLocked(false);
                 setError(message);
-                if (response.status === 409) void loadFacts(selected);
+                if (
+                    response.status === 409 &&
+                    selectedClient.current?.clientId === intention.clientId
+                )
+                    void loadFacts(selectedClient.current);
                 return;
             }
             const receipt = (await response.json()) as {
@@ -364,9 +410,9 @@ export function ClientNoShowFactsPanel({
                 version: number;
             };
             if (
-                receipt.restrictionId !== active.restrictionId ||
+                receipt.restrictionId !== intention.restrictionId ||
                 receipt.status !== 'LIFTED' ||
-                receipt.version !== body.expectedVersion + 1
+                receipt.version !== intention.body.expectedVersion + 1
             ) {
                 setLiftUncertain(true);
                 setError(
@@ -380,16 +426,23 @@ export function ClientNoShowFactsPanel({
             setNotice(
                 'Autoagendamento desbloqueado. Os fatos de falta foram preservados; a situação foi atualizada.',
             );
-            await loadFacts(selected);
+            const originalClient = selectedClient.current;
+            if (originalClient?.clientId === intention.clientId)
+                await loadFacts(originalClient);
         } catch {
             setLiftUncertain(true);
             setError(
                 'Resultado incerto. Repita o mesmo desbloqueio para recuperar a operação original.',
             );
         } finally {
+            liftRequestInFlight.current = false;
             setLiftSaving(false);
+            if (!pendingLift.current) setLiftIntentLocked(false);
         }
     }
+
+    const interactionsLocked =
+        locked || liftSaving || liftUncertain || liftIntentLocked;
 
     if (!enabled) return null;
     return (
@@ -410,13 +463,15 @@ export function ClientNoShowFactsPanel({
                 <input
                     id="no-show-client-search"
                     value={query}
-                    disabled={locked}
+                    disabled={interactionsLocked}
                     onChange={(event) => setQuery(event.target.value)}
                 />
                 <button
                     type="submit"
                     disabled={
-                        loadingClients || locked || query.trim().length < 2
+                        loadingClients ||
+                        interactionsLocked ||
+                        query.trim().length < 2
                     }
                 >
                     {loadingClients ? 'Buscando…' : 'Buscar'}
@@ -428,7 +483,7 @@ export function ClientNoShowFactsPanel({
                         <li key={client.clientId}>
                             <button
                                 type="button"
-                                disabled={locked}
+                                disabled={interactionsLocked}
                                 onClick={() => chooseClient(client)}
                             >
                                 {client.displayName}
@@ -437,12 +492,23 @@ export function ClientNoShowFactsPanel({
                     ))}
                 </ul>
             )}
-            {selected && <h3>Fatos de {selected.displayName}</h3>}
+            {selected && (
+                <h3
+                    data-testid="selected-no-show-client"
+                    data-client-id={selected.clientId}
+                >
+                    Fatos de {selected.displayName}
+                </h3>
+            )}
             {loadingFacts && (
                 <output aria-live="polite">Consultando fatos…</output>
             )}
             {facts && (
-                <div aria-live="polite">
+                <div
+                    aria-live="polite"
+                    data-testid="client-no-show-facts"
+                    data-client-id={facts.clientId}
+                >
                     <p>
                         Janela:{' '}
                         {new Date(facts.windowStart).toLocaleString('pt-BR', {
@@ -485,7 +551,7 @@ export function ClientNoShowFactsPanel({
                                 id="restriction-lift-reason"
                                 maxLength={500}
                                 value={liftReason}
-                                disabled={locked || liftSaving || liftUncertain}
+                                disabled={interactionsLocked}
                                 onChange={(event) =>
                                     setLiftReason(event.target.value)
                                 }
@@ -493,9 +559,10 @@ export function ClientNoShowFactsPanel({
                             <button
                                 type="button"
                                 disabled={
-                                    liftSaving ||
-                                    locked ||
-                                    (!liftUncertain && !liftReason.trim())
+                                    liftUncertain
+                                        ? liftSaving || locked
+                                        : interactionsLocked ||
+                                          !liftReason.trim()
                                 }
                                 onClick={() => void liftRestriction()}
                             >
@@ -581,7 +648,9 @@ export function ClientNoShowFactsPanel({
                                                             fact.appointmentId
                                                         ] ?? ''
                                                     }
-                                                    disabled={locked}
+                                                    disabled={
+                                                        interactionsLocked
+                                                    }
                                                     onChange={(event) =>
                                                         setReasons(
                                                             (current) => ({
@@ -596,6 +665,7 @@ export function ClientNoShowFactsPanel({
                                                 <button
                                                     type="button"
                                                     disabled={
+                                                        interactionsLocked ||
                                                         savingId !== null ||
                                                         (locked &&
                                                             uncertainId !==
@@ -622,7 +692,7 @@ export function ClientNoShowFactsPanel({
                     {facts.hasMore && facts.nextCursor && (
                         <button
                             type="button"
-                            disabled={loadingFacts || locked}
+                            disabled={loadingFacts || interactionsLocked}
                             onClick={() =>
                                 void loadFacts(selected!, facts.nextCursor)
                             }

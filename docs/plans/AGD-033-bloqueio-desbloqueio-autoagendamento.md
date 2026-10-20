@@ -70,6 +70,15 @@
 
 - Permanecem as quatro decisões em `docs/development/OPEN-QUESTIONS.md`: liberação após correção/envelhecimento; política ausente/removida com restrição ativa; redução retroativa do limite; e permissão de novos agendamentos sem política. A implementação não presume respostas finais.
 
+## Follow-up P2 — associação imutável do desbloqueio
+
+- Base confirmada: PR #21 aberto em draft, head remoto `ef600064dfc23fdbdaeb3fcf49d05a3f7f05de4c`. Alteração sem migration, V1–V28 preservadas.
+- Intenção readonly captura `clientId`, `restrictionId`, body e `Idempotency-Key`; envio, retry e receipt usam exclusivamente essa identidade. Guard por ref bloqueia handlers no mesmo turno antes do render; estado React mantém controles desativados durante envio/incerteza. Rejeição definitiva descarta a intenção; resposta de transporte/5xx ou receipt inválido mantém a intenção para recuperação.
+- As leituras de fatos são vinculadas à geração e ao cliente atualmente selecionado. Resposta, erro e `finally` de requisição obsoleta não atualizam estado de outro cliente.
+- Nova regressão de navegador cria A e B restritos por fluxos controlados, mantém POST A pendente após commit, tenta seleção B, simula perda da resposta, repete URL/body/chave originais, valida receipt e efeitos únicos, libera controles e navega para B; depois libera uma resposta GET atrasada de A e verifica DOM B.
+- Local: frontend format/lint, 23 Vitest, TypeScript/Vite build, sintaxe do script E2E e `git diff --check` passaram. E2E local não executado para preservar a stack persistente compartilhada: a inspeção autorizada encontrou somente Keycloak/PostgreSQL ativos, sem backend/frontend E2E; nenhum serviço ou banco foi reconstruído/recriado. Aguarda execução real no App CI com Chrome/Keycloak/PostgreSQL.
+- As quatro questões acima não são alteradas. PR #21 permanece draft até CI dessa regressão; sem merge/deploy.
+
 ## Encerramento ou retomada
 
 - Validação local em 20/10/2026: `cd backend && export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH && ./mvnw -B -ntp spotless:check verify` passou (`BUILD SUCCESS`, 78 unitários/arquiteturais + 220 integrações PostgreSQL 16.13/Testcontainers), incluindo paginação/snapshot concorrente AGD-032, ativação concorrente, rollback de ativação/desbloqueio, migração e casos AGD-033. `TenantPersistenceIT` (27 testes) cobriu instalação limpa, V27→V28, Flyway validate/rerun e privilégios runtime. Frontend `npm run format`, `npm run lint`, `npm test -- --run` (23), `npm run check` passou; sintaxe E2E passou. Após a regressão de 404 definitivo, format/lint/23 Vitest/TypeScript/build e sintaxe E2E passaram novamente. O E2E não foi executado localmente para preservar o Compose compartilhado.
