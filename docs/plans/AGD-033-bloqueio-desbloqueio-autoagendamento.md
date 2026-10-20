@@ -77,6 +77,7 @@
 - As leituras de fatos são vinculadas à geração e ao cliente atualmente selecionado. Resposta, erro e `finally` de requisição obsoleta não atualizam estado de outro cliente.
 - Nova regressão de navegador cria A e B restritos por fluxos controlados, mantém POST A pendente após commit, tenta seleção B, simula perda da resposta, repete URL/body/chave originais, valida receipt e efeitos únicos, libera controles e navega para B; depois libera uma resposta GET atrasada de A e verifica DOM B.
 - Local: frontend format/lint, 23 Vitest, TypeScript/Vite build, sintaxe do script E2E e `git diff --check` passaram. E2E local não executado para preservar a stack persistente compartilhada: a inspeção autorizada encontrou somente Keycloak/PostgreSQL ativos, sem backend/frontend E2E; nenhum serviço ou banco foi reconstruído/recriado. Aguarda execução real no App CI com Chrome/Keycloak/PostgreSQL.
+- Primeira execução App CI push/PR (`39464533849`, `39464544610`) falhou no wait pela presença do cliente B: busca de `E2E` retornou somente os primeiros 20 resultados, excluindo B. O roteiro agora busca pelo prefixo específico comum a A e B, preservando as asserções. CodeQL push/PR (`39464533599`, `39464544827`) passou. A repetição do E2E e verify após a correção está pendente.
 - As quatro questões acima não são alteradas. PR #21 permanece draft até CI dessa regressão; sem merge/deploy.
 
 ## Encerramento ou retomada

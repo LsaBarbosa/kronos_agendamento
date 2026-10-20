@@ -1419,7 +1419,7 @@ try {
     if (restrictionPagePublication.published !== true) {
         throw new Error('Fixture pública não estava publicada para testar a rejeição neutra por restrição.');
     }
-    const secondRestrictedClientName = 'Segundo cliente restrito E2E';
+    const secondRestrictedClientName = 'Reserva administrativa E2E - Cliente B';
     const secondRestrictedClientPhone = '+5511999991235';
     const secondRestrictionAppointment = await evaluate(`(async () => {
       const [scheduleResponse, csrfResponse] = await Promise.all([
@@ -1534,7 +1534,7 @@ try {
     }
     await navigate(`http://localhost:5173/admin`, secondTab.command, secondTab.evaluate);
     await waitForText('Faltas de clientes', evaluate);
-    await setFieldById('no-show-client-search', 'E2E', evaluate);
+    await setFieldById('no-show-client-search', 'Reserva administrativa E2E', evaluate);
     await clickButtonByText('Buscar', evaluate);
     await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === 'Reserva administrativa E2E')`));
     await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === '${secondRestrictedClientName}')`));
@@ -1638,7 +1638,7 @@ try {
     if (restrictionAfterReload.includes('Restrição ativa desde') || !restrictionAfterReload.includes('Faltas que contam: 1') || !restrictionAfterReload.includes('Bloqueio removido')) {
         throw new Error(`Desbloqueio/fatos não persistiram após reload: ${restrictionAfterReload}`);
     }
-    await setFieldById('no-show-client-search', 'E2E', evaluate);
+    await setFieldById('no-show-client-search', 'Reserva administrativa E2E', evaluate);
     await clickButtonByText('Buscar', evaluate);
     await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === '${secondRestrictedClientName}')`));
     await clickButtonByText(secondRestrictedClientName, evaluate);
