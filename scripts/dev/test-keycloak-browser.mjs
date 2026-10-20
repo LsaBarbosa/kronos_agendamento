@@ -2520,6 +2520,17 @@ async function setFieldById(id, value, evaluate) {
     })()`);
 }
 
+async function setTextareaById(id, value, evaluate) {
+    await evaluate(`(() => {
+      const field = document.getElementById(${JSON.stringify(id)});
+      if (!field) throw new Error('Textarea not found: ' + ${JSON.stringify(id)});
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+      descriptor.set.call(field, ${JSON.stringify(value)});
+      field.dispatchEvent(new Event('input', {bubbles:true}));
+      field.dispatchEvent(new Event('change', {bubbles:true}));
+    })()`);
+}
+
 async function clickButtonByText(text, evaluate) {
     await evaluate(`(() => {
       const button = [...document.querySelectorAll('button')].find(item => item.innerText.trim() === ${JSON.stringify(text)});
