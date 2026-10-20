@@ -665,11 +665,10 @@ export function ClientNoShowFactsPanel({
                                                 <button
                                                     type="button"
                                                     disabled={
-                                                        interactionsLocked ||
                                                         savingId !== null ||
-                                                        (locked &&
-                                                            uncertainId !==
-                                                                fact.appointmentId)
+                                                        (uncertainId !==
+                                                            fact.appointmentId &&
+                                                            interactionsLocked)
                                                     }
                                                     onClick={() =>
                                                         void correct(fact)
