@@ -1500,7 +1500,7 @@ try {
       };
     })()`);
     await clickButtonByText('Desbloquear autoagendamento', evaluate);
-    await waitForText('Resultado do desbloqueio incerto.', evaluate);
+    await waitForText('Resultado incerto. Repita o mesmo desbloqueio para recuperar a operação original.', evaluate);
     await clickButtonByText('Recuperar mesmo desbloqueio', evaluate);
     await waitForText('Autoagendamento desbloqueado.', evaluate);
     await waitUntil(() => evaluate(`(() => {
