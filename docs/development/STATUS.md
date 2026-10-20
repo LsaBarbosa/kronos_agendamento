@@ -1,6 +1,7 @@
 # Estado do projeto
 
 **Atualização:** 20/10/2026.
+**E2E posterior no SHA `34686ad4ef59c4c4af680da21c90b7bb41574af6`:** o caso de associação passou; falha posterior ao aguardar atualização da correção de falta existente. O roteiro agora captura DOM/receipt e estado PostgreSQL para diagnóstico. CodeQL e jobs de validação passaram; App CI do próximo head pendente.
 **E2E AGD-033 no SHA `275412f19c85fa44c248147dd045be5829c3c018`:** a regressão do PR foi comprovada no navegador (A permanece alvo do retry, mesma chave/body, um receipt/efeitos e resposta atrasada A não mistura dados no DOM de B). A execução falhou somente depois, quando o roteiro tentou a correção posterior de A sem voltar à seleção A; isso foi corrigido. CI do head seguinte pendente.
 **CI mais recente AGD-033:** em `156d1cb231ba35cd4c3d4ad046692a55d9fe5b9f`, push/PR falharam no E2E por `await` fora de função async dentro de `Runtime.evaluate`, após alcançar a prova de resposta tardia. A expressão foi encapsulada numa IIFE async no head subsequente; novo CI pendente. O PR #21 continua draft e as quatro decisões abertas permanecem sem alteração.
 **Último E2E AGD-033 (PR #21 draft):** SHA `07e4246c56a0e797abde4e174147edd65345a698` passou pelo retry validado no DOM e falhou na espera da resposta atrasada A por um retorno DOM não convertido em booleano. Correção está no head posterior; CodeQL/verify/frontend/security/secrets passaram; App CI pendente. E2E local não executado para preservar a stack compartilhada. Quatro questões de produto e V1–V28 preservadas.

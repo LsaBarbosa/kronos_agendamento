@@ -1725,7 +1725,12 @@ try {
     await clickButtonByText('Corrigir para concluída', evaluate);
     await waitForText('Resultado incerto. Repita a mesma correção para recuperar o receipt original.', evaluate);
     await clickButtonByText('Recuperar mesma correção', evaluate);
-    await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('corrigida; não conta')`));
+    try {
+        await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('corrigida; não conta')`));
+    } catch (correctionError) {
+        const correctionState = await evaluate(`(() => ({selected:document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId, facts:document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId, row:document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText ?? null, alert:document.querySelector('[role="alert"]')?.innerText ?? '', notice:[...document.querySelectorAll('output')].map(output => output.innerText), requests:window.__noShowCorrectionRequests}))()`);
+        throw new Error(`Correção de falta após retry não reconciliou a linha: ${JSON.stringify(correctionState)}; ${correctionError.message}`);
+    }
     const correctionDom = await evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText ?? ''`);
     if (!correctionDom.includes('COMPLETED, versão 3') || !correctionDom.includes('Correção compensatória comprovada E2E')) {
         throw new Error(`DOM não mostrou correção e motivo persistidos: ${correctionDom}`);
@@ -1752,7 +1757,13 @@ try {
     await clickButtonByText('Buscar', evaluate);
     await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === '${restrictionLiftClientAName}')`));
     await clickButtonByText(restrictionLiftClientAName, evaluate);
-    await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('corrigida; não conta')`));
+    try {
+        await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('corrigida; não conta')`));
+    } catch (correctionError) {
+        const correctionState = await evaluate(`(() => ({selected:document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId, facts:document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId, row:document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText ?? null, alert:document.querySelector('[role="alert"]')?.innerText ?? '', notice:[...document.querySelectorAll('output')].map(output => output.innerText), requests:window.__noShowCorrectionRequests}))()`);
+        const correctionDatabase = queryPostgres(`SELECT status || ':v' || version FROM agendamento.appointment WHERE appointment_id = '${administrativeAppointmentId}'`, appEnvironment);
+        throw new Error(`Correção após retry não reconciliou fatos no DOM: ${JSON.stringify(correctionState)}; db=${correctionDatabase}; ${correctionError.message}`);
+    }
     const correctedFactsAfterReload = await evaluate(`(() => ({
       text: document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText ?? '',
       summary: document.querySelector('section[aria-labelledby="client-no-shows-title"]')?.innerText ?? ''

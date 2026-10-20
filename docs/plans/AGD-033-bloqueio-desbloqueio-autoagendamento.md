@@ -86,6 +86,7 @@
 - As quatro questões acima não são alteradas. PR #21 permanece draft até CI dessa regressão; sem merge/deploy.
 
 ## Encerramento ou retomada
+- No SHA `34686ad4ef59c4c4af680da21c90b7bb41574af6`, E2E confirmou o P2 do desbloqueio e falhou depois, aguardando o fato visual da correção de falta existente. O novo roteiro registra estado DOM/DB caso persista; CodeQL e demais jobs passaram.
 - No SHA `275412f19c85fa44c248147dd045be5829c3c018`, E2E passou pelo caso P2 completo (A/retry/receipt/efeito único, B selecionado e fatos B preservados após GET tardio de A). Falha posterior foi o fluxo de correção já existente não voltar à seleção A. Roteiro agora navega de volta a A antes; novo CI pendente.
 - No SHA `156d1cb231ba35cd4c3d4ad046692a55d9fe5b9f`, os E2E falharam na expressão de liberação da leitura atrasada: `await` não estava em função async no `Runtime.evaluate`. CodeQL, verify, frontend, security e secrets passaram; corrigido com IIFE async, aguardando CI.
 
