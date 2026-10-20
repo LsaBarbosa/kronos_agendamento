@@ -190,7 +190,7 @@ try {
         const method = args[1]?.method ?? 'GET';
         if (url.endsWith('/v1/admin/no-show-policy') && method === 'GET' && window.__holdNoShowReads) {
           return new Promise(resolve => window.__noShowRequests.push({
-            release: () => resolve(new Response(JSON.stringify({configured:false, version:0, threshold:null, restrictionStatus:'NOT_TRACKED'}), {status:200, headers:{'Content-Type':'application/json'}}))
+            release: () => resolve(new Response(JSON.stringify({configured:false, policyStatus:'NOT_CONFIGURED', version:0, threshold:null, restrictionIntegrationStatus:'TRACKED'}), {status:200, headers:{'Content-Type':'application/json'}}))
           }));
         }
         if (url.endsWith('/v1/admin/no-show-policy') && method === 'PUT') {
@@ -303,7 +303,8 @@ try {
         !persistedNoShowPolicy.configured ||
         persistedNoShowPolicy.threshold !== 4 ||
         persistedNoShowPolicy.version !== 2 ||
-        persistedNoShowPolicy.restrictionStatus !== 'NOT_TRACKED'
+        persistedNoShowPolicy.policyStatus !== 'CONFIGURED' ||
+        persistedNoShowPolicy.restrictionIntegrationStatus !== 'TRACKED'
     ) {
         throw new Error('Grade/políticas não persistiram ou divergiram após recarregar.');
     }
