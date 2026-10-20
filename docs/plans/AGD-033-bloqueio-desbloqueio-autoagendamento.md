@@ -86,6 +86,7 @@
 - As quatro questões acima não são alteradas. PR #21 permanece draft até CI dessa regressão; sem merge/deploy.
 
 ## Encerramento ou retomada
+- No SHA `275412f19c85fa44c248147dd045be5829c3c018`, E2E passou pelo caso P2 completo (A/retry/receipt/efeito único, B selecionado e fatos B preservados após GET tardio de A). Falha posterior foi o fluxo de correção já existente não voltar à seleção A. Roteiro agora navega de volta a A antes; novo CI pendente.
 - No SHA `156d1cb231ba35cd4c3d4ad046692a55d9fe5b9f`, os E2E falharam na expressão de liberação da leitura atrasada: `await` não estava em função async no `Runtime.evaluate`. CodeQL, verify, frontend, security e secrets passaram; corrigido com IIFE async, aguardando CI.
 
 - No SHA `07e4246c56a0e797abde4e174147edd65345a698`, App CI push/PR (`39470716093`, `39470725028`) validou retry/receipt e falhou na espera da resposta tardia A porque a condição retornava um elemento DOM em vez de booleano. CodeQL, verify, frontend, security e secrets passaram. Predicado corrigido no head seguinte; CI pendente.

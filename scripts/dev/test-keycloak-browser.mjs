@@ -1701,6 +1701,8 @@ try {
         throw new Error(`Resposta tardia dos fatos do cliente A contaminou o cliente B: ${JSON.stringify(staleFactsDom)}`);
     }
     console.log('Browser: desbloqueio incerto permaneceu ligado ao cliente/restrição originais; retry único atualizou A, bloqueou troca durante envio/incerteza e leitura tardia preservou os dados de B.');
+    await evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).find(button => button.innerText.trim() === '${restrictionLiftClientAName}')?.click()`);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${noShowClientId}' && document.getElementById('no-show-reason-${administrativeAppointmentId}'))`));
     await setTextareaById(`no-show-reason-${administrativeAppointmentId}`, 'Correção compensatória comprovada E2E', evaluate);
     await evaluate(`(() => {
       const originalFetch = window.fetch;
