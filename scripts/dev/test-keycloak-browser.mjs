@@ -1419,6 +1419,9 @@ try {
     }
     await navigate(`http://localhost:5173/public/${encodeURIComponent(publication.slug)}`, secondTab.command, secondTab.evaluate);
     await waitForText(catalogName + ' Editado', secondTab.evaluate);
+    await waitForText('Fazer outra reserva', secondTab.evaluate);
+    await clickButtonByText('Fazer outra reserva', secondTab.evaluate);
+    await waitUntil(() => secondTab.evaluate("Boolean(document.getElementById('public-service') && !document.getElementById('public-service').disabled)"));
     await setSelectById('public-service', publicService.serviceId, secondTab.evaluate);
     const blockedBookingDate = await secondTab.evaluate(`(async () => {
       const base = new Date(${JSON.stringify(publicDate)} + 'T12:00:00Z');
