@@ -1409,6 +1409,14 @@ try {
         appEnvironment,
     );
     if (!activeRestrictionId) throw new Error('NO_SHOW no fluxo do navegador não materializou restrição ativa.');
+    await clickButtonByText('Publicar página', evaluate);
+    await waitForText('Estado: Publicado', evaluate);
+    const restrictionPagePublication = await evaluate(
+        "fetch('/api/v1/admin/publication', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())",
+    );
+    if (restrictionPagePublication.published !== true) {
+        throw new Error('Fixture pública não estava publicada para testar a rejeição neutra por restrição.');
+    }
     await navigate(`http://localhost:5173/public/${encodeURIComponent(publication.slug)}`, secondTab.command, secondTab.evaluate);
     await waitForText(catalogName + ' Editado', secondTab.evaluate);
     await setSelectById('public-service', publicService.serviceId, secondTab.evaluate);
@@ -1448,6 +1456,14 @@ try {
     ));
     if (appointmentsAfterRestrictedAttempt !== appointmentsBeforeRestrictedAttempt) {
         throw new Error('Tentativa pública bloqueada deixou reserva persistida.');
+    }
+    await clickButtonByText('Despublicar página', evaluate);
+    await waitForText('Página pública despublicada.', evaluate);
+    const restrictionPageUnpublished = await evaluate(
+        `fetch('/api/v1/public/${encodeURIComponent(publication.slug)}').then(response => response.status)`,
+    );
+    if (restrictionPageUnpublished !== 404) {
+        throw new Error('Fixture da rejeição por restrição não restaurou o estado público despublicado.');
     }
     await navigate(`http://localhost:5173/admin`, secondTab.command, secondTab.evaluate);
     await waitForText('Faltas de clientes', evaluate);
