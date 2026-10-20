@@ -1591,10 +1591,9 @@ try {
           if (response.ok && window.__restrictionLiftAttempts.length === 1) {
             window.__restrictionLiftResponseReady = true;
             await new Promise(resolve => { window.__releaseRestrictionLiftResponse = resolve; });
-            window.fetch = originalFetch;
             throw new TypeError('Simulated lost restriction lift response after commit');
           }
-          window.fetch = originalFetch;
+          if (window.__restrictionLiftAttempts.length === 2) window.fetch = originalFetch;
         }
         return response;
       };
