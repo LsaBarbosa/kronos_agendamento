@@ -34,7 +34,10 @@ public record OutboxEvent(
     boolean appointmentOutcome =
         aggregateType.equals("APPOINTMENT")
             && java.util.Set.of(
-                    "AppointmentCancelled", "AppointmentCompleted", "ClientNoShowRecorded")
+                    "AppointmentCancelled",
+                    "AppointmentCompleted",
+                    "ClientNoShowRecorded",
+                    "ClientNoShowCorrected")
                 .contains(eventType);
     boolean allowed =
         aggregateType.equals("TENANT") && eventType.equals("TENANT_RENAMED")

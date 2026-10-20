@@ -93,7 +93,7 @@ try {
         );
     }
     const tenantDisplayed = await evaluate(
-        "document.querySelector('p code')?.textContent === " + JSON.stringify(authenticatedSession.tenantId),
+        `Array.from(document.querySelectorAll('p')).some(paragraph => paragraph.textContent.includes('Tenant autorizado:') && paragraph.querySelector('code')?.textContent === ${JSON.stringify(authenticatedSession.tenantId)})`,
     );
     if (!tenantDisplayed) throw new Error('Tenant autorizado não apareceu na UI.');
     await waitForText('Catálogo de serviços', evaluate);
@@ -176,13 +176,119 @@ try {
     await setSelectByLabel('Lembrete único antes do atendimento (horas)', '6', evaluate);
     await clickButtonByText('Salvar políticas', evaluate);
     await waitForText('Políticas salvas.', evaluate);
+
+    await waitForText('Limite ainda não configurado.', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.__noShowRequests = [];
+      window.__noShowCalls = [];
+      window.__holdNoShowReads = true;
+      window.__noShowGatewayFault = false;
+      window.__noShowOriginalFetch = originalFetch;
+      window.fetch = async (...args) => {
+        const url = String(args[0]);
+        const method = args[1]?.method ?? 'GET';
+        if (url.endsWith('/v1/admin/no-show-policy') && method === 'GET' && window.__holdNoShowReads) {
+          return new Promise(resolve => window.__noShowRequests.push({
+            release: () => resolve(new Response(JSON.stringify({configured:false, version:0, threshold:null, restrictionStatus:'NOT_TRACKED'}), {status:200, headers:{'Content-Type':'application/json'}}))
+          }));
+        }
+        if (url.endsWith('/v1/admin/no-show-policy') && method === 'PUT') {
+          const response = await originalFetch(...args);
+          const call = {body: args[1].body, key: args[1].headers['Idempotency-Key'], status: response.status, replayed: response.headers.get('Idempotency-Replayed')};
+          if (window.__noShowGatewayFault && response.ok) {
+            window.__noShowGatewayFault = false;
+            call.status = 503;
+            call.replayed = null;
+            window.__noShowCalls.push(call);
+            return new Response(JSON.stringify({error:{code:'GATEWAY_UNAVAILABLE',message:'Resposta substituída pelo gateway E2E'}}), {status:503, headers:{'Content-Type':'application/json'}});
+          }
+          window.__noShowCalls.push(call);
+          return response;
+        }
+        return originalFetch(...args);
+      };
+    })()`);
+    await clickButtonByText('Atualizar política', evaluate);
+    await clickButtonByText('Atualizar política', evaluate);
+    await waitUntil(() => evaluate('window.__noShowRequests.length === 2'));
+    await evaluate('window.__noShowRequests[0].release()');
+    await setSelectById('no-show-threshold', '3', evaluate);
+    await clickButtonByText('Salvar limite', evaluate);
+    await waitForText('Limite salvo. A aplicação efetiva de restrições depende de AGD-033.', evaluate);
+    await evaluate(`(() => {
+      window.__holdNoShowReads = false;
+      window.__noShowRequests[1].release();
+    })()`);
+    const policyAfterStaleRead = await evaluate(`(() => ({
+      text: document.querySelector('#no-show-policy-title')?.parentElement?.innerText ?? '',
+      threshold: document.getElementById('no-show-threshold')?.value,
+      loading: [...document.querySelectorAll('output')].some(output => output.innerText.includes('Carregando política'))
+    }))()`);
+    if (
+        !policyAfterStaleRead.text.includes('Limite configurado: 3 falta(s), versão 1.') ||
+        policyAfterStaleRead.threshold !== '3' ||
+        policyAfterStaleRead.loading
+    ) {
+        throw new Error(`GET obsoleto substituiu a política salva ou manteve loading: ${JSON.stringify(policyAfterStaleRead)}`);
+    }
+
+    await setSelectById('no-show-threshold', '4', evaluate);
+    await evaluate('window.__noShowCalls = []; window.__noShowGatewayFault = true');
+    await clickButtonByText('Salvar limite', evaluate);
+    await waitForText('O servidor/gateway não confirmou o resultado.', evaluate);
+    const uncertainNoShow = await evaluate(`(() => ({
+      text: document.querySelector('#no-show-policy-title')?.parentElement?.innerText ?? '',
+      thresholdDisabled: document.getElementById('no-show-threshold')?.disabled,
+      retryText: [...document.querySelectorAll('button')].find(button => button.innerText.includes('Recuperar operação'))?.innerText,
+      calls: window.__noShowCalls
+    }))()`);
+    if (
+        !uncertainNoShow.thresholdDisabled ||
+        !uncertainNoShow.retryText ||
+        uncertainNoShow.calls.length !== 1 ||
+        uncertainNoShow.calls[0].status !== 503 ||
+        JSON.parse(uncertainNoShow.calls[0].body).expectedVersion !== 1 ||
+        JSON.parse(uncertainNoShow.calls[0].body).threshold !== 4
+    ) {
+        throw new Error(`UI não preservou o comando após 503: ${JSON.stringify(uncertainNoShow)}`);
+    }
+    await clickButtonByText('Recuperar operação', evaluate);
+    await waitForText('Limite salvo. A aplicação efetiva de restrições depende de AGD-033.', evaluate);
+    const recoveredNoShow = await evaluate(`(() => ({
+      text: document.querySelector('#no-show-policy-title')?.parentElement?.innerText ?? '',
+      threshold: document.getElementById('no-show-threshold')?.value,
+      calls: window.__noShowCalls
+    }))()`);
+    if (
+        !recoveredNoShow.text.includes('Limite configurado: 4 falta(s), versão 2.') ||
+        recoveredNoShow.threshold !== '4' ||
+        recoveredNoShow.calls.length !== 2 ||
+        recoveredNoShow.calls[0].body !== recoveredNoShow.calls[1].body ||
+        recoveredNoShow.calls[0].key !== recoveredNoShow.calls[1].key ||
+        recoveredNoShow.calls[1].replayed !== 'true'
+    ) {
+        throw new Error(`Retry após 503 mudou intenção ou não recuperou o receipt: ${JSON.stringify(recoveredNoShow)}`);
+    }
+    const noShowEffects = Number(queryPostgres(
+        `SELECT CASE WHEN (SELECT count(*) FROM agendamento.client_no_show_policy WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND threshold = 4 AND version = 2) = 1 AND (SELECT count(*) FROM agendamento.audit_event WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND action = 'CLIENT_NO_SHOW_POLICY_UPDATED') = 2 AND (SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND command_scope = 'clients.no-show-policy.replace.v1' AND state = 'COMPLETED') = 2 THEN 1 ELSE 0 END`,
+        appEnvironment,
+    ));
+    if (noShowEffects !== 1) throw new Error('Retries da política criaram mais de uma mutação, auditoria ou receipt por comando.');
+    console.log('Browser: GET obsoleto não substituiu v1; 503 após commit recuperou o mesmo body/chave, receipt e versão v2.');
+
     await clickButtonByText('Recarregar configuração persistida', evaluate);
     await waitForText('Configuração recarregada.', evaluate);
+    await clickButtonByText('Atualizar política', evaluate);
+    await waitForText('Limite configurado: 4 falta(s), versão 2.', evaluate);
     const persistedSchedule = await evaluate(
         "fetch('/api/v1/admin/schedule/weekly-periods', {credentials:'same-origin'}).then(response => response.json())",
     );
     const persistedPolicy = await evaluate(
         "fetch('/api/v1/admin/availability-policy', {credentials:'same-origin'}).then(response => response.json())",
+    );
+    const persistedNoShowPolicy = await evaluate(
+        "fetch('/api/v1/admin/no-show-policy', {credentials:'same-origin'}).then(response => response.json())",
     );
     if (
         persistedSchedule.periods.length !== 2 ||
@@ -193,7 +299,11 @@ try {
         persistedPolicy.minimumNoticeHours !== 12 ||
         persistedPolicy.bookingHorizonDays !== 30 ||
         persistedPolicy.cancellationCutoffHours !== 4 ||
-        persistedPolicy.reminderOffsetHours !== 6
+        persistedPolicy.reminderOffsetHours !== 6 ||
+        !persistedNoShowPolicy.configured ||
+        persistedNoShowPolicy.threshold !== 4 ||
+        persistedNoShowPolicy.version !== 2 ||
+        persistedNoShowPolicy.restrictionStatus !== 'NOT_TRACKED'
     ) {
         throw new Error('Grade/políticas não persistiram ou divergiram após recarregar.');
     }
@@ -1269,6 +1379,75 @@ try {
       return text.includes('NO_SHOW') && text.includes('versão 2') && text.includes('APPOINTMENT_NO_SHOW');
     })()`));
 
+    const noShowClientId = queryPostgres(
+        `SELECT client_id FROM agendamento.appointment WHERE appointment_id = '${administrativeAppointmentId}'`,
+        appEnvironment,
+    );
+    await waitForText('Faltas de clientes', evaluate);
+    await setFieldById('no-show-client-search', 'Reserva administrativa E2E', evaluate);
+    await clickButtonByText('Buscar', evaluate);
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === 'Reserva administrativa E2E')`));
+    await clickButtonByText('Reserva administrativa E2E', evaluate);
+    await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('conta na janela')`));
+    await setTextareaById(`no-show-reason-${administrativeAppointmentId}`, 'Correção compensatória comprovada E2E', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.__noShowCorrectionRequests = [];
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const url = String(args[0]);
+        if (url.endsWith('/correct-no-show') && args[1]?.method === 'POST') {
+          const request = {url, body: args[1].body, key: args[1].headers['Idempotency-Key']};
+          if (response.ok && window.__noShowCorrectionRequests.length === 0) {
+            window.__noShowCorrectionRequests.push(request);
+            throw new TypeError('Simulated lost no-show correction response after commit');
+          }
+          window.__noShowCorrectionRequests.push({...request, status: response.status, replayed: response.headers.get('Idempotency-Replayed'), receipt: response.ok ? await response.clone().json() : null});
+          window.fetch = originalFetch;
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Corrigir para concluída', evaluate);
+    await waitForText('Resultado incerto. Repita a mesma correção para recuperar o receipt original.', evaluate);
+    await clickButtonByText('Recuperar mesma correção', evaluate);
+    await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('corrigida; não conta')`));
+    const correctionDom = await evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText ?? ''`);
+    if (!correctionDom.includes('COMPLETED, versão 3') || !correctionDom.includes('Correção compensatória comprovada E2E')) {
+        throw new Error(`DOM não mostrou correção e motivo persistidos: ${correctionDom}`);
+    }
+    const correctionRequests = await evaluate('window.__noShowCorrectionRequests');
+    if (correctionRequests.length !== 2 || correctionRequests[0].url !== correctionRequests[1].url || correctionRequests[0].body !== correctionRequests[1].body || correctionRequests[0].key !== correctionRequests[1].key || correctionRequests[1].replayed !== 'true') {
+        throw new Error(`Retry da correção alterou a intenção ou não reproduziu receipt: ${JSON.stringify(correctionRequests)}`);
+    }
+    const correctionEffects = Number(queryPostgres(
+        `SELECT CASE WHEN (SELECT status = 'COMPLETED' AND version = 3 FROM agendamento.appointment WHERE appointment_id = '${administrativeAppointmentId}') AND (SELECT count(*) FROM agendamento.appointment_history WHERE appointment_id = '${administrativeAppointmentId}' AND reason_code = 'APPOINTMENT_NO_SHOW') = 1 AND (SELECT count(*) FROM agendamento.appointment_history WHERE appointment_id = '${administrativeAppointmentId}' AND reason_code = 'APPOINTMENT_NO_SHOW_CORRECTED' AND corrects_history_id IS NOT NULL) = 1 AND (SELECT count(*) FROM agendamento.audit_event WHERE target_id = '${administrativeAppointmentId}' AND action = 'APPOINTMENT_NO_SHOW_CORRECTED') = 1 AND (SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = '${administrativeAppointmentId}' AND event_type = 'ClientNoShowCorrected') = 1 AND (SELECT count(*) FROM agendamento.idempotency_record WHERE command_scope = 'appointments.admin.correct-no-show.v1' AND state = 'COMPLETED' AND operation_id = '${correctionRequests[1].receipt.operationId}') = 1 THEN 1 ELSE 0 END`,
+        appEnvironment,
+    ));
+    if (correctionEffects !== 1) throw new Error('Correção após resposta perdida duplicou ou omitiu efeitos persistidos.');
+    const correctionHistory = await evaluate(
+        `fetch('/api/v1/admin/appointments/${administrativeAppointmentId}/history', {credentials:'same-origin'}).then(response => response.json())`,
+    );
+    if (!correctionHistory.items.some(item => item.reasonCode === 'APPOINTMENT_NO_SHOW_CORRECTED' && item.correctsHistoryId)) {
+        throw new Error('História compensatória referenciada não apareceu na consulta administrativa.');
+    }
+    await command('Page.reload');
+    await waitForText('Sessão administrativa ativa.', evaluate);
+    await waitForText('Faltas de clientes', evaluate);
+    await setFieldById('no-show-client-search', 'Reserva administrativa E2E', evaluate);
+    await clickButtonByText('Buscar', evaluate);
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === 'Reserva administrativa E2E')`));
+    await clickButtonByText('Reserva administrativa E2E', evaluate);
+    await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('corrigida; não conta')`));
+    const correctedFactsAfterReload = await evaluate(`(() => ({
+      text: document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText ?? '',
+      summary: document.querySelector('section[aria-labelledby="client-no-shows-title"]')?.innerText ?? ''
+    }))()`);
+    if (!correctedFactsAfterReload.text.includes('COMPLETED, versão 3') || !correctedFactsAfterReload.summary.includes('Faltas que contam: 0')) {
+        throw new Error(`Correção/count não persistiram após reload: ${JSON.stringify(correctedFactsAfterReload)}`);
+    }
+    console.log(`Browser: falta consultada e corrigida com motivo, retry idempotente, história e reload (cliente ${noShowClientId}).`);
+
     const cancelRetryAppointmentId = queryPostgres(
         `SELECT a.appointment_id FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.client_name_snapshot = 'Encaixe administrativo E2E' AND a.status = 'CONFIRMED'`,
         appEnvironment,
@@ -2335,6 +2514,17 @@ async function setFieldById(id, value, evaluate) {
       const field = document.getElementById(${JSON.stringify(id)});
       if (!field) throw new Error('Input not found: ' + ${JSON.stringify(id)});
       const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+      descriptor.set.call(field, ${JSON.stringify(value)});
+      field.dispatchEvent(new Event('input', {bubbles:true}));
+      field.dispatchEvent(new Event('change', {bubbles:true}));
+    })()`);
+}
+
+async function setTextareaById(id, value, evaluate) {
+    await evaluate(`(() => {
+      const field = document.getElementById(${JSON.stringify(id)});
+      if (!field) throw new Error('Textarea not found: ' + ${JSON.stringify(id)});
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
       descriptor.set.call(field, ${JSON.stringify(value)});
       field.dispatchEvent(new Event('input', {bubbles:true}));
       field.dispatchEvent(new Event('change', {bubbles:true}));

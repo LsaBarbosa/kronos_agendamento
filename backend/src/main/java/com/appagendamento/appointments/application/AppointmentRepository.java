@@ -58,6 +58,8 @@ public interface AppointmentRepository {
       com.appagendamento.appointments.domain.AppointmentOutcome outcome,
       String reason);
 
+  boolean correctNoShow(Appointment current, long expectedVersion, String reason);
+
   boolean transitionClientCancellation(Appointment current, UUID clientId, long expectedVersion);
 
   List<AppointmentHistoryEntry> findAdminAppointmentHistory(UUID tenantId, UUID appointmentId);

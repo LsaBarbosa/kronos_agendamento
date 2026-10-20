@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.appagendamento.appointments.application.CancelClientAppointment;
+import com.appagendamento.appointments.application.CorrectAdministrativeNoShow;
 import com.appagendamento.appointments.application.CreateAdministrativeAppointment;
 import com.appagendamento.appointments.application.CreatePublicAppointment;
 import com.appagendamento.appointments.application.GetAdminAppointments;
@@ -30,6 +31,9 @@ import com.appagendamento.catalog.application.ListServices;
 import com.appagendamento.catalog.application.SetServiceStatus;
 import com.appagendamento.catalog.application.UpdateService;
 import com.appagendamento.clientaccess.application.ClientAccessService;
+import com.appagendamento.clients.application.ClientNoShowFacts;
+import com.appagendamento.clients.application.GetClientNoShowPolicy;
+import com.appagendamento.clients.application.ReplaceClientNoShowPolicy;
 import com.appagendamento.clients.application.SearchAdministrativeClients;
 import com.appagendamento.notifications.application.GetNotificationOperations;
 import com.appagendamento.platform.infrastructure.web.CorrelationIdFilter;
@@ -67,6 +71,7 @@ class SecurityBoundaryTest {
   @MockitoBean private CreateAdministrativeAppointment createAdministrativeAppointment;
   @MockitoBean private RescheduleAdministrativeAppointment rescheduleAdministrativeAppointment;
   @MockitoBean private TransitionAdministrativeAppointment transitionAdministrativeAppointment;
+  @MockitoBean private CorrectAdministrativeNoShow correctAdministrativeNoShow;
   @MockitoBean private SearchAdministrativeClients searchAdministrativeClients;
   @MockitoBean private GetAdminAppointments getAdminAppointments;
   @MockitoBean private PreparePublicBookingIntent preparePublicBookingIntent;
@@ -97,6 +102,9 @@ class SecurityBoundaryTest {
   @MockitoBean private GetClientAppointments getClientAppointments;
   @MockitoBean private CancelClientAppointment cancelClientAppointment;
   @MockitoBean private GetNotificationOperations getNotificationOperations;
+  @MockitoBean private GetClientNoShowPolicy getClientNoShowPolicy;
+  @MockitoBean private ClientNoShowFacts clientNoShowFacts;
+  @MockitoBean private ReplaceClientNoShowPolicy replaceClientNoShowPolicy;
 
   @Test
   void anonymousBusinessRequestReceivesConsistentError() throws Exception {

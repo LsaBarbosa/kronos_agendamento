@@ -5,6 +5,7 @@ import com.appagendamento.appointments.domain.AdminAppointmentNotFoundException;
 import com.appagendamento.appointments.domain.AdministrativeScheduleConflictException;
 import com.appagendamento.appointments.domain.AdministrativeScheduleVersionConflictException;
 import com.appagendamento.appointments.domain.AppointmentDataUnavailableException;
+import com.appagendamento.appointments.domain.AppointmentNoShowNotCorrectableException;
 import com.appagendamento.appointments.domain.AppointmentNotConfirmedException;
 import com.appagendamento.appointments.domain.AppointmentNotReschedulableException;
 import com.appagendamento.appointments.domain.AppointmentOutcomeNotYetAllowedException;
@@ -91,6 +92,15 @@ public class AdminAppointmentExceptionHandler {
         HttpStatus.CONFLICT,
         "INVALID_STATE_TRANSITION",
         "O atendimento ainda não atingiu o limite temporal para este encerramento.");
+  }
+
+  @ExceptionHandler(AppointmentNoShowNotCorrectableException.class)
+  ResponseEntity<ApiErrorResponse> noShowNotCorrectable(
+      AppointmentNoShowNotCorrectableException exception, HttpServletRequest request) {
+    return error(
+        HttpStatus.CONFLICT,
+        "INVALID_STATE_TRANSITION",
+        "Somente uma reserva marcada como falta pode receber esta correção.");
   }
 
   @ExceptionHandler(SlotNoLongerAvailableException.class)

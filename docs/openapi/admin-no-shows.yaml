@@ -1,0 +1,136 @@
+openapi: 3.1.0
+info:
+  title: App Agendamento — consulta e correção administrativa de faltas
+  version: 1.0.0
+  description: >-
+    Consulta tenant-scoped explicável e correção compensatória específica.
+    A ausência de política não cria limite nem representa CLEAR; restrições
+    efetivas permanecem fora do contrato até AGD-033.
+servers:
+  - url: /
+paths:
+  /api/v1/admin/clients/{id}/no-shows:
+    get:
+      operationId: getClientNoShowFacts
+      summary: Consultar fatos de falta e contagem em 12 meses
+      security: [{ adminSession: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string, maxLength: 512 }
+      responses:
+        '200':
+          description: Count/facts coerentes no mesmo snapshot de leitura
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NoShowFactsPage' }
+        '400': { $ref: '#/components/responses/InvalidQuery' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /api/v1/admin/appointments/{id}/correct-no-show:
+    post:
+      operationId: correctAdministrativeNoShow
+      summary: Corrigir uma falta para concluída
+      description: >-
+        Somente NO_SHOW→COMPLETED. Exige motivo e versão; preserva o fato
+        original e grava correção referenciada, auditoria, receipt e outbox
+        na mesma transação. Replay exige autorização atual.
+      security: [{ adminSession: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedVersion, reason]
+              additionalProperties: false
+              properties:
+                expectedVersion: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        '200':
+          description: Reserva agora COMPLETED; replay retorna receipt original
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+            Idempotency-Replayed: { schema: { type: boolean } }
+            X-Operation-Id: { schema: { type: string, format: uuid } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [appointmentId, operationId, status, version]
+                properties:
+                  appointmentId: { type: string, format: uuid }
+                  operationId: { type: string, format: uuid }
+                  status: { type: string, const: COMPLETED }
+                  version: { type: integer, minimum: 2 }
+        '400': { $ref: '#/components/responses/InvalidCommand' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+components:
+  securitySchemes:
+    adminSession: { type: apiKey, in: cookie, name: AGDSESSION }
+  schemas:
+    NoShowFactsPage:
+      type: object
+      required: [clientId, windowStart, asOf, timeZone, count, totalFacts, policyStatus, policyVersion, restrictionStatus, facts, hasMore]
+      properties:
+        clientId: { type: string, format: uuid }
+        windowStart: { type: string, format: date-time }
+        asOf: { type: string, format: date-time }
+        timeZone: { type: string }
+        count: { type: integer, minimum: 0 }
+        totalFacts: { type: integer, minimum: 0 }
+        policyStatus: { type: string, enum: [CONFIGURED, NOT_CONFIGURED] }
+        threshold: { type: integer, minimum: 1, maximum: 5, nullable: true }
+        policyVersion: { type: integer, minimum: 0 }
+        restrictionStatus: { type: string, const: NOT_TRACKED }
+        facts:
+          type: array
+          items:
+            type: object
+            required: [historyId, appointmentId, recordedAt, currentStatus, appointmentVersion, contributes]
+            properties:
+              historyId: { type: string, format: uuid }
+              appointmentId: { type: string, format: uuid }
+              recordedAt: { type: string, format: date-time }
+              currentStatus: { type: string, enum: [NO_SHOW, COMPLETED] }
+              appointmentVersion: { type: integer, minimum: 1 }
+              contributes: { type: boolean }
+              correctionHistoryId: { type: string, format: uuid, nullable: true }
+              correctedAt: { type: string, format: date-time, nullable: true }
+              correctionReason: { type: string, nullable: true }
+        nextCursor: { type: string, nullable: true }
+        hasMore: { type: boolean }
+  responses:
+    InvalidQuery: { description: Cursor/limite inválido }
+    InvalidCommand: { description: Request inválido }
+    Unauthorized: { description: Sessão inválida ou expirada }
+    Forbidden: { description: Associação ou autorização inválida }
+    NotFound: { description: Recurso não encontrado }
+    Conflict: { description: Estado, versão ou chave idempotente incompatível }
+    Unavailable: { description: Consulta temporariamente indisponível }

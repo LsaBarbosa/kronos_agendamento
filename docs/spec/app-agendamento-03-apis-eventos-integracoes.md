@@ -328,7 +328,7 @@ Preferir cancelamento lógico para objetos que já produziram efeitos auditávei
 | POST | `/api/v1/admin/appointments/{id}/cancel` | cancelamento administrativo |
 | POST | `/api/v1/admin/appointments/{id}/complete` | conclui atendimento |
 | POST | `/api/v1/admin/appointments/{id}/mark-no-show` | registra falta |
-| POST | `/api/v1/admin/appointments/{id}/correct-outcome` | correção excepcional |
+| POST | `/api/v1/admin/appointments/{id}/correct-no-show` | correção específica `NO_SHOW → COMPLETED` (AGD-032) |
 | GET | `/api/v1/admin/appointments/{id}/history` | linha do tempo |
 
 #### Encerramento administrativo (AGD-023)
@@ -402,6 +402,19 @@ O detalhe técnico do protocolo e trade-offs está na ADR-0017.
 | GET | `/api/v1/admin/clients/{id}` | perfil local e faltas |
 | GET | `/api/v1/admin/clients/{id}/no-shows` | eventos na janela e história |
 | POST | `/api/v1/admin/clients/{id}/restrictions/{restrictionId}/lift` | desbloqueio com motivo |
+
+#### Faltas explicáveis e política (AGD-032)
+
+| Método | Endpoint | Uso |
+|---|---|---|
+| GET | `/api/v1/admin/no-show-policy` | consultar se o limite tenant-scoped está configurado |
+| PUT | `/api/v1/admin/no-show-policy` | configurar/alterar limite 1–5 com `expectedVersion` e `Idempotency-Key` |
+| GET | `/api/v1/admin/clients/{id}/no-shows` | contagem explicável do cliente autenticado, janela, política e fatos |
+| POST | `/api/v1/admin/appointments/{id}/correct-no-show` | correção específica `NO_SHOW → COMPLETED`, motivo obrigatório, CAS e `Idempotency-Key` |
+
+O tenant e o administrador vêm da associação autenticada no servidor. A consulta captura um único `asOf` com `Clock`, calcula em UTC `windowStart = asOf - 12 meses de calendário` (com ajuste de dia inválido) e usa `[windowStart, asOf)`. O instante original da história `NO_SHOW` ancora a contagem; timezone IANA do tenant serve somente à apresentação. A consulta retorna `windowStart`, `asOf`, `timeZone`, contagem, política `{status: CONFIGURED|NOT_CONFIGURED, threshold?, version}`, `restrictionStatus=NOT_TRACKED` e fatos mínimos, incluindo referência da história e estado de contribuição. Consulta, contagem e fatos são lidos sob um snapshot PostgreSQL coerente; paginação usa `asOf` fixo e ordenação por instante/ID, mas páginas são requests independentes e não prometem snapshot físico imutável.
+
+Política ausente é `NOT_CONFIGURED`, `version=0`, sem threshold. Contagem e fatos permanecem disponíveis; não inferir `CLEAR` nem restrição. `NOT_TRACKED` é status separado de integração de restrições ainda não implementada em AGD-033. Correção exige `NO_SHOW → COMPLETED`, motivo obrigatório, tenant e ator derivados da sessão OIDC atual, `expectedVersion` e chave idempotente. Sob lock por tenant, preserva snapshots e história original e grava história compensatória com referência única ao fato original, mudança de versão, auditoria minimizada, receipt e `ClientNoShowCorrected` na mesma transação. Replay revalida associação e retorna o receipt sem repetir efeitos. A contagem recalculada deixa de incluir somente a falta corrigida; não materializa bloqueio/desbloqueio de AGD-033. A política usa CAS/idempotência e auditoria transacional; auditoria contém apenas campos e versões.
 
 ### Assinatura
 

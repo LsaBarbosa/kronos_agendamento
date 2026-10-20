@@ -109,7 +109,10 @@ Os relacionamentos com provedores externos usam referências opacas. Payload bru
 
 - Telefone normalizado é único por tenant entre clientes ativos, com política explícita para mesclagem.
 - Uma falta corresponde a uma transição confirmada de uma reserva.
+- AGD-032 conta fatos originais `NO_SHOW` pelo instante de `occurred_at`, uma única vez por história e tenant; cancelamentos e conclusões não contam. Fato compensatório que referencia a falta corrige sua contribuição sem apagar a história inicial.
 - Restrição de autoagendamento não apaga faltas e não impede acesso/cancelamento.
+
+**Decisão de produto aprovada nesta instrução (AGD-032):** cada avaliação captura uma única referência `asOf` com `Clock`; `windowStart` é `asOf` menos 12 meses de calendário UTC, preservando hora e ajustando datas inválidas ao último dia válido (ex.: 29/02 → 28/02), com intervalo `[windowStart, asOf)`. O timezone do tenant não participa do cálculo. A correção administrativa é exclusivamente `NO_SHOW → COMPLETED`, com motivo, CAS e idempotência; a história original permanece e uma história compensatória aponta para ela. A falta corrigida não contribui para a contagem. Política ausente é `NOT_CONFIGURED`, sem default e sem inferir `CLEAR` ou bloqueio; `NOT_TRACKED` descreve separadamente a ausência de integração de restrições em AGD-033.
 - Desbloqueio manual registra autor e motivo.
 
 ### 4.7 Assinatura
@@ -169,13 +172,15 @@ stateDiagram-v2
 
 Para AGD-023, decisão de produto aprovada pelo usuário em 17/10/2026 (ADR-0018): `COMPLETED` e `NO_SHOW` somente quando o instante confiável é igual ou posterior a `occupied_until`, incluindo buffer; buffer zero significa `occupied_until = service_ends_at`. O cancelamento do cliente aceita `now` igual ao cutoff configurado. Cancelamento administrativo não usa o cutoff de cliente. Não há tolerância adicional de dez minutos.
 
-Uma correção de estado terminal não deve fingir que a transição original nunca ocorreu. Use um comando específico, por exemplo `CorrectAppointmentOutcome`, que:
+Uma correção de estado terminal não deve fingir que a transição original nunca ocorreu. AGD-032 implementa apenas o comando específico `CorrectNoShow` (`NO_SHOW → COMPLETED`), que:
 
 1. valida a autoridade do ator;
 2. registra o estado contestado e a justificativa;
 3. aplica novo fato compensatório;
-4. recalcula restrição de faltas, se necessário;
-5. publica eventos de correção.
+4. remove somente a contribuição do fato corrigido da contagem derivada;
+5. publica `ClientNoShowCorrected` na outbox.
+
+O comando não retorna a reserva a `CONFIRMED`, não altera snapshots/horários e não libera uma ocupação ativa (a reserva já estava terminal). Outras correções de terminal permanecem fora do escopo.
 
 Dependendo da experiência desejada, o estado corrente pode refletir o resultado corrigido, mas o histórico original permanece.
 

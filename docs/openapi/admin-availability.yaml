@@ -8,6 +8,62 @@ info:
 servers:
   - url: /api/v1
 paths:
+  /admin/no-show-policy:
+    x-implementation-status: implemented-AGD-032-policy-configuration-only
+    get:
+      operationId: getAdminNoShowPolicy
+      summary: Consultar configuração do limite de faltas do tenant autenticado
+      security: [{ backendSession: [] }]
+      responses:
+        "200":
+          description: >-
+            Configuração explícita 1–5 ou ausência sem default. restrictionStatus permanece
+            NOT_TRACKED; este recurso não declara contagem ou bloqueio automático.
+          headers:
+            Cache-Control:
+              schema: { type: string }
+              description: Diretiva privada no-store (Spring acrescenta outras diretivas de cache).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClientNoShowPolicy" }
+        "401": { description: Sessão ausente/expirada }
+        "403": { description: Associação administrativa não autorizada/revogada }
+    put:
+      operationId: replaceAdminNoShowPolicy
+      summary: Configurar ou alterar limite de faltas com CAS
+      security: [{ backendSession: [], csrfToken: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, threshold]
+              properties:
+                expectedVersion: { type: integer, minimum: 0 }
+                threshold: { type: integer, minimum: 1, maximum: 5 }
+      responses:
+        "200":
+          description: Política persistida; replay não repete auditoria.
+          headers:
+            Cache-Control:
+              schema: { type: string }
+              description: Diretiva privada no-store (Spring acrescenta outras diretivas de cache).
+            Idempotency-Replayed: { schema: { type: string, enum: ["true", "false"] } }
+            X-Operation-Id: { schema: { type: string, format: uuid } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClientNoShowPolicy" }
+        "400": { description: Corpo inválido ou threshold fora de 1–5 }
+        "401": { description: Sessão ausente/expirada }
+        "403": { description: Associação administrativa não autorizada/revogada }
+        "409": { description: VERSION_CONFLICT ou IDEMPOTENCY_KEY_REUSED }
   /public/{slug}/availability:
     x-implementation-status: implemented-AGD-014
     x-public-access-enabled: true
@@ -933,6 +989,15 @@ components:
         minLength: 16
         maxLength: 128
   schemas:
+    ClientNoShowPolicy:
+      type: object
+      additionalProperties: false
+      required: [configured, version, restrictionStatus]
+      properties:
+        configured: { type: boolean }
+        version: { type: integer, minimum: 0 }
+        threshold: { type: [integer, "null"], minimum: 1, maximum: 5 }
+        restrictionStatus: { type: string, const: NOT_TRACKED }
     AdminAppointmentPage:
       type: object
       additionalProperties: false

@@ -311,6 +311,8 @@ Critérios de aceite:
 - Correção de falta reavalia a restrição.
 - Eventos usados na contagem são explicáveis na área administrativa.
 
+**Decisões aprovadas pelo usuário em 19/10/2026 (ADR-0023):** a avaliação captura `asOf` uma vez; usa 12 meses de calendário UTC e intervalo `[windowStart, asOf)`, com ajuste de data impossível ao último dia válido; conta pelo instante original do evento de `NO_SHOW`, timezone do tenant somente para exibição. Correção administrativa é exclusivamente `NO_SHOW → COMPLETED`, com motivo, autorização, CAS/idempotência e história compensatória referenciada; não apaga o fato nem retorna a `CONFIRMED`. Política ausente é `NOT_CONFIGURED`, sem default, contagem/fatos consultáveis e sem inferir `CLEAR`/bloqueio; `NOT_TRACKED` é estado separado até AGD-033.
+
 ### AGD-033 — Bloqueio e desbloqueio de autoagendamento
 
 **Prioridade:** P0 · **Tamanho:** M

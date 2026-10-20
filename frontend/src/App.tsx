@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { apiBaseUrl } from './config';
 import { commandKey } from './commandKey';
@@ -8,6 +8,8 @@ import { PublicPage } from './PublicPage';
 import { PublicPublicationPanel } from './PublicPublicationPanel';
 import { AdminAgendaPanel } from './AdminAgendaPanel';
 import { ClientAccessPage } from './ClientAccessPage';
+import { ClientNoShowPolicyPanel } from './ClientNoShowPolicyPanel';
+import { ClientNoShowFactsPanel } from './ClientNoShowFactsPanel';
 
 type Session = { authenticated: boolean; tenantId: string; role: string };
 type Csrf = { headerName: string; token: string };
@@ -59,6 +61,18 @@ function AdminApp() {
     const [editing, setEditing] = useState<Service | null>(null);
     const [saving, setSaving] = useState(false);
     const pendingKeys = useRef(new Map<string, string>());
+    const handleNoShowPolicySessionInvalid = useCallback(
+        (responseStatus: number) => {
+            setSession(null);
+            setCsrf(null);
+            setStatus(
+                responseStatus === 401
+                    ? 'Sua sessão expirou. Entre novamente para continuar.'
+                    : 'Sua associação administrativa foi revogada ou o acesso foi negado.',
+            );
+        },
+        [],
+    );
 
     useEffect(() => {
         let active = true;
@@ -522,6 +536,20 @@ function AdminApp() {
                         );
                     }}
                 />
+                {session && (
+                    <ClientNoShowPolicyPanel
+                        enabled
+                        csrf={csrf}
+                        onSessionInvalid={handleNoShowPolicySessionInvalid}
+                    />
+                )}
+                {session && (
+                    <ClientNoShowFactsPanel
+                        enabled
+                        csrf={csrf}
+                        onSessionInvalid={handleNoShowPolicySessionInvalid}
+                    />
+                )}
                 <AdminAgendaPanel
                     enabled={Boolean(session)}
                     csrf={csrf}

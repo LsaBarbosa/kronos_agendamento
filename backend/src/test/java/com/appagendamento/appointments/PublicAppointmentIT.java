@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.appagendamento.appointments.application.AppointmentRepository;
+import com.appagendamento.appointments.application.CorrectAdministrativeNoShow;
 import com.appagendamento.appointments.application.CreateAdministrativeAppointment;
 import com.appagendamento.appointments.application.CreateAdministrativeAppointmentCommand;
 import com.appagendamento.appointments.application.CreatePublicAppointment;
@@ -33,6 +34,7 @@ import com.appagendamento.catalog.domain.ServiceStatus;
 import com.appagendamento.clientaccess.api.AccessCodeSender;
 import com.appagendamento.clients.api.ClientBookingRestrictionQuery;
 import com.appagendamento.clients.api.ClientBookingRestrictionStatus;
+import com.appagendamento.clients.application.ReplaceClientNoShowPolicy;
 import com.appagendamento.idempotency.api.IdempotentCommandResult;
 import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import com.appagendamento.publicpage.application.ChangePublicationStatus;
@@ -55,6 +57,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -101,6 +104,8 @@ class PublicAppointmentIT {
   @Autowired private ManageScheduleExceptions manageScheduleExceptions;
   @Autowired private CreatePublicAppointment createAppointment;
   @Autowired private CreateAdministrativeAppointment createAdministrativeAppointment;
+  @Autowired private CorrectAdministrativeNoShow correctAdministrativeNoShow;
+  @Autowired private ReplaceClientNoShowPolicy replaceClientNoShowPolicy;
   @Autowired private AppointmentRepository appointmentRepository;
   @Autowired private UpdateService updateService;
   @Autowired private SetServiceStatus setServiceStatus;
@@ -502,6 +507,313 @@ class PublicAppointmentIT {
   }
 
   @Test
+  void noShowFactsAreCalendarWindowTenantScopedAndCorrectionPreservesOriginalFact()
+      throws Exception {
+    submitBooking(
+            "facts-no-show-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Fato de falta", "+5511999994350"))
+        .andExpect(status().isCreated());
+    UUID appointmentId = appointmentIdForTenant();
+    UUID clientId = clientId(appointmentId);
+    setAppointmentInPast(appointmentId);
+    postOutcome(appointmentId, "mark-no-show", "facts-no-show-mark-" + UUID.randomUUID(), 1)
+        .andExpect(status().isOk());
+    String cancelStart = bookingDate.atTime(10, 0).atZone(ZONE).toOffsetDateTime().toString();
+    submitBooking(
+            "facts-cancelled-" + UUID.randomUUID(),
+            requestBody(serviceId, cancelStart, "Fato de falta", "+5511999994350"))
+        .andExpect(status().isCreated());
+    UUID cancelledAppointmentId = appointmentIdForTenant();
+    postOutcome(cancelledAppointmentId, "cancel", "facts-cancel-" + UUID.randomUUID(), 1)
+        .andExpect(status().isOk());
+    String completedStart = bookingDate.atTime(11, 0).atZone(ZONE).toOffsetDateTime().toString();
+    submitBooking(
+            "facts-completed-" + UUID.randomUUID(),
+            requestBody(serviceId, completedStart, "Fato de falta", "+5511999994350"))
+        .andExpect(status().isCreated());
+    UUID completedAppointmentId = appointmentIdForTenant();
+    setAppointmentInPast(completedAppointmentId);
+    postOutcome(completedAppointmentId, "complete", "facts-complete-" + UUID.randomUUID(), 1)
+        .andExpect(status().isOk());
+    Instant asOf = Instant.now().plusSeconds(10);
+    org.mockito.Mockito.when(clock.instant()).thenReturn(asOf);
+
+    mvc.perform(
+            get("/api/v1/admin/clients/{id}/no-shows", clientId)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isOk())
+        .andExpect(
+            header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")))
+        .andExpect(jsonPath("$.policyStatus").value("NOT_CONFIGURED"))
+        .andExpect(jsonPath("$.threshold").value(org.hamcrest.Matchers.nullValue()))
+        .andExpect(jsonPath("$.restrictionStatus").value("NOT_TRACKED"))
+        .andExpect(jsonPath("$.count").value(1))
+        .andExpect(jsonPath("$.facts[0].contributes").value(true))
+        .andExpect(jsonPath("$.timeZone").value(ZONE.getId()));
+    replaceClientNoShowPolicy.execute(actor, "facts-policy-" + UUID.randomUUID(), 0, 3);
+    mvc.perform(
+            get("/api/v1/admin/clients/{id}/no-shows", clientId)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.policyStatus").value("CONFIGURED"))
+        .andExpect(jsonPath("$.threshold").value(3))
+        .andExpect(jsonPath("$.count").value(1));
+
+    UUID foreignAppointment = seedForeignAppointment(bookingDate);
+    UUID foreignClient =
+        appJdbc.queryForObject(
+            "SELECT client_id FROM agendamento.appointment WHERE appointment_id = ?",
+            UUID.class,
+            foreignAppointment);
+    mvc.perform(
+            get("/api/v1/admin/clients/{id}/no-shows", foreignClient)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isNotFound())
+        .andExpect(jsonPath("$.error.code").value("RESOURCE_NOT_FOUND"));
+    mvc.perform(
+            post("/api/v1/admin/appointments/{id}/correct-no-show", foreignAppointment)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "foreign-no-show-correction-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1,\"reason\":\"Não deve revelar\"}"))
+        .andExpect(status().isNotFound());
+
+    String correctionKey = "correct-no-show-" + UUID.randomUUID();
+    mvc.perform(
+            post("/api/v1/admin/appointments/{id}/correct-no-show", appointmentId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "stale-no-show-correction-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1,\"reason\":\"Versão obsoleta\"}"))
+        .andExpect(status().isConflict());
+    assertThat(countHistoryReason(appointmentId, "APPOINTMENT_NO_SHOW_CORRECTED")).isZero();
+    assertThat(countByAction("APPOINTMENT_NO_SHOW_CORRECTED")).isZero();
+    assertThat(countByEvent("ClientNoShowCorrected")).isZero();
+    mvc.perform(
+            post("/api/v1/admin/appointments/{id}/correct-no-show", appointmentId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", correctionKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    "{\"expectedVersion\":2,\"reason\":\"Presença confirmada pelo estabelecimento\"}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("COMPLETED"))
+        .andExpect(jsonPath("$.version").value(3));
+    mvc.perform(
+            post("/api/v1/admin/appointments/{id}/correct-no-show", appointmentId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", correctionKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    "{\"expectedVersion\":2,\"reason\":\"Presença confirmada pelo estabelecimento\"}"))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.version").value(3));
+    mvc.perform(
+            post("/api/v1/admin/appointments/{id}/correct-no-show", appointmentId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", correctionKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":2,\"reason\":\"Outro comando\"}"))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("IDEMPOTENCY_KEY_REUSED"));
+
+    mvc.perform(
+            get("/api/v1/admin/clients/{id}/no-shows", clientId)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.count").value(0))
+        .andExpect(jsonPath("$.totalFacts").value(1))
+        .andExpect(jsonPath("$.facts[0].contributes").value(false))
+        .andExpect(
+            jsonPath("$.facts[0].correctionReason")
+                .value("Presença confirmada pelo estabelecimento"));
+    mvc.perform(
+            get("/api/v1/admin/appointments/{id}/history", appointmentId)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isOk())
+        .andExpect(
+            jsonPath(
+                    "$.items[?(@.reasonCode == 'APPOINTMENT_NO_SHOW_CORRECTED')].correctsHistoryId")
+                .exists())
+        .andExpect(
+            jsonPath("$.items[?(@.reasonCode == 'APPOINTMENT_NO_SHOW_CORRECTED')].toStatus")
+                .value("COMPLETED"));
+
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status || ':' || version FROM agendamento.appointment WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("COMPLETED:3");
+    assertThat(countHistoryReason(appointmentId, "APPOINTMENT_NO_SHOW")).isEqualTo(1);
+    assertThat(countHistoryReason(appointmentId, "APPOINTMENT_NO_SHOW_CORRECTED")).isEqualTo(1);
+    assertThat(countByAction("APPOINTMENT_NO_SHOW_CORRECTED")).isEqualTo(1);
+    assertThat(countByEvent("ClientNoShowCorrected")).isEqualTo(1);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT service_name_snapshot || ':' || service_duration_minutes || ':' || service_buffer_after_minutes FROM agendamento.appointment WHERE appointment_id = ?",
+                String.class,
+                appointmentId))
+        .isEqualTo("Consulta:30:15");
+    mvc.perform(
+            get("/api/v1/admin/clients/{id}/no-shows", clientId)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.threshold").value(3))
+        .andExpect(jsonPath("$.count").value(0));
+    migrationJdbc.update(
+        "UPDATE agendamento.admin_tenant_membership SET status = 'DISABLED' WHERE tenant_id = ? AND user_id = ?",
+        tenantId,
+        actor.adminUserId());
+    mvc.perform(
+            get("/api/v1/admin/clients/{id}/no-shows", clientId)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            post("/api/v1/admin/appointments/{id}/correct-no-show", appointmentId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", correctionKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    "{\"expectedVersion\":2,\"reason\":\"Presença confirmada pelo estabelecimento\"}"))
+        .andExpect(status().isForbidden());
+  }
+
+  @Test
+  void noShowFactsUseInclusiveStartExclusiveAsOfAndCountUniqueAppointments() throws Exception {
+    Instant asOf = Instant.parse("2024-02-29T17:42:31.123Z");
+    Instant windowStart = Instant.parse("2023-02-28T17:42:31.123Z");
+    replaceWeeklySchedule.execute(
+        actor,
+        "boundary-schedule-" + UUID.randomUUID(),
+        1,
+        List.of(new WeeklyPeriod(DayOfWeek.MONDAY, LocalTime.of(9, 0), LocalTime.of(13, 0))));
+    List<UUID> appointmentIds = new java.util.ArrayList<>();
+    for (int index = 0; index < 4; index++) {
+      String start =
+          bookingDate
+              .atTime(9, 0)
+              .plusMinutes(index * 60L)
+              .atZone(ZONE)
+              .toOffsetDateTime()
+              .toString();
+      submitBooking(
+              "boundary-no-show-" + index + "-" + UUID.randomUUID(),
+              requestBody(serviceId, start, "Mesmo cliente faltoso", "+5511999994360"))
+          .andExpect(status().isCreated());
+      UUID appointmentId = appointmentIdForTenant();
+      appointmentIds.add(appointmentId);
+      setAppointmentInPast(appointmentId);
+      postOutcome(
+              appointmentId, "mark-no-show", "boundary-mark-" + index + "-" + UUID.randomUUID(), 1)
+          .andExpect(status().isOk());
+    }
+    UUID clientId = clientId(appointmentIds.getFirst());
+    Instant[] occurrences = {windowStart.minusNanos(1), windowStart, asOf.minusNanos(1), asOf};
+    for (int index = 0; index < appointmentIds.size(); index++) {
+      migrationJdbc.update(
+          "UPDATE agendamento.appointment_history SET occurred_at = ? WHERE appointment_id = ? AND reason_code = 'APPOINTMENT_NO_SHOW'",
+          java.sql.Timestamp.from(occurrences[index]),
+          appointmentIds.get(index));
+    }
+    org.mockito.Mockito.when(clock.instant()).thenReturn(asOf);
+
+    mvc.perform(
+            get("/api/v1/admin/clients/{id}/no-shows", clientId)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.windowStart").value("2023-02-28T17:42:31.123Z"))
+        .andExpect(jsonPath("$.asOf").value("2024-02-29T17:42:31.123Z"))
+        .andExpect(jsonPath("$.count").value(2))
+        .andExpect(jsonPath("$.totalFacts").value(2));
+  }
+
+  @Test
+  void concurrentNoShowCorrectionsHaveOneCasWinnerAndOneEffectSet() throws Exception {
+    submitBooking(
+            "concurrent-no-show-correction-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Correção concorrente", "+5511999994361"))
+        .andExpect(status().isCreated());
+    UUID appointmentId = appointmentIdForTenant();
+    setAppointmentInPast(appointmentId);
+    postOutcome(appointmentId, "mark-no-show", "concurrent-no-show-mark-" + UUID.randomUUID(), 1)
+        .andExpect(status().isOk());
+
+    CyclicBarrier barrier = new CyclicBarrier(2);
+    try (ExecutorService requests = Executors.newFixedThreadPool(2)) {
+      Future<Integer> first =
+          requests.submit(
+              () -> concurrentNoShowCorrection(barrier, appointmentId, "Primeira correção"));
+      Future<Integer> second =
+          requests.submit(
+              () -> concurrentNoShowCorrection(barrier, appointmentId, "Segunda correção"));
+      assertThat(List.of(first.get(), second.get())).containsExactlyInAnyOrder(200, 409);
+    }
+    assertThat(persistedStatus(appointmentId)).isEqualTo("COMPLETED:3");
+    assertThat(countHistoryReason(appointmentId, "APPOINTMENT_NO_SHOW")).isEqualTo(1);
+    assertThat(countHistoryReason(appointmentId, "APPOINTMENT_NO_SHOW_CORRECTED")).isEqualTo(1);
+    assertThat(countByAction("APPOINTMENT_NO_SHOW_CORRECTED")).isEqualTo(1);
+    assertThat(countByEvent("ClientNoShowCorrected")).isEqualTo(1);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope = 'appointments.admin.correct-no-show.v1' AND state = 'COMPLETED'",
+                Integer.class,
+                tenantId))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void noShowCorrectionOutboxFailureRollsBackStateHistoryAuditAndReceipt() throws Exception {
+    submitBooking(
+            "facts-rollback-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Rollback falta", "+5511999994352"))
+        .andExpect(status().isCreated());
+    UUID appointmentId = appointmentIdForTenant();
+    setAppointmentInPast(appointmentId);
+    postOutcome(appointmentId, "mark-no-show", "facts-rollback-mark-" + UUID.randomUUID(), 1)
+        .andExpect(status().isOk());
+    int historyBefore = count("appointment_history", tenantId);
+    migrationJdbc.execute(
+        "CREATE FUNCTION agendamento.reject_no_show_correction_outbox() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event_type = 'ClientNoShowCorrected' THEN RAISE EXCEPTION 'injected correction outbox failure'; END IF; RETURN NEW; END $$");
+    migrationJdbc.execute(
+        "CREATE TRIGGER reject_no_show_correction_outbox BEFORE INSERT ON agendamento.outbox_event FOR EACH ROW EXECUTE FUNCTION agendamento.reject_no_show_correction_outbox()");
+    String key = "rollback-no-show-correction-" + UUID.randomUUID();
+    try {
+      org.assertj.core.api.Assertions.assertThatThrownBy(
+              () ->
+                  correctAdministrativeNoShow.execute(
+                      actor, key, appointmentId, 2, "Correção de teste"))
+          .isInstanceOf(RuntimeException.class);
+      assertThat(
+              appJdbc.queryForObject(
+                  "SELECT status || ':' || version FROM agendamento.appointment WHERE appointment_id = ?",
+                  String.class,
+                  appointmentId))
+          .isEqualTo("NO_SHOW:2");
+      assertThat(count("appointment_history", tenantId)).isEqualTo(historyBefore);
+      assertThat(countByAction("APPOINTMENT_NO_SHOW_CORRECTED")).isZero();
+      assertThat(countByEvent("ClientNoShowCorrected")).isZero();
+      assertThat(
+              appJdbc.queryForObject(
+                  "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope = 'appointments.admin.correct-no-show.v1'",
+                  Integer.class,
+                  tenantId))
+          .isZero();
+    } finally {
+      migrationJdbc.execute(
+          "DROP TRIGGER reject_no_show_correction_outbox ON agendamento.outbox_event");
+      migrationJdbc.execute("DROP FUNCTION agendamento.reject_no_show_correction_outbox()");
+    }
+  }
+
+  @Test
   void futureCompletionAndNoShowAreRejectedWithoutAnySuccessEffects() throws Exception {
     submitBooking(
             "future-outcome-booking-" + UUID.randomUUID(),
@@ -888,12 +1200,37 @@ class PublicAppointmentIT {
         tenantId);
   }
 
+  private int concurrentNoShowCorrection(CyclicBarrier barrier, UUID appointmentId, String reason)
+      throws Exception {
+    barrier.await();
+    return mvc.perform(
+            post("/api/v1/admin/appointments/{id}/correct-no-show", appointmentId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "concurrent-no-show-correction-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        Map.of("expectedVersion", 2, "reason", reason))))
+        .andReturn()
+        .getResponse()
+        .getStatus();
+  }
+
   private UUID appointmentIdForClientName(String name) {
     return appJdbc.queryForObject(
         "SELECT appointment.appointment_id FROM agendamento.appointment appointment JOIN agendamento.client client USING (tenant_id, client_id) WHERE appointment.tenant_id = ? AND client.display_name = ? ORDER BY appointment.created_at DESC LIMIT 1",
         UUID.class,
         tenantId,
         name);
+  }
+
+  private UUID clientId(UUID appointmentId) {
+    return appJdbc.queryForObject(
+        "SELECT client_id FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+        UUID.class,
+        tenantId,
+        appointmentId);
   }
 
   private void setAppointmentInterval(

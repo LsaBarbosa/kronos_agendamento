@@ -302,11 +302,11 @@ Regras:
 
 ### Política
 
-- Contagem em janela móvel de 12 meses.
+- Contagem em janela móvel de 12 meses. AGD-032 captura um único `asOf` por avaliação via `Clock`, calcula `windowStart` subtraindo 12 meses de calendário em UTC (preservando horário e ajustando dia inexistente, como 29/02 para 28/02) e usa `[windowStart, asOf)`. A ocorrência é o instante original do registro de `NO_SHOW`; o timezone do tenant é apenas para apresentação.
 - Limite configurável entre 1 e 5 faltas.
 - Ao atingir o limite, criar restrição ativa para autoagendamento.
 - Cancelamentos não contam como falta.
-- Corrigir uma falta reavalia a restrição.
+- Corrigir falta é comando administrativo específico `NO_SHOW → COMPLETED`, com motivo obrigatório, autorização atual, CAS e idempotência. Preserva falta/história original e registra correção compensatória referenciada; a falta corrigida deixa de contar. Não retorna a `CONFIRMED`, nem autoriza edição genérica de estado terminal.
 - A política aplicada e a contagem usada são registradas para auditoria.
 
 ### Administração
@@ -315,6 +315,8 @@ Regras:
 - Desbloqueio manual exige motivo e não apaga eventos de falta.
 - Uma nova falta posterior pode voltar a bloquear conforme a política vigente.
 - Mudança do limite não deve reescrever história; pode recalcular restrições atuais por job versionado e auditado.
+
+Política ausente é `NOT_CONFIGURED`, sem limite padrão. Contagem e fatos continuam consultáveis, mas a ausência não permite inferir `CLEAR` nem bloqueio. `restrictionStatus=NOT_TRACKED` é separado e permanece até integração efetiva de AGD-033; configurar limite não materializa restrição.
 
 ## 11. Notificações
 
