@@ -1384,7 +1384,7 @@ try {
         appEnvironment,
     );
     await waitForText('Faltas de clientes', evaluate);
-    await setFieldByLabel('Buscar cliente por nome', 'Reserva administrativa E2E', evaluate);
+    await setFieldById('no-show-client-search', 'Reserva administrativa E2E', evaluate);
     await clickButtonByText('Buscar', evaluate);
     await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === 'Reserva administrativa E2E')`));
     await clickButtonByText('Reserva administrativa E2E', evaluate);
@@ -1434,7 +1434,7 @@ try {
     await command('Page.reload');
     await waitForText('Sessão administrativa ativa.', evaluate);
     await waitForText('Faltas de clientes', evaluate);
-    await setFieldByLabel('Buscar cliente por nome', 'Reserva administrativa E2E', evaluate);
+    await setFieldById('no-show-client-search', 'Reserva administrativa E2E', evaluate);
     await clickButtonByText('Buscar', evaluate);
     await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === 'Reserva administrativa E2E')`));
     await clickButtonByText('Reserva administrativa E2E', evaluate);
