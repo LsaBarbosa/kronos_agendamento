@@ -1422,7 +1422,7 @@ try {
     const restrictionLiftSearchPrefix = 'Cliente P2 desbloqueio E2E';
     const restrictionLiftClientAName = `${restrictionLiftSearchPrefix} A`;
     const secondRestrictedClientName = `${restrictionLiftSearchPrefix} B`;
-    const secondRestrictedClientPhone = '+5511999991235';
+    const secondRestrictedClientPhone = '+5511999991237';
     const secondRestrictionAppointment = await evaluate(`(async () => {
       const [scheduleResponse, csrfResponse] = await Promise.all([
         fetch('/api/v1/admin/schedule/weekly-periods', {credentials:'same-origin', cache:'no-store'}),
@@ -1482,6 +1482,30 @@ try {
         `UPDATE agendamento.client SET display_name = '${restrictionLiftClientAName}' WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${noShowClientId}'`,
         appEnvironment,
     );
+    const restrictionLiftFixtureNames = queryPostgres(
+        `SELECT string_agg(client_id::text || ':' || display_name, ' | ' ORDER BY display_name) FROM agendamento.client WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id IN ('${noShowClientId}', '${secondRestrictedClientId}')`,
+        appEnvironment,
+    );
+    const restrictionLiftSearchProbe = await evaluate(
+        `fetch('/api/v1/admin/clients?query=' + encodeURIComponent(${JSON.stringify(restrictionLiftSearchPrefix)}), {credentials:'same-origin', cache:'no-store'}).then(response => response.json())`,
+    );
+    if (
+        !restrictionLiftSearchProbe.some(
+            (client) =>
+                client.clientId === noShowClientId &&
+                client.displayName === restrictionLiftClientAName,
+        ) ||
+        !restrictionLiftSearchProbe.some(
+            (client) =>
+                client.clientId === secondRestrictedClientId &&
+                client.displayName === secondRestrictedClientName,
+        )
+    ) {
+        throw new Error(
+            `Fixtures A/B não estão disponíveis pela busca tenant-scoped: banco=${restrictionLiftFixtureNames}; API=${JSON.stringify(restrictionLiftSearchProbe)}`,
+        );
+    }
+    console.log('Browser: busca administrativa encontrou ambos os clientes restritos de fixture.');
     await navigate(`http://localhost:5173/public/${encodeURIComponent(publication.slug)}`, secondTab.command, secondTab.evaluate);
     await waitForText(catalogName + ' Editado', secondTab.evaluate);
     await waitUntil(() => secondTab.evaluate("Boolean(document.getElementById('public-service') && !document.getElementById('public-service').disabled)"));
