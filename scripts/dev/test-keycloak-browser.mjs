@@ -1489,7 +1489,7 @@ try {
         const response = await originalFetch(...args);
         const url = String(args[0]);
         if (url.endsWith('/restrictions/${activeRestrictionId}/lift') && args[1]?.method === 'POST') {
-          const attempt = {url, body:args[1].body, key:args[1].headers['Idempotency-Key'], status:response.status, replayed:response.headers.get('Idempotency-Replayed'), receipt:response.ok ? await response.clone().json() : null};
+          const attempt = {url, body:args[1].body, key:args[1].headers['Idempotency-Key'], operationId:response.headers.get('X-Operation-Id'), status:response.status, replayed:response.headers.get('Idempotency-Replayed'), receipt:response.ok ? await response.clone().json() : null};
           window.__restrictionLiftAttempts.push(attempt);
           if (response.ok && window.__restrictionLiftAttempts.length === 1) {
             throw new TypeError('Simulated lost restriction lift response after commit');
@@ -1508,11 +1508,11 @@ try {
       return summary.includes('Situação do autoagendamento: CLEAR') && summary.includes('Bloqueio removido');
     })()`));
     const liftAttempts = await evaluate('window.__restrictionLiftAttempts');
-    if (liftAttempts.length !== 2 || liftAttempts[0].url !== liftAttempts[1].url || liftAttempts[0].body !== liftAttempts[1].body || liftAttempts[0].key !== liftAttempts[1].key || liftAttempts[1].replayed !== 'true' || liftAttempts[1].receipt?.status !== 'LIFTED') {
+    if (liftAttempts.length !== 2 || liftAttempts[0].url !== liftAttempts[1].url || liftAttempts[0].body !== liftAttempts[1].body || liftAttempts[0].key !== liftAttempts[1].key || !liftAttempts[0].operationId || liftAttempts[0].operationId !== liftAttempts[1].operationId || liftAttempts[1].replayed !== 'true' || liftAttempts[1].receipt?.status !== 'LIFTED') {
         throw new Error(`Retry do desbloqueio não recuperou a intenção original: ${JSON.stringify(liftAttempts)}`);
     }
     const liftEffects = Number(queryPostgres(
-        `SELECT CASE WHEN (SELECT status = 'LIFTED' AND version = 2 FROM agendamento.client_booking_restriction WHERE restriction_id = '${activeRestrictionId}') AND (SELECT count(*) = 2 FROM agendamento.client_booking_restriction_history WHERE restriction_id = '${activeRestrictionId}') AND (SELECT count(*) = 1 FROM agendamento.audit_event WHERE target_id = '${activeRestrictionId}' AND action = 'CLIENT_SELF_BOOKING_UNBLOCKED') AND (SELECT count(*) = 1 FROM agendamento.outbox_event WHERE aggregate_id = '${activeRestrictionId}' AND event_type = 'ClientSelfBookingUnblocked') AND (SELECT count(*) = 1 FROM agendamento.idempotency_record WHERE command_scope = 'clients.booking-restriction.lift.v1' AND state = 'COMPLETED' AND operation_id = '${liftAttempts[1].receipt.operationId}') THEN 1 ELSE 0 END`,
+        `SELECT CASE WHEN (SELECT status = 'LIFTED' AND version = 2 FROM agendamento.client_booking_restriction WHERE restriction_id = '${activeRestrictionId}') AND (SELECT count(*) = 2 FROM agendamento.client_booking_restriction_history WHERE restriction_id = '${activeRestrictionId}') AND (SELECT count(*) = 1 FROM agendamento.audit_event WHERE target_id = '${activeRestrictionId}' AND action = 'CLIENT_SELF_BOOKING_UNBLOCKED') AND (SELECT count(*) = 1 FROM agendamento.outbox_event WHERE aggregate_id = '${activeRestrictionId}' AND event_type = 'ClientSelfBookingUnblocked') AND (SELECT count(*) = 1 FROM agendamento.idempotency_record WHERE command_scope = 'clients.booking-restriction.lift.v1' AND state = 'COMPLETED' AND operation_id = '${liftAttempts[1].operationId}') THEN 1 ELSE 0 END`,
         appEnvironment,
     ));
     if (liftEffects !== 1) throw new Error('Retry do desbloqueio duplicou ou omitiu efeitos transacionais.');
