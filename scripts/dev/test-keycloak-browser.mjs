@@ -1419,7 +1419,9 @@ try {
     if (restrictionPagePublication.published !== true) {
         throw new Error('Fixture pública não estava publicada para testar a rejeição neutra por restrição.');
     }
-    const secondRestrictedClientName = 'Reserva administrativa E2E - Cliente B';
+    const restrictionLiftSearchPrefix = 'Cliente P2 desbloqueio E2E';
+    const restrictionLiftClientAName = `${restrictionLiftSearchPrefix} A`;
+    const secondRestrictedClientName = `${restrictionLiftSearchPrefix} B`;
     const secondRestrictedClientPhone = '+5511999991235';
     const secondRestrictionAppointment = await evaluate(`(async () => {
       const [scheduleResponse, csrfResponse] = await Promise.all([
@@ -1476,6 +1478,10 @@ try {
         appEnvironment,
     );
     if (!secondActiveRestrictionId) throw new Error('Segundo NO_SHOW não materializou a restrição da fixture.');
+    queryPostgres(
+        `UPDATE agendamento.client SET display_name = '${restrictionLiftClientAName}' WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${noShowClientId}'`,
+        appEnvironment,
+    );
     await navigate(`http://localhost:5173/public/${encodeURIComponent(publication.slug)}`, secondTab.command, secondTab.evaluate);
     await waitForText(catalogName + ' Editado', secondTab.evaluate);
     await waitUntil(() => secondTab.evaluate("Boolean(document.getElementById('public-service') && !document.getElementById('public-service').disabled)"));
@@ -1534,11 +1540,11 @@ try {
     }
     await navigate(`http://localhost:5173/admin`, secondTab.command, secondTab.evaluate);
     await waitForText('Faltas de clientes', evaluate);
-    await setFieldById('no-show-client-search', 'Reserva administrativa E2E', evaluate);
+    await setFieldById('no-show-client-search', restrictionLiftSearchPrefix, evaluate);
     await clickButtonByText('Buscar', evaluate);
-    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === 'Reserva administrativa E2E')`));
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === '${restrictionLiftClientAName}')`));
     await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === '${secondRestrictedClientName}')`));
-    await clickButtonByText('Reserva administrativa E2E', evaluate);
+    await clickButtonByText(restrictionLiftClientAName, evaluate);
     await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('conta na janela')`));
     if ((await evaluate(`document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId`)) !== noShowClientId) {
         throw new Error('A seleção inicial dos fatos não corresponde ao cliente A.');
@@ -1629,16 +1635,16 @@ try {
     await command('Page.reload');
     await waitForText('Sessão administrativa ativa.', evaluate);
     await waitForText('Faltas de clientes', evaluate);
-    await setFieldById('no-show-client-search', 'Reserva administrativa E2E', evaluate);
+    await setFieldById('no-show-client-search', restrictionLiftSearchPrefix, evaluate);
     await clickButtonByText('Buscar', evaluate);
-    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === 'Reserva administrativa E2E')`));
-    await clickButtonByText('Reserva administrativa E2E', evaluate);
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === '${restrictionLiftClientAName}')`));
+    await clickButtonByText(restrictionLiftClientAName, evaluate);
     await waitUntil(() => evaluate(`document.querySelector('section[aria-labelledby="client-no-shows-title"]')?.innerText.includes('Bloqueio removido')`));
     const restrictionAfterReload = await evaluate(`document.querySelector('section[aria-labelledby="client-no-shows-title"]')?.innerText ?? ''`);
     if (restrictionAfterReload.includes('Restrição ativa desde') || !restrictionAfterReload.includes('Faltas que contam: 1') || !restrictionAfterReload.includes('Bloqueio removido')) {
         throw new Error(`Desbloqueio/fatos não persistiram após reload: ${restrictionAfterReload}`);
     }
-    await setFieldById('no-show-client-search', 'Reserva administrativa E2E', evaluate);
+    await setFieldById('no-show-client-search', restrictionLiftSearchPrefix, evaluate);
     await clickButtonByText('Buscar', evaluate);
     await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === '${secondRestrictedClientName}')`));
     await clickButtonByText(secondRestrictedClientName, evaluate);
@@ -1657,7 +1663,7 @@ try {
         return response;
       };
     })()`);
-    await evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).find(button => button.innerText.trim() === 'Reserva administrativa E2E')?.click()`);
+    await evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).find(button => button.innerText.trim() === '${restrictionLiftClientAName}')?.click()`);
     await waitUntil(() => evaluate('typeof window.__releaseStaleClientFacts === "function"'));
     await evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).find(button => button.innerText.trim() === '${secondRestrictedClientName}')?.click()`);
     await waitUntil(() => evaluate(`document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${secondRestrictedClientId}' && document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')`));
@@ -1712,10 +1718,10 @@ try {
     await command('Page.reload');
     await waitForText('Sessão administrativa ativa.', evaluate);
     await waitForText('Faltas de clientes', evaluate);
-    await setFieldById('no-show-client-search', 'Reserva administrativa E2E', evaluate);
+    await setFieldById('no-show-client-search', restrictionLiftSearchPrefix, evaluate);
     await clickButtonByText('Buscar', evaluate);
-    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === 'Reserva administrativa E2E')`));
-    await clickButtonByText('Reserva administrativa E2E', evaluate);
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === '${restrictionLiftClientAName}')`));
+    await clickButtonByText(restrictionLiftClientAName, evaluate);
     await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('corrigida; não conta')`));
     const correctedFactsAfterReload = await evaluate(`(() => ({
       text: document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText ?? '',
