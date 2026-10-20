@@ -215,7 +215,7 @@ try {
     await evaluate('window.__noShowRequests[0].release()');
     await setSelectById('no-show-threshold', '3', evaluate);
     await clickButtonByText('Salvar limite', evaluate);
-    await waitForText('Limite salvo. A aplicação efetiva de restrições depende de AGD-033.', evaluate);
+    await waitForText('Limite de faltas salvo para este tenant.', evaluate);
     await evaluate(`(() => {
       window.__holdNoShowReads = false;
       window.__noShowRequests[1].release();
