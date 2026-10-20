@@ -254,7 +254,7 @@ try {
         throw new Error(`UI não preservou o comando após 503: ${JSON.stringify(uncertainNoShow)}`);
     }
     await clickButtonByText('Recuperar operação', evaluate);
-    await waitForText('Limite salvo. A aplicação efetiva de restrições depende de AGD-033.', evaluate);
+    await waitForText('Limite de faltas salvo para este tenant.', evaluate);
     const recoveredNoShow = await evaluate(`(() => ({
       text: document.querySelector('#no-show-policy-title')?.parentElement?.innerText ?? '',
       threshold: document.getElementById('no-show-threshold')?.value,
