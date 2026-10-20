@@ -1676,7 +1676,7 @@ try {
     await clickButtonByText('Buscar', evaluate);
     await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === '${secondRestrictedClientName}')`));
     await clickButtonByText(secondRestrictedClientName, evaluate);
-    await waitUntil(() => evaluate(`document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${secondRestrictedClientId}' && document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')`));
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${secondRestrictedClientId}' && document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]'))`));
     await evaluate(`(() => {
       const originalFetch = window.fetch.bind(window);
       window.__staleClientFactsReady = false;
