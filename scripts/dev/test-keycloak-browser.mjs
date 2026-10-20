@@ -529,6 +529,8 @@ try {
     if (!(await evaluate('document.documentElement.scrollWidth <= window.innerWidth'))) {
         throw new Error('A página pública excedeu a largura do viewport desktop.');
     }
+    await clickButtonByText('Fazer outra reserva', evaluate);
+    await waitUntil(() => evaluate(`localStorage.getItem('kronos.public-booking.intent.' + ${JSON.stringify(publication.slug)}) === null`));
     console.log(
         `Browser: visitante consultou ${publicDate}, confirmou duas intenções sem duplicação entre ${publicSlotsBeforeSelection} horários; layout móvel/desktop sem overflow.`,
     );
