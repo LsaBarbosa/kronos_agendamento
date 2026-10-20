@@ -1639,14 +1639,19 @@ try {
         alertText: document.querySelector('[role="alert"]')?.innerText ?? '',
         retryVisible: [...document.querySelectorAll('button')].some(button => button.innerText.includes('Recuperar mesmo desbloqueio')),
         reasonDisabled: document.getElementById('restriction-lift-reason')?.disabled,
-        clientBDisabled: [...document.querySelectorAll('[aria-label="Resultados de clientes"] button')].find(button => button.innerText.trim() === '${secondRestrictedClientName}')?.disabled,
+        clientB: (() => { const button = [...document.querySelectorAll('[aria-label="Resultados de clientes"] button')].find(item => item.innerText.trim() === '${secondRestrictedClientName}'); return {visible:Boolean(button), disabled:button?.disabled}; })(),
       };
     })()`);
-    if (recoveredLiftDom.clientId !== noShowClientId || recoveredLiftDom.factsClientId !== noShowClientId || recoveredLiftDom.active || !recoveredLiftDom.history || !recoveredLiftDom.liftedVersion || recoveredLiftDom.alertText.includes('incerto') || recoveredLiftDom.retryVisible || recoveredLiftDom.reasonDisabled || recoveredLiftDom.clientBDisabled) {
+    if (recoveredLiftDom.clientId !== noShowClientId || recoveredLiftDom.factsClientId !== noShowClientId || recoveredLiftDom.active || !recoveredLiftDom.history || !recoveredLiftDom.liftedVersion || recoveredLiftDom.alertText.includes('incerto') || recoveredLiftDom.retryVisible || recoveredLiftDom.reasonDisabled || !recoveredLiftDom.clientB.visible || recoveredLiftDom.clientB.disabled) {
         throw new Error(`DOM após replay não reconciliou cliente A/liberou navegação: ${JSON.stringify(recoveredLiftDom)}`);
     }
     await evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).find(button => button.innerText.trim() === '${secondRestrictedClientName}')?.click()`);
-    await waitUntil(() => evaluate(`document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId === '${secondRestrictedClientId}' && document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${secondRestrictedClientId}' && document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')`));
+    try {
+        await waitUntil(() => evaluate(`document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId === '${secondRestrictedClientId}' && document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${secondRestrictedClientId}' && document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')`));
+    } catch (selectionError) {
+        const selectionDom = await evaluate(`(() => ({selected:document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId, facts:document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId, active:Boolean(document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')), button:[...document.querySelectorAll('[aria-label="Resultados de clientes"] button')].find(item => item.innerText.trim() === '${secondRestrictedClientName}')?.disabled, alert:document.querySelector('[role="alert"]')?.innerText ?? '', loading:document.querySelector('output[aria-live="polite"]')?.innerText ?? ''}))()`);
+        throw new Error(`Seleção pós-recovery de B não atualizou os fatos: ${JSON.stringify(selectionDom)}; ${selectionError.message}`);
+    }
     const liftAttempts = await evaluate('window.__restrictionLiftAttempts');
     if (liftAttempts.length !== 2 || liftAttempts[0].url !== liftAttempts[1].url || liftAttempts[0].body !== liftAttempts[1].body || liftAttempts[0].key !== liftAttempts[1].key || !liftAttempts[0].operationId || liftAttempts[0].operationId !== liftAttempts[1].operationId || liftAttempts[1].replayed !== 'true' || liftAttempts[1].receipt?.status !== 'LIFTED') {
         throw new Error(`Retry do desbloqueio não recuperou a intenção original: ${JSON.stringify(liftAttempts)}`);
