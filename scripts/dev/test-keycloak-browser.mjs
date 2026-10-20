@@ -1441,6 +1441,7 @@ try {
     await setFieldById('public-date', blockedBookingDate, secondTab.evaluate);
     await waitUntil(() => secondTab.evaluate("document.querySelectorAll('.public-page__slot').length > 0"));
     await secondTab.evaluate("document.querySelector('.public-page__slot')?.click()");
+    await waitUntil(() => secondTab.evaluate("Boolean(document.getElementById('public-client-name'))"));
     await setFieldById('public-client-name', 'Reserva administrativa E2E', secondTab.evaluate);
     await setFieldById('public-client-phone', restrictedPhone, secondTab.evaluate);
     const appointmentsBeforeRestrictedAttempt = Number(queryPostgres(
