@@ -54,8 +54,8 @@
 - [ ] Obter decisões sobre liberação, remoção/ausência da política, redução retroativa do limite e novas reservas sem política.
 - [x] Implementar persistência V28, integração transacional, API/OpenAPI e UI inicial.
 - [x] Validar backend, frontend e PostgreSQL; o script browser passa em `node --check`.
-- [ ] Executar E2E Chrome/Keycloak/PostgreSQL em CI após publicação; manter as decisões de produto como pendências.
-- [ ] Publicar PR AGD-033 como draft para revisão e resolução das decisões; não integrar nem fazer deploy.
+- [ ] Executar E2E Chrome/Keycloak/PostgreSQL em CI; manter as decisões de produto como pendências.
+- [x] Publicar PR [#21](https://github.com/LsaBarbosa/kronos_agendamento/pull/21) como draft para revisão e resolução das decisões; não integrar nem fazer deploy.
 
 ## Validação
 
