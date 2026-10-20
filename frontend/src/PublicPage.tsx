@@ -953,7 +953,9 @@ function PublicPageContent({
                     } else {
                         const outcome = unavailableBookingOutcome(false);
                         setBookingState(outcome.state);
-                        setBookingMessage(outcome.message);
+                        setBookingMessage(
+                            'Não foi possível concluir a reserva. Verifique se a página e as condições do horário continuam disponíveis.',
+                        );
                     }
                 } else if (error.status === 503) {
                     setBookingState('unavailable');

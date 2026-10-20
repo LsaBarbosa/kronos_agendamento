@@ -39,6 +39,10 @@ public record OutboxEvent(
                     "ClientNoShowRecorded",
                     "ClientNoShowCorrected")
                 .contains(eventType);
+    boolean clientRestriction =
+        aggregateType.equals("CLIENT_RESTRICTION")
+            && java.util.Set.of("ClientSelfBookingBlocked", "ClientSelfBookingUnblocked")
+                .contains(eventType);
     boolean allowed =
         aggregateType.equals("TENANT") && eventType.equals("TENANT_RENAMED")
             || aggregateType.equals("SERVICE") && eventType.equals("ServiceCreated")
@@ -47,16 +51,21 @@ public record OutboxEvent(
                 && eventType.equals("AvailabilityPolicyChanged")
             || appointmentConfirmed
             || appointmentRescheduled
-            || appointmentOutcome;
+            || appointmentOutcome
+            || clientRestriction;
     if (!allowed) {
       throw new IllegalArgumentException("Evento fora da allowlist desta integração");
     }
     String expectedPayloadPattern =
         appointmentConfirmed || appointmentRescheduled || appointmentOutcome
             ? "\\{\"appointmentId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}"
-            : aggregateType.equals("SERVICE")
-                ? "\\{\"serviceId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}"
-                : "\\{\"tenantId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}";
+            : eventType.equals("ClientSelfBookingBlocked")
+                ? "\\{\"clientId\":\"[0-9a-fA-F-]{36}\",\"restrictionId\":\"[0-9a-fA-F-]{36}\",\"count\":[1-9][0-9]*,\"threshold\":[1-5],\"policyVersion\":[1-9][0-9]*,\"version\":1\\}"
+                : eventType.equals("ClientSelfBookingUnblocked")
+                    ? "\\{\"clientId\":\"[0-9a-fA-F-]{36}\",\"restrictionId\":\"[0-9a-fA-F-]{36}\",\"version\":(?:[2-9]|[1-9][0-9]+)\\}"
+                    : aggregateType.equals("SERVICE")
+                        ? "\\{\"serviceId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}"
+                        : "\\{\"tenantId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}";
     if (!payloadJson.matches(expectedPayloadPattern)) {
       throw new IllegalArgumentException("Payload fora da allowlist do evento");
     }

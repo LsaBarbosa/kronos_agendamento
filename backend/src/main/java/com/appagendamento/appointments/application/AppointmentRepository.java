@@ -56,7 +56,8 @@ public interface AppointmentRepository {
       Appointment current,
       long expectedVersion,
       com.appagendamento.appointments.domain.AppointmentOutcome outcome,
-      String reason);
+      String reason,
+      java.time.Instant occurredAt);
 
   boolean correctNoShow(Appointment current, long expectedVersion, String reason);
 

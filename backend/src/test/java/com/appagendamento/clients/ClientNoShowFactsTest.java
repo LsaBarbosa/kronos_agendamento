@@ -5,6 +5,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.appagendamento.clients.api.ClientBookingRestrictionQuery;
+import com.appagendamento.clients.api.ClientBookingRestrictionStatus;
 import com.appagendamento.clients.api.ClientNoShowFactsQuery;
 import com.appagendamento.clients.application.ClientNoShowFacts;
 import com.appagendamento.clients.application.ClientNoShowPolicyRepository;
@@ -45,9 +47,13 @@ class ClientNoShowFactsTest {
                     "Pacific/Kiritimati", 0, 0, List.of())));
     ClientNoShowPolicyRepository policies = mock(ClientNoShowPolicyRepository.class);
     when(policies.findPolicy(tenantId)).thenReturn(Optional.empty());
+    ClientBookingRestrictionQuery restrictions = mock(ClientBookingRestrictionQuery.class);
+    when(restrictions.status(tenantId, clientId))
+        .thenReturn(ClientBookingRestrictionStatus.NOT_CONFIGURED);
 
     ClientNoShowFacts.Result result =
-        new ClientNoShowFacts(query, policies, access, clock).execute(actor, clientId, null, null);
+        new ClientNoShowFacts(query, policies, access, clock, restrictions)
+            .execute(actor, clientId, null, null);
 
     assertThat(clock.calls).isEqualTo(1);
     assertThat(result.windowStart()).isEqualTo(Instant.parse("2023-02-28T17:42:31.123Z"));
@@ -55,7 +61,7 @@ class ClientNoShowFactsTest {
     assertThat(result.timeZone()).isEqualTo("Pacific/Kiritimati");
     assertThat(result.policyStatus()).isEqualTo("NOT_CONFIGURED");
     assertThat(result.threshold()).isNull();
-    assertThat(result.restrictionStatus()).isEqualTo("NOT_TRACKED");
+    assertThat(result.restrictionStatus()).isEqualTo("NOT_CONFIGURED");
   }
 
   private static final class CountingClock extends Clock {

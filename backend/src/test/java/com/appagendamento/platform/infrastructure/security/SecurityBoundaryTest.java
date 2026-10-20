@@ -33,6 +33,7 @@ import com.appagendamento.catalog.application.UpdateService;
 import com.appagendamento.clientaccess.application.ClientAccessService;
 import com.appagendamento.clients.application.ClientNoShowFacts;
 import com.appagendamento.clients.application.GetClientNoShowPolicy;
+import com.appagendamento.clients.application.LiftClientBookingRestriction;
 import com.appagendamento.clients.application.ReplaceClientNoShowPolicy;
 import com.appagendamento.clients.application.SearchAdministrativeClients;
 import com.appagendamento.notifications.application.GetNotificationOperations;
@@ -104,6 +105,7 @@ class SecurityBoundaryTest {
   @MockitoBean private GetNotificationOperations getNotificationOperations;
   @MockitoBean private GetClientNoShowPolicy getClientNoShowPolicy;
   @MockitoBean private ClientNoShowFacts clientNoShowFacts;
+  @MockitoBean private LiftClientBookingRestriction liftClientBookingRestriction;
   @MockitoBean private ReplaceClientNoShowPolicy replaceClientNoShowPolicy;
 
   @Test

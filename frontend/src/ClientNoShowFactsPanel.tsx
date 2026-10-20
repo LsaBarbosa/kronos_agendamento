@@ -24,7 +24,28 @@ type Facts = {
     policyStatus: 'CONFIGURED' | 'NOT_CONFIGURED';
     threshold: number | null;
     policyVersion: number;
-    restrictionStatus: 'NOT_TRACKED';
+    restrictionStatus: 'NOT_CONFIGURED' | 'CLEAR' | 'RESTRICTED';
+    activeRestriction: {
+        restrictionId: string;
+        status: 'RESTRICTED';
+        evaluatedAt: string;
+        countAtActivation: number;
+        thresholdAtActivation: number;
+        policyVersion: number;
+        version: number;
+    } | null;
+    restrictionHistory: {
+        historyId: string;
+        restrictionId: string;
+        eventType: 'ACTIVATED' | 'LIFTED';
+        actorType: 'SYSTEM' | 'ADMIN';
+        occurredAt: string;
+        countAtDecision: number;
+        thresholdAtDecision: number;
+        policyVersion: number;
+        restrictionVersion: number;
+        reason: string | null;
+    }[];
     facts: Fact[];
     nextCursor: string | null;
     hasMore: boolean;
@@ -32,6 +53,11 @@ type Facts = {
 type Csrf = { headerName: string; token: string };
 type Pending = {
     appointmentId: string;
+    body: { expectedVersion: number; reason: string };
+    key: string;
+};
+type PendingLift = {
+    restrictionId: string;
     body: { expectedVersion: number; reason: string };
     key: string;
 };
@@ -68,7 +94,11 @@ export function ClientNoShowFactsPanel({
     const [savingId, setSavingId] = useState<string | null>(null);
     const [uncertainId, setUncertainId] = useState<string | null>(null);
     const [locked, setLocked] = useState(false);
+    const [liftReason, setLiftReason] = useState('');
+    const [liftSaving, setLiftSaving] = useState(false);
+    const [liftUncertain, setLiftUncertain] = useState(false);
     const pending = useRef<Pending | null>(null);
+    const pendingLift = useRef<PendingLift | null>(null);
     const keys = useRef(new Map<string, string>());
     const searchGeneration = useRef(0);
     const factsGeneration = useRef(0);
@@ -78,6 +108,7 @@ export function ClientNoShowFactsPanel({
             searchGeneration.current += 1;
             factsGeneration.current += 1;
             pending.current = null;
+            pendingLift.current = null;
         },
         [],
     );
@@ -254,7 +285,7 @@ export function ClientNoShowFactsPanel({
             setLocked(false);
             setUncertainId(null);
             setNotice(
-                'Falta corrigida para concluída. Contagem e fatos atualizados; restrições permanecem NOT_TRACKED até AGD-033.',
+                'Falta corrigida para concluída. Contagem e fatos atualizados; a situação da restrição é consultada separadamente.',
             );
             await loadFacts(selected);
         } catch {
@@ -264,6 +295,99 @@ export function ClientNoShowFactsPanel({
             );
         } finally {
             setSavingId(null);
+        }
+    }
+
+    async function liftRestriction() {
+        if (!selected || !facts?.activeRestriction || !csrf || locked) return;
+        const active = facts.activeRestriction;
+        const existing = pendingLift.current;
+        const body = existing?.body ?? {
+            expectedVersion: active.version,
+            reason: liftReason.trim(),
+        };
+        if (!existing && !body.reason) {
+            setError('Informe o motivo obrigatório do desbloqueio.');
+            return;
+        }
+        const key =
+            existing?.key ??
+            commandKey(
+                keys.current,
+                `lift-client-restriction:${active.restrictionId}`,
+                body,
+            );
+        pendingLift.current = {
+            restrictionId: existing?.restrictionId ?? active.restrictionId,
+            body,
+            key,
+        };
+        setLiftSaving(true);
+        setError('');
+        setNotice('');
+        try {
+            const response = await fetch(
+                `${apiBaseUrl}/v1/admin/clients/${encodeURIComponent(selected.clientId)}/restrictions/${encodeURIComponent(active.restrictionId)}/lift`,
+                {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        [csrf.headerName]: csrf.token,
+                        'Idempotency-Key': key,
+                    },
+                    body: JSON.stringify(body),
+                },
+            );
+            if (response.status === 401 || response.status === 403) {
+                onSessionInvalid(response.status);
+                return;
+            }
+            if (response.status === 408 || response.status >= 500) {
+                setLiftUncertain(true);
+                setError(
+                    'Resultado do desbloqueio incerto. Recupere a mesma operação sem alterar motivo ou versão.',
+                );
+                return;
+            }
+            if (!response.ok) {
+                const message = await responseMessage(response);
+                pendingLift.current = null;
+                setLiftUncertain(false);
+                setError(message);
+                if (response.status === 409) void loadFacts(selected);
+                return;
+            }
+            const receipt = (await response.json()) as {
+                restrictionId: string;
+                status: string;
+                version: number;
+            };
+            if (
+                receipt.restrictionId !== active.restrictionId ||
+                receipt.status !== 'LIFTED' ||
+                receipt.version !== body.expectedVersion + 1
+            ) {
+                setLiftUncertain(true);
+                setError(
+                    'Resposta inválida; recupere a mesma operação de desbloqueio.',
+                );
+                return;
+            }
+            pendingLift.current = null;
+            setLiftUncertain(false);
+            setLiftReason('');
+            setNotice(
+                'Autoagendamento desbloqueado. Os fatos de falta foram preservados; a situação foi atualizada.',
+            );
+            await loadFacts(selected);
+        } catch {
+            setLiftUncertain(true);
+            setError(
+                'Resultado incerto. Repita o mesmo desbloqueio para recuperar a operação original.',
+            );
+        } finally {
+            setLiftSaving(false);
         }
     }
 
@@ -335,8 +459,78 @@ export function ClientNoShowFactsPanel({
                         {facts.policyStatus === 'CONFIGURED'
                             ? `${facts.threshold} (v${facts.policyVersion})`
                             : 'NOT_CONFIGURED, sem limite padrão'}
-                        . Restrição automática: {facts.restrictionStatus}.
+                        . Situação do autoagendamento: {facts.restrictionStatus}
+                        .
                     </p>
+                    {facts.activeRestriction && (
+                        <section aria-label="Restrição ativa de autoagendamento">
+                            <p>
+                                Restrição ativa desde{' '}
+                                {new Date(
+                                    facts.activeRestriction.evaluatedAt,
+                                ).toLocaleString('pt-BR', {
+                                    timeZone: facts.timeZone,
+                                })}
+                                . Decisão:{' '}
+                                {facts.activeRestriction.countAtActivation} de{' '}
+                                {facts.activeRestriction.thresholdAtActivation}{' '}
+                                faltas, política v
+                                {facts.activeRestriction.policyVersion},
+                                restrição v{facts.activeRestriction.version}.
+                            </p>
+                            <label htmlFor="restriction-lift-reason">
+                                Motivo obrigatório para desbloquear
+                            </label>
+                            <textarea
+                                id="restriction-lift-reason"
+                                maxLength={500}
+                                value={liftReason}
+                                disabled={locked || liftSaving || liftUncertain}
+                                onChange={(event) =>
+                                    setLiftReason(event.target.value)
+                                }
+                            />
+                            <button
+                                type="button"
+                                disabled={
+                                    liftSaving ||
+                                    locked ||
+                                    (!liftUncertain && !liftReason.trim())
+                                }
+                                onClick={() => void liftRestriction()}
+                            >
+                                {liftSaving
+                                    ? 'Desbloqueando…'
+                                    : liftUncertain
+                                      ? 'Recuperar mesmo desbloqueio'
+                                      : 'Desbloquear autoagendamento'}
+                            </button>
+                        </section>
+                    )}
+                    {facts.restrictionHistory.length > 0 && (
+                        <ul aria-label="Histórico da restrição">
+                            {facts.restrictionHistory.map((item) => (
+                                <li key={item.historyId}>
+                                    {item.eventType === 'ACTIVATED'
+                                        ? 'Bloqueio ativado'
+                                        : 'Bloqueio removido'}{' '}
+                                    em{' '}
+                                    {new Date(item.occurredAt).toLocaleString(
+                                        'pt-BR',
+                                        { timeZone: facts.timeZone },
+                                    )}
+                                    {' — '}contagem {item.countAtDecision},
+                                    limite {item.thresholdAtDecision}, política
+                                    v{item.policyVersion}, versão v
+                                    {item.restrictionVersion}
+                                    {item.reason
+                                        ? ` — motivo: ${item.reason}`
+                                        : ''}
+                                    .
+                                </li>
+                            ))}
+                        </ul>
+                    )}
                     {facts.facts.length === 0 ? (
                         <p>Nenhum fato de falta na janela.</p>
                     ) : (

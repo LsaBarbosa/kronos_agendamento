@@ -32,8 +32,7 @@ import com.appagendamento.catalog.application.SetServiceStatus;
 import com.appagendamento.catalog.application.UpdateService;
 import com.appagendamento.catalog.domain.ServiceStatus;
 import com.appagendamento.clientaccess.api.AccessCodeSender;
-import com.appagendamento.clients.api.ClientBookingRestrictionQuery;
-import com.appagendamento.clients.api.ClientBookingRestrictionStatus;
+import com.appagendamento.clients.api.ClientNoShowRestrictionActivation;
 import com.appagendamento.clients.application.ReplaceClientNoShowPolicy;
 import com.appagendamento.idempotency.api.IdempotentCommandResult;
 import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
@@ -54,10 +53,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -70,6 +71,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
@@ -93,7 +95,7 @@ class PublicAppointmentIT {
   private static final String ISSUER = "https://identity.test/realms/agendamento";
   private static final ZoneId ZONE = ZoneId.of("America/Sao_Paulo");
 
-  @Autowired private JdbcTemplate appJdbc;
+  @MockitoSpyBean private JdbcTemplate appJdbc;
   @Autowired private CreateService createService;
   @Autowired private ReplaceWeeklySchedule replaceWeeklySchedule;
   @Autowired private ReplaceAvailabilityPolicy replaceAvailabilityPolicy;
@@ -106,6 +108,7 @@ class PublicAppointmentIT {
   @Autowired private CreateAdministrativeAppointment createAdministrativeAppointment;
   @Autowired private CorrectAdministrativeNoShow correctAdministrativeNoShow;
   @Autowired private ReplaceClientNoShowPolicy replaceClientNoShowPolicy;
+  @Autowired private ClientNoShowRestrictionActivation noShowRestrictionActivation;
   @Autowired private AppointmentRepository appointmentRepository;
   @Autowired private UpdateService updateService;
   @Autowired private SetServiceStatus setServiceStatus;
@@ -113,7 +116,6 @@ class PublicAppointmentIT {
   @Autowired private ObjectMapper objectMapper;
   @MockitoBean private java.time.Clock clock;
   @MockitoBean private PublicationEvidence publicationEvidence;
-  @MockitoBean private ClientBookingRestrictionQuery clientRestrictions;
   @MockitoBean private AccessCodeSender accessCodeSender;
 
   private JdbcTemplate migrationJdbc;
@@ -149,10 +151,6 @@ class PublicAppointmentIT {
     org.mockito.Mockito.when(
             publicationEvidence.unavailableEvidence(org.mockito.ArgumentMatchers.any()))
         .thenReturn(List.of());
-    org.mockito.Mockito.when(
-            clientRestrictions.status(
-                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
-        .thenReturn(ClientBookingRestrictionStatus.NOT_TRACKED);
     migrationJdbc = new JdbcTemplate(PostgresTestEnvironment.migrationDataSource());
     tenantId = UUID.randomUUID();
     UUID adminId = UUID.randomUUID();
@@ -507,6 +505,495 @@ class PublicAppointmentIT {
   }
 
   @Test
+  void noShowActivationBlocksNewPublicBookingButPreservesConfirmedReplay() throws Exception {
+    org.mockito.Mockito.when(clock.instant()).thenAnswer(invocation -> Instant.now());
+    String phone = "+5511999994358";
+    String firstKey = "restriction-original-booking-" + UUID.randomUUID();
+    String firstBody = requestBody(serviceId, requestedStart, "Cliente restrito", phone);
+    submitBooking(firstKey, firstBody).andExpect(status().isCreated());
+    UUID appointmentId = appointmentIdForTenant();
+    UUID clientId = clientId(appointmentId);
+    replaceClientNoShowPolicy.execute(actor, "restriction-policy-" + UUID.randomUUID(), 0, 1);
+    setAppointmentInPast(appointmentId);
+    postOutcome(appointmentId, "mark-no-show", "restriction-no-show-" + UUID.randomUUID(), 1)
+        .andExpect(status().isOk());
+
+    UUID restrictionId =
+        appJdbc.queryForObject(
+            "SELECT restriction_id FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND client_id = ? AND status = 'ACTIVE'",
+            UUID.class,
+            tenantId,
+            clientId);
+    assertThat(countByAction("CLIENT_SELF_BOOKING_BLOCKED")).isEqualTo(1);
+    assertThat(countByEvent("ClientSelfBookingBlocked")).isEqualTo(1);
+
+    int appointmentsBefore = count("appointment", tenantId);
+    var attemptedStart = bookingDate.atTime(10, 0).atZone(ZONE).toOffsetDateTime();
+    String blockedBody = requestBody(serviceId, attemptedStart.toString(), "Outro nome", phone);
+    var blocked =
+        submitBooking("restriction-blocked-booking-" + UUID.randomUUID(), blockedBody)
+            .andExpect(status().isNotFound())
+            .andReturn();
+    String blockedResponse = blocked.getResponse().getContentAsString();
+    assertThat(blockedResponse).doesNotContain("NO_SHOW", "falta", restrictionId.toString());
+    assertThat(count("appointment", tenantId)).isEqualTo(appointmentsBefore);
+
+    submitBooking(firstKey, firstBody).andExpect(status().isCreated());
+    assertThat(count("appointment", tenantId)).isEqualTo(appointmentsBefore);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status FROM agendamento.client_booking_restriction WHERE restriction_id = ?",
+                String.class,
+                restrictionId))
+        .isEqualTo("ACTIVE");
+  }
+
+  @Test
+  void concurrentActivationOfSameNoShowFactCreatesOneRestrictionEffectSet() throws Exception {
+    UUID clientId = seedNoShowClient("Concurrent activation");
+    Instant asOf = Instant.now();
+    NoShowFactRef fact = seedNoShowFacts(clientId, asOf.minusSeconds(90), 1).getFirst();
+    replaceClientNoShowPolicy.execute(
+        actor, "concurrent-activation-policy-" + UUID.randomUUID(), 0, 1);
+    CountDownLatch ready = new CountDownLatch(2);
+    CountDownLatch start = new CountDownLatch(1);
+    Runnable activate =
+        () -> {
+          ready.countDown();
+          try {
+            if (!start.await(5, TimeUnit.SECONDS)) {
+              throw new IllegalStateException("Activation workers did not start together");
+            }
+            noShowRestrictionActivation.evaluateAfterNoShow(
+                tenantId, clientId, fact.appointmentId(), asOf);
+          } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(interrupted);
+          }
+        };
+    try (ExecutorService workers = Executors.newFixedThreadPool(2)) {
+      Future<?> first = workers.submit(activate);
+      Future<?> second = workers.submit(activate);
+      assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+      start.countDown();
+      first.get(10, TimeUnit.SECONDS);
+      second.get(10, TimeUnit.SECONDS);
+    }
+    UUID restrictionId =
+        appJdbc.queryForObject(
+            "SELECT restriction_id FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND client_id = ? AND status = 'ACTIVE'",
+            UUID.class,
+            tenantId,
+            clientId);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND client_id = ?",
+                Integer.class,
+                tenantId,
+                clientId))
+        .isEqualTo(1);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.client_booking_restriction_history WHERE tenant_id = ? AND restriction_id = ?",
+                Integer.class,
+                tenantId,
+                restrictionId))
+        .isEqualTo(1);
+    assertThat(countByAction("CLIENT_SELF_BOOKING_BLOCKED")).isEqualTo(1);
+    assertThat(countByEvent("ClientSelfBookingBlocked")).isEqualTo(1);
+  }
+
+  @Test
+  void restrictionActivationFailureRollsBackNoShowAndAllSuccessEffects() throws Exception {
+    submitBooking(
+            "restriction-activation-rollback-" + UUID.randomUUID(),
+            requestBody(serviceId, requestedStart, "Rollback restrição", "+5511999994359"))
+        .andExpect(status().isCreated());
+    UUID appointmentId = appointmentIdForTenant();
+    UUID clientId = clientId(appointmentId);
+    replaceClientNoShowPolicy.execute(
+        actor, "restriction-rollback-policy-" + UUID.randomUUID(), 0, 1);
+    setAppointmentInPast(appointmentId);
+    org.mockito.Mockito.when(clock.instant()).thenAnswer(invocation -> Instant.now());
+    migrationJdbc.execute(
+        "CREATE FUNCTION agendamento.fail_restriction_history() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event_type = 'ACTIVATED' THEN RAISE EXCEPTION 'injected restriction history failure'; END IF; RETURN NEW; END $$");
+    migrationJdbc.execute(
+        "CREATE TRIGGER fail_restriction_history BEFORE INSERT ON agendamento.client_booking_restriction_history FOR EACH ROW EXECUTE FUNCTION agendamento.fail_restriction_history()");
+    String key = "restriction-activation-rollback-mark-" + UUID.randomUUID();
+    try {
+      org.assertj.core.api.Assertions.assertThatThrownBy(
+              () -> postOutcome(appointmentId, "mark-no-show", key, 1))
+          .isInstanceOf(Exception.class);
+    } finally {
+      migrationJdbc.execute(
+          "DROP TRIGGER fail_restriction_history ON agendamento.client_booking_restriction_history");
+      migrationJdbc.execute("DROP FUNCTION agendamento.fail_restriction_history()");
+    }
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status || ':' || version FROM agendamento.appointment WHERE tenant_id = ? AND appointment_id = ?",
+                String.class,
+                tenantId,
+                appointmentId))
+        .isEqualTo("CONFIRMED:1");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.appointment_history WHERE tenant_id = ? AND appointment_id = ?",
+                Integer.class,
+                tenantId,
+                appointmentId))
+        .isEqualTo(1);
+    assertThat(countByAction("APPOINTMENT_NO_SHOW_RECORDED")).isZero();
+    assertThat(countByAction("CLIENT_SELF_BOOKING_BLOCKED")).isZero();
+    assertThat(countByEvent("ClientNoShowRecorded")).isZero();
+    assertThat(countByEvent("ClientSelfBookingBlocked")).isZero();
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND client_id = ?",
+                Integer.class,
+                tenantId,
+                clientId))
+        .isZero();
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope = 'appointments.admin.mark_no_show.v1' AND key_digest = ?",
+                Integer.class,
+                tenantId,
+                com.appagendamento.idempotency.application.IdempotencyKey.digest(key)))
+        .isZero();
+  }
+
+  @Test
+  void restrictionLiftOutboxFailureRollsBackStateHistoryAuditAndReceipt() throws Exception {
+    UUID clientId = seedNoShowClient("Restriction lift rollback");
+    Instant asOf = Instant.now();
+    NoShowFactRef fact = seedNoShowFacts(clientId, asOf.minusSeconds(60), 1).getFirst();
+    replaceClientNoShowPolicy.execute(
+        actor, "restriction-lift-rollback-policy-" + UUID.randomUUID(), 0, 1);
+    noShowRestrictionActivation.evaluateAfterNoShow(tenantId, clientId, fact.appointmentId(), asOf);
+    UUID restrictionId =
+        appJdbc.queryForObject(
+            "SELECT restriction_id FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND client_id = ? AND status = 'ACTIVE'",
+            UUID.class,
+            tenantId,
+            clientId);
+    migrationJdbc.execute(
+        "CREATE FUNCTION agendamento.fail_restriction_lift_outbox() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event_type = 'ClientSelfBookingUnblocked' THEN RAISE EXCEPTION 'injected restriction lift outbox failure'; END IF; RETURN NEW; END $$");
+    migrationJdbc.execute(
+        "CREATE TRIGGER fail_restriction_lift_outbox BEFORE INSERT ON agendamento.outbox_event FOR EACH ROW EXECUTE FUNCTION agendamento.fail_restriction_lift_outbox()");
+    String key = "restriction-lift-rollback-" + UUID.randomUUID();
+    try {
+      org.assertj.core.api.Assertions.assertThatThrownBy(
+              () ->
+                  mvc.perform(
+                      post(
+                              "/api/v1/admin/clients/{id}/restrictions/{restrictionId}/lift",
+                              clientId,
+                              restrictionId)
+                          .with(authentication(principalToken(actor)))
+                          .with(csrf())
+                          .header("Idempotency-Key", key)
+                          .contentType(MediaType.APPLICATION_JSON)
+                          .content("{\"expectedVersion\":1,\"reason\":\"Falha injetada\"}")))
+          .isInstanceOf(Exception.class);
+    } finally {
+      migrationJdbc.execute(
+          "DROP TRIGGER fail_restriction_lift_outbox ON agendamento.outbox_event");
+      migrationJdbc.execute("DROP FUNCTION agendamento.fail_restriction_lift_outbox()");
+    }
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status || ':' || version FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND restriction_id = ?",
+                String.class,
+                tenantId,
+                restrictionId))
+        .isEqualTo("ACTIVE:1");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.client_booking_restriction_history WHERE tenant_id = ? AND restriction_id = ?",
+                Integer.class,
+                tenantId,
+                restrictionId))
+        .isEqualTo(1);
+    assertThat(countByAction("CLIENT_SELF_BOOKING_UNBLOCKED")).isZero();
+    assertThat(countByEvent("ClientSelfBookingUnblocked")).isZero();
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope = 'clients.booking-restriction.lift.v1' AND key_digest = ?",
+                Integer.class,
+                tenantId,
+                com.appagendamento.idempotency.application.IdempotencyKey.digest(key)))
+        .isZero();
+  }
+
+  @Test
+  void publicBookingWaitingForTenantLockSeesRestrictionCommittedBeforeIt() throws Exception {
+    UUID clientId = seedNoShowClient("Concurrent restricted client");
+    String phone =
+        migrationJdbc.queryForObject(
+            "SELECT normalized_phone FROM agendamento.client WHERE tenant_id = ? AND client_id = ?",
+            String.class,
+            tenantId,
+            clientId);
+    Instant asOf = Instant.now();
+    NoShowFactRef source = seedNoShowFacts(clientId, asOf.minusSeconds(2), 1).getFirst();
+    replaceClientNoShowPolicy.execute(
+        actor, "concurrent-restriction-policy-" + UUID.randomUUID(), 0, 1);
+    String key = "concurrent-restriction-booking-" + UUID.randomUUID();
+    String capability = newCapability();
+    String body = requestBody(serviceId, requestedStart, "Novo nome", phone);
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/booking-intents/current")
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .header("X-Booking-Recovery", capability)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isNoContent());
+
+    int appointmentsBefore = count("appointment", tenantId);
+    var startGate = new CountDownLatch(1);
+    var executor = Executors.newSingleThreadExecutor();
+    try (var lockConnection = PostgresTestEnvironment.migrationDataSource().getConnection()) {
+      lockConnection.setAutoCommit(false);
+      try (var statement =
+          lockConnection.prepareStatement(
+              "SELECT tenant_id FROM agendamento.tenant WHERE tenant_id = ? FOR UPDATE")) {
+        statement.setObject(1, tenantId);
+        statement.executeQuery().close();
+      }
+      Future<MvcResult> pendingBooking =
+          executor.submit(
+              () -> {
+                startGate.countDown();
+                return mvc.perform(
+                        post("/api/v1/public/" + slug + "/appointments")
+                            .with(csrf())
+                            .header("Idempotency-Key", key)
+                            .header("X-Booking-Recovery", capability)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andReturn();
+              });
+      assertThat(startGate.await(5, TimeUnit.SECONDS)).isTrue();
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+      boolean waitingOnTenantLock = false;
+      while (System.nanoTime() < deadline) {
+        Boolean waiting =
+            migrationJdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '%agendamento.tenant%' AND query ILIKE '%FOR UPDATE%')",
+                Boolean.class);
+        if (Boolean.TRUE.equals(waiting)) {
+          waitingOnTenantLock = true;
+          break;
+        }
+        Thread.yield();
+      }
+      assertThat(waitingOnTenantLock).as("public command waits on the shared tenant lock").isTrue();
+
+      UUID restrictionId = UUID.randomUUID();
+      try (var insert =
+          lockConnection.prepareStatement(
+              "INSERT INTO agendamento.client_booking_restriction (restriction_id, tenant_id, client_id, source_appointment_id, source_history_id, status, evaluated_at, count_at_activation, threshold_at_activation, policy_version, version, created_at) VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, 1, 1, 1, 1, ?)")) {
+        insert.setObject(1, restrictionId);
+        insert.setObject(2, tenantId);
+        insert.setObject(3, clientId);
+        insert.setObject(4, source.appointmentId());
+        insert.setObject(5, source.historyId());
+        insert.setTimestamp(6, java.sql.Timestamp.from(asOf));
+        insert.setTimestamp(7, java.sql.Timestamp.from(asOf));
+        insert.executeUpdate();
+      }
+      try (var insert =
+          lockConnection.prepareStatement(
+              "INSERT INTO agendamento.client_booking_restriction_history (history_id, tenant_id, restriction_id, event_type, actor_type, occurred_at, count_at_decision, threshold_at_decision, policy_version, restriction_version) VALUES (?, ?, ?, 'ACTIVATED', 'SYSTEM', ?, 1, 1, 1, 1)")) {
+        insert.setObject(1, UUID.randomUUID());
+        insert.setObject(2, tenantId);
+        insert.setObject(3, restrictionId);
+        insert.setTimestamp(4, java.sql.Timestamp.from(asOf));
+        insert.executeUpdate();
+      }
+      lockConnection.commit();
+      assertThat(pendingBooking.get(10, TimeUnit.SECONDS).getResponse().getStatus()).isEqualTo(404);
+    } finally {
+      executor.shutdownNow();
+    }
+    assertThat(count("appointment", tenantId)).isEqualTo(appointmentsBefore);
+    assertThat(count("client", tenantId)).isEqualTo(1);
+  }
+
+  @Test
+  void restrictionLiftRequiresCsrfValidReasonAndCurrentMembership() throws Exception {
+    UUID clientId = seedNoShowClient("Restricted client authorization");
+    Instant asOf = Instant.now();
+    NoShowFactRef fact = seedNoShowFacts(clientId, asOf.minusSeconds(60), 1).getFirst();
+    replaceClientNoShowPolicy.execute(actor, "restriction-auth-policy-" + UUID.randomUUID(), 0, 1);
+    noShowRestrictionActivation.evaluateAfterNoShow(tenantId, clientId, fact.appointmentId(), asOf);
+    UUID restrictionId =
+        appJdbc.queryForObject(
+            "SELECT restriction_id FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND client_id = ? AND status = 'ACTIVE'",
+            UUID.class,
+            tenantId,
+            clientId);
+
+    mvc.perform(
+            post(
+                    "/api/v1/admin/clients/{id}/restrictions/{restrictionId}/lift",
+                    clientId,
+                    restrictionId)
+                .with(authentication(principalToken(actor)))
+                .header("Idempotency-Key", "restriction-no-csrf-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1,\"reason\":\"Revisão\"}"))
+        .andExpect(status().isForbidden());
+
+    mvc.perform(
+            post(
+                    "/api/v1/admin/clients/{id}/restrictions/{restrictionId}/lift",
+                    clientId,
+                    restrictionId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "restriction-empty-reason-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1,\"reason\":\" \"}"))
+        .andExpect(status().isBadRequest());
+
+    UUID foreignClientId = UUID.randomUUID();
+    UUID foreignTenantId = UUID.randomUUID();
+    migrationJdbc.update(
+        "INSERT INTO agendamento.tenant (tenant_id, name, slug, timezone, status) VALUES (?, 'Foreign restriction tenant', ?, 'UTC', 'ACTIVE')",
+        foreignTenantId,
+        "foreign-restriction-" + foreignTenantId.toString().substring(0, 8));
+    migrationJdbc.update(
+        "INSERT INTO agendamento.client (client_id, tenant_id, display_name, normalized_phone) VALUES (?, ?, 'Foreign restricted client', ?)",
+        foreignClientId,
+        foreignTenantId,
+        "+5511998" + String.format("%06d", Math.floorMod(System.nanoTime(), 1_000_000)));
+    mvc.perform(
+            post(
+                    "/api/v1/admin/clients/{id}/restrictions/{restrictionId}/lift",
+                    foreignClientId,
+                    restrictionId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "restriction-foreign-client-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1,\"reason\":\"Revisão\"}"))
+        .andExpect(status().isNotFound());
+
+    migrationJdbc.update(
+        "UPDATE agendamento.admin_tenant_membership SET status = 'DISABLED' WHERE tenant_id = ? AND user_id = ?",
+        tenantId,
+        actor.adminUserId());
+    mvc.perform(
+            post(
+                    "/api/v1/admin/clients/{id}/restrictions/{restrictionId}/lift",
+                    clientId,
+                    restrictionId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "restriction-revoked-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1,\"reason\":\"Revisão\"}"))
+        .andExpect(status().isForbidden());
+
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND restriction_id = ?",
+                String.class,
+                tenantId,
+                restrictionId))
+        .isEqualTo("ACTIVE");
+    assertThat(countByAction("CLIENT_SELF_BOOKING_UNBLOCKED")).isZero();
+    assertThat(countByEvent("ClientSelfBookingUnblocked")).isZero();
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope = 'clients.booking-restriction.lift.v1'",
+                Integer.class,
+                tenantId))
+        .isZero();
+  }
+
+  @Test
+  void administratorCanLiftRestrictionWithReceiptReplayAndLaterNoShowCanReactivate()
+      throws Exception {
+    UUID clientId = seedNoShowClient("Restriction lifecycle");
+    Instant asOf = Instant.now();
+    var firstFact = seedNoShowFacts(clientId, asOf.minusSeconds(90), 1).getFirst();
+    replaceClientNoShowPolicy.execute(
+        actor, "restriction-lifecycle-policy-" + UUID.randomUUID(), 0, 1);
+    noShowRestrictionActivation.evaluateAfterNoShow(
+        tenantId, clientId, firstFact.appointmentId(), asOf);
+    UUID restrictionId =
+        appJdbc.queryForObject(
+            "SELECT restriction_id FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND client_id = ? AND status = 'ACTIVE'",
+            UUID.class,
+            tenantId,
+            clientId);
+    String key = "restriction-lift-" + UUID.randomUUID();
+    String body = "{\"expectedVersion\":1,\"reason\":\"Revisão administrativa\"}";
+    var lifted =
+        mvc.perform(
+                post(
+                        "/api/v1/admin/clients/{id}/restrictions/{restrictionId}/lift",
+                        clientId,
+                        restrictionId)
+                    .with(authentication(principalToken(actor)))
+                    .with(csrf())
+                    .header("Idempotency-Key", key)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(body))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("LIFTED"))
+            .andExpect(jsonPath("$.version").value(2))
+            .andReturn();
+    assertThat(lifted.getResponse().getHeader("Idempotency-Replayed")).isEqualTo("false");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.client_booking_restriction_history WHERE restriction_id = ?",
+                Integer.class,
+                restrictionId))
+        .isEqualTo(2);
+    assertThat(countByAction("CLIENT_SELF_BOOKING_UNBLOCKED")).isEqualTo(1);
+    assertThat(countByEvent("ClientSelfBookingUnblocked")).isEqualTo(1);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.appointment_history WHERE tenant_id = ? AND to_status = 'NO_SHOW'",
+                Integer.class,
+                tenantId))
+        .isEqualTo(1);
+
+    mvc.perform(
+            post(
+                    "/api/v1/admin/clients/{id}/restrictions/{restrictionId}/lift",
+                    clientId,
+                    restrictionId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("LIFTED"))
+        .andExpect(jsonPath("$.version").value(2))
+        .andExpect(header().string("Idempotency-Replayed", "true"));
+    assertThat(countByAction("CLIENT_SELF_BOOKING_UNBLOCKED")).isEqualTo(1);
+    assertThat(countByEvent("ClientSelfBookingUnblocked")).isEqualTo(1);
+
+    var nextFact = seedNoShowFacts(clientId, asOf.plusSeconds(1), 1).getFirst();
+    noShowRestrictionActivation.evaluateAfterNoShow(
+        tenantId, clientId, nextFact.appointmentId(), asOf.plusSeconds(2));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND client_id = ? AND status = 'ACTIVE'",
+                Integer.class,
+                tenantId,
+                clientId))
+        .isEqualTo(1);
+  }
+
+  @Test
   void noShowFactsAreCalendarWindowTenantScopedAndCorrectionPreservesOriginalFact()
       throws Exception {
     submitBooking(
@@ -546,7 +1033,7 @@ class PublicAppointmentIT {
             header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")))
         .andExpect(jsonPath("$.policyStatus").value("NOT_CONFIGURED"))
         .andExpect(jsonPath("$.threshold").value(org.hamcrest.Matchers.nullValue()))
-        .andExpect(jsonPath("$.restrictionStatus").value("NOT_TRACKED"))
+        .andExpect(jsonPath("$.restrictionStatus").value("NOT_CONFIGURED"))
         .andExpect(jsonPath("$.count").value(1))
         .andExpect(jsonPath("$.facts[0].contributes").value(true))
         .andExpect(jsonPath("$.timeZone").value(ZONE.getId()));
@@ -684,6 +1171,168 @@ class PublicAppointmentIT {
                 .content(
                     "{\"expectedVersion\":2,\"reason\":\"Presença confirmada pelo estabelecimento\"}"))
         .andExpect(status().isForbidden());
+  }
+
+  @Test
+  void noShowFactsPaginationWithTimestampTiesHasNoOmissionsOrDuplicates() throws Exception {
+    Instant asOf = Instant.parse("2026-10-20T18:00:00Z");
+    org.mockito.Mockito.when(clock.instant()).thenReturn(asOf);
+    UUID clientId = seedNoShowClient("paginated-no-shows");
+    List<NoShowFactRef> expected = seedNoShowFacts(clientId, asOf.minusSeconds(1), 57);
+    expected.sort(
+        java.util.Comparator.comparing(NoShowFactRef::occurredAt)
+            .reversed()
+            .thenComparing(
+                fact -> fact.historyId().toString(), java.util.Comparator.reverseOrder()));
+
+    List<UUID> actualHistoryIds = new java.util.ArrayList<>();
+    String cursor = null;
+    int pageCount = 0;
+    do {
+      var request =
+          get("/api/v1/admin/clients/{id}/no-shows", clientId)
+              .with(authentication(principalToken(actor)))
+              .param("limit", "20");
+      if (cursor != null) request.param("cursor", cursor);
+      var response = mvc.perform(request).andExpect(status().isOk()).andReturn();
+      var json = objectMapper.readTree(response.getResponse().getContentAsString());
+      assertThat(json.get("asOf").asText()).isEqualTo(asOf.toString());
+      assertThat(json.get("count").asLong()).isEqualTo(57);
+      assertThat(json.get("totalFacts").asLong()).isEqualTo(57);
+      assertThat(json.get("policyStatus").asText()).isEqualTo("NOT_CONFIGURED");
+      assertThat(json.get("restrictionStatus").asText()).isEqualTo("NOT_CONFIGURED");
+      assertThat(json.get("facts").size()).isBetween(1, 20);
+      for (var fact : json.get("facts")) {
+        actualHistoryIds.add(UUID.fromString(fact.get("historyId").asText()));
+        assertThat(fact.get("contributes").asBoolean()).isTrue();
+      }
+      pageCount++;
+      boolean hasMore = json.get("hasMore").asBoolean();
+      if (hasMore) {
+        assertThat(json.get("nextCursor").asText()).isNotBlank();
+        cursor = json.get("nextCursor").asText();
+      } else {
+        assertThat(json.get("nextCursor").isNull()).isTrue();
+        cursor = null;
+      }
+    } while (cursor != null);
+
+    assertThat(pageCount).isEqualTo(3);
+    assertThat(actualHistoryIds).hasSize(57).doesNotHaveDuplicates();
+    assertThat(actualHistoryIds)
+        .containsExactlyElementsOf(expected.stream().map(NoShowFactRef::historyId).toList());
+  }
+
+  @Test
+  void noShowFactsReadKeepsRepeatableReadSnapshotDuringConcurrentCorrection() throws Exception {
+    Instant asOf = Instant.now().plusSeconds(3600);
+    org.mockito.Mockito.when(clock.instant()).thenReturn(asOf);
+    UUID clientId = seedNoShowClient("concurrent-no-show-facts");
+    UUID appointmentId =
+        seedNoShowFacts(clientId, asOf.minusSeconds(120), 1).getFirst().appointmentId();
+    CountDownLatch countRead = new CountDownLatch(1);
+    CountDownLatch continueRead = new CountDownLatch(1);
+    try (ExecutorService requests = Executors.newSingleThreadExecutor()) {
+      Future<MvcResult> firstRead =
+          requests.submit(
+              () ->
+                  readNoShowSnapshotBetweenCountAndFacts(clientId, asOf, countRead, continueRead));
+      assertThat(countRead.await(10, TimeUnit.SECONDS)).isTrue();
+
+      correctAdministrativeNoShow.execute(
+          actor,
+          "concurrent-facts-correction-" + UUID.randomUUID(),
+          appointmentId,
+          2,
+          "Correção durante consulta de fatos");
+      continueRead.countDown();
+      assertThat(firstRead.get(10, TimeUnit.SECONDS).getResponse().getStatus()).isEqualTo(200);
+    } finally {
+      continueRead.countDown();
+    }
+
+    var current =
+        mvc.perform(
+                get("/api/v1/admin/clients/{id}/no-shows", clientId)
+                    .with(authentication(principalToken(actor))))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.count").value(0))
+            .andExpect(jsonPath("$.facts[0].contributes").value(false))
+            .andExpect(jsonPath("$.facts[0].currentStatus").value("COMPLETED"))
+            .andReturn();
+    assertThat(current.getResponse().getStatus()).isEqualTo(200);
+  }
+
+  private MvcResult readNoShowSnapshotBetweenCountAndFacts(
+      UUID clientId, Instant asOf, CountDownLatch countRead, CountDownLatch continueRead)
+      throws Exception {
+    try (var connection = PostgresTestEnvironment.migrationDataSource().getConnection()) {
+      connection.setTransactionIsolation(java.sql.Connection.TRANSACTION_REPEATABLE_READ);
+      connection.setAutoCommit(false);
+      try (var statement =
+          connection.prepareStatement(
+              "SELECT count(DISTINCT a.appointment_id) FROM agendamento.appointment_history h "
+                  + "JOIN agendamento.appointment a ON a.tenant_id = h.tenant_id "
+                  + "AND a.appointment_id = h.appointment_id LEFT JOIN agendamento.appointment_history correction "
+                  + "ON correction.tenant_id = h.tenant_id AND correction.appointment_id = h.appointment_id "
+                  + "AND correction.corrects_history_id = h.history_id AND correction.occurred_at <= ? "
+                  + "WHERE h.tenant_id = ? AND a.client_id = ? AND h.to_status = 'NO_SHOW' "
+                  + "AND h.reason_code = 'APPOINTMENT_NO_SHOW' AND h.occurred_at >= ? "
+                  + "AND h.occurred_at < ? AND correction.history_id IS NULL")) {
+        statement.setTimestamp(1, java.sql.Timestamp.from(asOf));
+        statement.setObject(2, tenantId);
+        statement.setObject(3, clientId);
+        statement.setTimestamp(
+            4,
+            java.sql.Timestamp.from(
+                asOf.atZone(java.time.ZoneOffset.UTC).minusMonths(12).toInstant()));
+        statement.setTimestamp(5, java.sql.Timestamp.from(asOf));
+        try (var result = statement.executeQuery()) {
+          assertThat(result.next()).isTrue();
+          assertThat(result.getLong(1)).isEqualTo(1);
+        }
+      }
+      countRead.countDown();
+      if (!continueRead.await(15, TimeUnit.SECONDS)) {
+        throw new AssertionError("Leitura não retomada pelo teste de concorrência");
+      }
+      try (var statement =
+          connection.prepareStatement(
+              "SELECT a.status, correction.history_id FROM agendamento.appointment_history h "
+                  + "JOIN agendamento.appointment a ON a.tenant_id = h.tenant_id "
+                  + "AND a.appointment_id = h.appointment_id LEFT JOIN agendamento.appointment_history correction "
+                  + "ON correction.tenant_id = h.tenant_id AND correction.appointment_id = h.appointment_id "
+                  + "AND correction.corrects_history_id = h.history_id AND correction.occurred_at <= ? "
+                  + "WHERE h.tenant_id = ? AND a.client_id = ? AND h.to_status = 'NO_SHOW' "
+                  + "AND h.reason_code = 'APPOINTMENT_NO_SHOW' AND h.appointment_id = ?")) {
+        statement.setTimestamp(1, java.sql.Timestamp.from(asOf));
+        statement.setObject(2, tenantId);
+        statement.setObject(3, clientId);
+        statement.setObject(4, appointmentIdFor(clientId));
+        try (var result = statement.executeQuery()) {
+          assertThat(result.next()).isTrue();
+          assertThat(result.getString("status")).isEqualTo("NO_SHOW");
+          assertThat(result.getObject("history_id")).isNull();
+        }
+      }
+      connection.commit();
+    }
+    return mvc.perform(
+            get("/api/v1/admin/clients/{id}/no-shows", clientId)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.count").value(0))
+        .andExpect(jsonPath("$.facts[0].contributes").value(false))
+        .andExpect(jsonPath("$.facts[0].currentStatus").value("COMPLETED"))
+        .andReturn();
+  }
+
+  private UUID appointmentIdFor(UUID clientId) {
+    return appJdbc.queryForObject(
+        "SELECT appointment_id FROM agendamento.appointment WHERE tenant_id = ? AND client_id = ?",
+        UUID.class,
+        tenantId,
+        clientId);
   }
 
   @Test
@@ -1537,14 +2186,20 @@ class PublicAppointmentIT {
   }
 
   @Test
-  void controlledRestrictionAdapterAllowsAdminBookingAndRecordsRestrictedResult() throws Exception {
+  void persistedRestrictionAllowsAdminBookingAndRecordsRestrictedResult() throws Exception {
     UUID restrictedClient = UUID.randomUUID();
     migrationJdbc.update(
         "INSERT INTO agendamento.client (client_id, tenant_id, display_name, normalized_phone) VALUES (?, ?, 'Cliente com restrição', '+5511999996671')",
         restrictedClient,
         tenantId);
-    org.mockito.Mockito.when(clientRestrictions.status(tenantId, restrictedClient))
-        .thenReturn(ClientBookingRestrictionStatus.RESTRICTED);
+    Instant asOf = Instant.now();
+    migrationJdbc.update(
+        "INSERT INTO agendamento.client_no_show_policy (tenant_id, threshold, version) VALUES (?, 1, 1)",
+        tenantId);
+    UUID sourceAppointment =
+        seedNoShowFacts(restrictedClient, asOf.minusSeconds(60), 1).getFirst().appointmentId();
+    noShowRestrictionActivation.evaluateAfterNoShow(
+        tenantId, restrictedClient, sourceAppointment, asOf);
     long revision = currentScheduleRevision();
     String body =
         "{\"serviceId\":\""
@@ -1580,7 +2235,13 @@ class PublicAppointmentIT {
                 String.class,
                 appointmentId))
         .isEqualTo("RESTRICTED");
-    org.mockito.Mockito.verify(clientRestrictions).status(tenantId, restrictedClient);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND client_id = ?",
+                String.class,
+                tenantId,
+                restrictedClient))
+        .isEqualTo("ACTIVE");
   }
 
   @Test
@@ -1907,6 +2568,57 @@ class PublicAppointmentIT {
                 .value(org.hamcrest.Matchers.hasItem(appointmentId.toString())))
         .andExpect(jsonPath("$.items[0].clientName").value("Continuação"));
   }
+
+  private UUID seedNoShowClient(String label) {
+    UUID clientId = UUID.randomUUID();
+    migrationJdbc.update(
+        "INSERT INTO agendamento.client (client_id, tenant_id, display_name, normalized_phone) VALUES (?, ?, ?, ?)",
+        clientId,
+        tenantId,
+        label,
+        "+5511999" + String.format("%06d", Math.floorMod(System.nanoTime(), 1_000_000)));
+    return clientId;
+  }
+
+  private List<NoShowFactRef> seedNoShowFacts(UUID clientId, Instant firstOccurredAt, int count) {
+    List<NoShowFactRef> facts = new java.util.ArrayList<>();
+    for (int index = 0; index < count; index++) {
+      UUID appointmentId = UUID.randomUUID();
+      UUID initialHistoryId = UUID.randomUUID();
+      UUID historyId = UUID.randomUUID();
+      Instant occurredAt = firstOccurredAt.minusSeconds(index / 3L);
+      Instant startsAt = occurredAt.minusSeconds(60 * 60L);
+      Instant serviceEndsAt = startsAt.plusSeconds(30 * 60L);
+      Instant occupiedUntil = serviceEndsAt.plusSeconds(15 * 60L);
+      migrationJdbc.update(
+          "INSERT INTO agendamento.appointment (appointment_id, tenant_id, client_id, service_id, starts_at, service_ends_at, occupied_until, time_zone, client_name_snapshot, service_name_snapshot, service_duration_minutes, service_buffer_after_minutes, status, created_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Cliente de teste', 'Consulta', 30, 15, 'NO_SHOW', ?, 2)",
+          appointmentId,
+          tenantId,
+          clientId,
+          serviceId,
+          java.sql.Timestamp.from(startsAt),
+          java.sql.Timestamp.from(serviceEndsAt),
+          java.sql.Timestamp.from(occupiedUntil),
+          ZONE.getId(),
+          java.sql.Timestamp.from(startsAt));
+      migrationJdbc.update(
+          "INSERT INTO agendamento.appointment_history (history_id, tenant_id, appointment_id, from_status, to_status, actor_type, actor_ref, reason_code, occurred_at) VALUES (?, ?, ?, NULL, 'CONFIRMED', 'PUBLIC', 'PUBLIC_BOOKING', 'APPOINTMENT_CREATED', ?)",
+          initialHistoryId,
+          tenantId,
+          appointmentId,
+          java.sql.Timestamp.from(startsAt));
+      migrationJdbc.update(
+          "INSERT INTO agendamento.appointment_history (history_id, tenant_id, appointment_id, from_status, to_status, actor_type, actor_ref, reason_code, occurred_at, version_before, version_after) VALUES (?, ?, ?, 'CONFIRMED', 'NO_SHOW', 'ADMIN', 'TENANT_ADMIN', 'APPOINTMENT_NO_SHOW', ?, 1, 2)",
+          historyId,
+          tenantId,
+          appointmentId,
+          java.sql.Timestamp.from(occurredAt));
+      facts.add(new NoShowFactRef(historyId, appointmentId, occurredAt));
+    }
+    return facts;
+  }
+
+  private record NoShowFactRef(UUID historyId, UUID appointmentId, Instant occurredAt) {}
 
   private UUID seedAppointmentCrossingIntoBookingDate() {
     UUID clientId = UUID.randomUUID();

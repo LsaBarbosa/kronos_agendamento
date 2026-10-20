@@ -34,11 +34,12 @@ public record AuditEvent(
             || actorType.equals("SYSTEM")
                 && (actorRef.equals("CONTROLLED_TENANT_PROVISIONER")
                     || actorRef.equals("CONTROLLED_DEMO_PROVISIONER")
-                    || actorRef.equals("PUBLIC_BOOKING"))
+                    || actorRef.equals("PUBLIC_BOOKING")
+                    || actorRef.equals("NO_SHOW_POLICY"))
             || actorType.equals("CLIENT") && actorRef.equals("VERIFIED_CLIENT"))
         || !result.equals("COMMITTED")
         || !action.matches(
-            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|CLIENT_NO_SHOW_POLICY_UPDATED|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)|PUBLICATION_(PUBLISHED|UNPUBLISHED)|PUBLIC_PROFILE_UPDATED|APPOINTMENT_CONFIRMED|APPOINTMENT_RESCHEDULED|APPOINTMENT_CANCELLED_BY_PROVIDER|APPOINTMENT_CANCELLED_BY_CLIENT|APPOINTMENT_COMPLETED|APPOINTMENT_NO_SHOW_RECORDED|APPOINTMENT_NO_SHOW_CORRECTED")) {
+            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|CLIENT_NO_SHOW_POLICY_UPDATED|CLIENT_SELF_BOOKING_(BLOCKED|UNBLOCKED)|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)|PUBLICATION_(PUBLISHED|UNPUBLISHED)|PUBLIC_PROFILE_UPDATED|APPOINTMENT_CONFIRMED|APPOINTMENT_RESCHEDULED|APPOINTMENT_CANCELLED_BY_PROVIDER|APPOINTMENT_CANCELLED_BY_CLIENT|APPOINTMENT_COMPLETED|APPOINTMENT_NO_SHOW_RECORDED|APPOINTMENT_NO_SHOW_CORRECTED")) {
       throw new IllegalArgumentException("Ator ou resultado de auditoria inválido");
     }
     if (((actorType.equals("ADMIN") || actorType.equals("CLIENT")) && actorId == null)
@@ -103,7 +104,7 @@ public record AuditEvent(
                   || actorType.equals("ADMIN")
                       && actorRef.equals("TENANT_ADMIN")
                       && detailsJson.matches(
-                          "\\{\\\"changed_fields\\\":\\[\\\"appointment\\\"\\],\\\"version_before\\\":0,\\\"version_after\\\":1,\\\"override_policies\\\":\\[(?:\\\"(?:OUTSIDE_WEEKLY_SCHEDULE|MIN_NOTICE)\\\"(?:,\\\"(?:OUTSIDE_WEEKLY_SCHEDULE|MIN_NOTICE)\\\")?)?\\],\\\"reason_provided\\\":(?:true|false),\\\"client_restriction_status\\\":\\\"(?:NOT_TRACKED|CLEAR|RESTRICTED)\\\"\\}")
+                          "\\{\\\"changed_fields\\\":\\[\\\"appointment\\\"\\],\\\"version_before\\\":0,\\\"version_after\\\":1,\\\"override_policies\\\":\\[(?:\\\"(?:OUTSIDE_WEEKLY_SCHEDULE|MIN_NOTICE)\\\"(?:,\\\"(?:OUTSIDE_WEEKLY_SCHEDULE|MIN_NOTICE)\\\")?)?\\],\\\"reason_provided\\\":(?:true|false),\\\"client_restriction_status\\\":\\\"(?:NOT_TRACKED|NOT_CONFIGURED|CLEAR|RESTRICTED)\\\"\\}")
                       && (detailsJson.contains("\"override_policies\":[]")
                           == detailsJson.contains("\"reason_provided\":false,"));
           case "APPOINTMENT_RESCHEDULED" ->
@@ -126,6 +127,15 @@ public record AuditEvent(
               actorType.equals("CLIENT")
                   && actorRef.equals("VERIFIED_CLIENT")
                   && validClientCancellationDetails(detailsJson);
+          case "CLIENT_SELF_BOOKING_BLOCKED" ->
+              actorType.equals("SYSTEM")
+                  && actorRef.equals("NO_SHOW_POLICY")
+                  && detailsJson.matches(
+                      "\\{\\\"changed_fields\\\":\\[\\\"self_booking_restriction\\\"\\],\\\"count\\\":[1-9][0-9]*,\\\"threshold\\\":[1-5],\\\"policy_version\\\":[1-9][0-9]*,\\\"version_after\\\":1\\}");
+          case "CLIENT_SELF_BOOKING_UNBLOCKED" ->
+              actorType.equals("ADMIN")
+                  && actorRef.equals("TENANT_ADMIN")
+                  && validRestrictionLiftDetails(detailsJson);
           default -> false;
         };
     if (!validDetails) {
@@ -166,6 +176,16 @@ public record AuditEvent(
     boolean shape =
         details.matches(
             "\\{\\\"changed_fields\\\":\\[\\\"no_show_threshold\\\"\\],\\\"version_before\\\":[0-9]+,\\\"version_after\\\":[1-9][0-9]*\\}");
+    if (!shape) return false;
+    long before = Long.parseLong(details.replaceAll(".*\\\"version_before\\\":([0-9]+).*", "$1"));
+    long after = Long.parseLong(details.replaceAll(".*\\\"version_after\\\":([0-9]+).*", "$1"));
+    return after == before + 1;
+  }
+
+  private static boolean validRestrictionLiftDetails(String details) {
+    boolean shape =
+        details.matches(
+            "\\{\\\"changed_fields\\\":\\[\\\"self_booking_restriction\\\"\\],\\\"version_before\\\":[1-9][0-9]*,\\\"version_after\\\":[1-9][0-9]*,\\\"reason_provided\\\":true\\}");
     if (!shape) return false;
     long before = Long.parseLong(details.replaceAll(".*\\\"version_before\\\":([0-9]+).*", "$1"));
     long after = Long.parseLong(details.replaceAll(".*\\\"version_after\\\":([0-9]+).*", "$1"));

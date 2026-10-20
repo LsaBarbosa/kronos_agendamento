@@ -1,5 +1,6 @@
 package com.appagendamento.clients.application;
 
+import com.appagendamento.clients.api.ClientBookingRestrictionQuery;
 import com.appagendamento.clients.api.ClientNoShowFactsQuery;
 import com.appagendamento.clients.domain.ClientNoShowPolicy;
 import com.appagendamento.identityaccess.api.AdminAccessPolicy;
@@ -25,16 +26,19 @@ public class ClientNoShowFacts {
   private final ClientNoShowPolicyRepository policies;
   private final AdminAccessPolicy accessPolicy;
   private final Clock clock;
+  private final ClientBookingRestrictionQuery restrictions;
 
   public ClientNoShowFacts(
       ClientNoShowFactsQuery facts,
       ClientNoShowPolicyRepository policies,
       AdminAccessPolicy accessPolicy,
-      Clock clock) {
+      Clock clock,
+      ClientBookingRestrictionQuery restrictions) {
     this.facts = facts;
     this.policies = policies;
     this.accessPolicy = accessPolicy;
     this.clock = clock;
+    this.restrictions = restrictions;
   }
 
   @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
@@ -74,7 +78,9 @@ public class ClientNoShowFacts {
         policy.map(ClientNoShowPolicy::threshold).orElse(null),
         policy.map(ClientNoShowPolicy::version).orElse(0L),
         policy.isPresent() ? "CONFIGURED" : "NOT_CONFIGURED",
-        "NOT_TRACKED",
+        restrictions.status(actor.tenantId(), clientId).name(),
+        restrictions.active(actor.tenantId(), clientId).orElse(null),
+        restrictions.history(actor.tenantId(), clientId),
         items,
         nextCursor,
         hasMore);
@@ -118,6 +124,8 @@ public class ClientNoShowFacts {
       long policyVersion,
       String policyStatus,
       String restrictionStatus,
+      ClientBookingRestrictionQuery.ClientBookingRestriction activeRestriction,
+      List<ClientBookingRestrictionQuery.ClientBookingRestrictionHistory> restrictionHistory,
       List<ClientNoShowFactsQuery.Fact> facts,
       String nextCursor,
       boolean hasMore) {}

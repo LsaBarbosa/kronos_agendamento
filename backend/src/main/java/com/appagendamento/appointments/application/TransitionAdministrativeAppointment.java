@@ -13,6 +13,7 @@ import com.appagendamento.appointments.domain.AppointmentVersionConflictExceptio
 import com.appagendamento.audit.api.AuditCorrelationId;
 import com.appagendamento.audit.api.AuditEvent;
 import com.appagendamento.audit.api.AuditEventRecorder;
+import com.appagendamento.clients.api.ClientNoShowRestrictionActivation;
 import com.appagendamento.idempotency.api.IdempotencyCoordinator;
 import com.appagendamento.idempotency.api.IdempotentCommandResult;
 import com.appagendamento.identityaccess.api.AdminAccessPolicy;
@@ -37,6 +38,7 @@ public class TransitionAdministrativeAppointment {
   private final AuditCorrelationId correlation;
   private final OutboxEventRecorder outbox;
   private final Clock clock;
+  private final ClientNoShowRestrictionActivation noShowRestrictions;
 
   public TransitionAdministrativeAppointment(
       AdminAccessPolicy accessPolicy,
@@ -49,7 +51,8 @@ public class TransitionAdministrativeAppointment {
       AuditEventRecorder audit,
       AuditCorrelationId correlation,
       OutboxEventRecorder outbox,
-      Clock clock) {
+      Clock clock,
+      ClientNoShowRestrictionActivation noShowRestrictions) {
     this.accessPolicy = accessPolicy;
     this.agendaLock = agendaLock;
     this.appointments = appointments;
@@ -61,6 +64,7 @@ public class TransitionAdministrativeAppointment {
     this.correlation = correlation;
     this.outbox = outbox;
     this.clock = clock;
+    this.noShowRestrictions = noShowRestrictions;
   }
 
   public IdempotentCommandResult<AdministrativeAppointmentOutcomeReceipt> execute(
@@ -111,7 +115,7 @@ public class TransitionAdministrativeAppointment {
     if (outcome != AppointmentOutcome.CANCEL_BY_PROVIDER && now.isBefore(current.occupiedUntil())) {
       throw new AppointmentOutcomeNotYetAllowedException();
     }
-    if (!appointments.transitionOutcome(current, command.expectedVersion(), outcome, reason)) {
+    if (!appointments.transitionOutcome(current, command.expectedVersion(), outcome, reason, now)) {
       throw new AppointmentVersionConflictException();
     }
     agendaRevision.advance(actor.tenantId());
@@ -153,6 +157,10 @@ public class TransitionAdministrativeAppointment {
                 + "\",\"version\":"
                 + newVersion
                 + "}"));
+    if (outcome == AppointmentOutcome.MARK_NO_SHOW) {
+      noShowRestrictions.evaluateAfterNoShow(
+          actor.tenantId(), current.clientId(), current.appointmentId(), clock.instant());
+    }
     return new AdministrativeAppointmentOutcomeReceipt(
         current.appointmentId(), operationId, outcome.status(), newVersion);
   }

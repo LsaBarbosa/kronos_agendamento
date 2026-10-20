@@ -53,6 +53,11 @@ public class PostgresClientRepository
   }
 
   @Override
+  public java.util.Optional<UUID> findExisting(UUID tenantId, E164Phone normalizedPhone) {
+    return findClientId(tenantId, normalizedPhone.value());
+  }
+
+  @Override
   public java.util.Optional<UUID> findClientId(UUID tenantId, String normalizedPhone) {
     return jdbc
         .query(
@@ -62,6 +67,10 @@ public class PostgresClientRepository
             normalizedPhone)
         .stream()
         .findFirst();
+  }
+
+  public java.util.Optional<UUID> findExisting(UUID tenantId, String normalizedPhone) {
+    return findClientId(tenantId, normalizedPhone);
   }
 
   @Override

@@ -1,5 +1,6 @@
 package com.appagendamento.clients.api;
 
+import java.util.Optional;
 import java.util.UUID;
 
 public interface PublicClientRegistry {
@@ -9,4 +10,8 @@ public interface PublicClientRegistry {
   String canonicalizeName(String rawName);
 
   UUID findOrCreate(UUID tenantId, String displayName, String normalizedPhone);
+
+  default Optional<UUID> findExisting(UUID tenantId, String normalizedPhone) {
+    return Optional.empty();
+  }
 }

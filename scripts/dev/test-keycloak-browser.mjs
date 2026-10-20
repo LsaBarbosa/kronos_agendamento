@@ -1371,6 +1371,22 @@ try {
     await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-appointment-id="${administrativeAppointmentId}"]'))`));
     await evaluate(`document.querySelector('[data-appointment-id="${administrativeAppointmentId}"] button')?.click()`);
     await waitUntil(() => evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('Reserva administrativa E2E')`));
+    const restrictionPolicyUpdate = await evaluate(`(async () => {
+      const [policyResponse, csrfResponse] = await Promise.all([
+        fetch('/api/v1/admin/no-show-policy', {credentials:'same-origin', cache:'no-store'}),
+        fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'})
+      ]);
+      const [policy, csrf] = await Promise.all([policyResponse.json(), csrfResponse.json()]);
+      const response = await fetch('/api/v1/admin/no-show-policy', {
+        method:'PUT', credentials:'same-origin',
+        headers:{'Content-Type':'application/json', [csrf.headerName]:csrf.token, 'Idempotency-Key':crypto.randomUUID()},
+        body:JSON.stringify({expectedVersion:policy.version, threshold:1})
+      });
+      return {status:response.status, body:response.ok ? await response.json() : await response.text()};
+    })()`);
+    if (restrictionPolicyUpdate.status !== 200 || restrictionPolicyUpdate.body.threshold !== 1) {
+        throw new Error(`Fixture da política de falta não foi configurada: ${JSON.stringify(restrictionPolicyUpdate)}`);
+    }
     await clickButtonByText('Marcar falta', evaluate);
     await clickButtonByText('Confirmar ação', evaluate);
     await waitForText('Estado atualizado e persistido.', evaluate);
@@ -1383,12 +1399,114 @@ try {
         `SELECT client_id FROM agendamento.appointment WHERE appointment_id = '${administrativeAppointmentId}'`,
         appEnvironment,
     );
+    const activeRestrictionId = queryPostgres(
+        `SELECT restriction_id FROM agendamento.client_booking_restriction WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${noShowClientId}' AND status = 'ACTIVE'`,
+        appEnvironment,
+    );
+    const restrictedPhone = queryPostgres(
+        `SELECT normalized_phone FROM agendamento.client WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${noShowClientId}'`,
+        appEnvironment,
+    );
+    if (!activeRestrictionId) throw new Error('NO_SHOW no fluxo do navegador não materializou restrição ativa.');
+    await navigate(`http://localhost:5173/public/${encodeURIComponent(publication.slug)}`, secondTab.command, secondTab.evaluate);
+    await waitForText(catalogName + ' Editado', secondTab.evaluate);
+    await setSelectById('public-service', publicService.serviceId, secondTab.evaluate);
+    const blockedBookingDate = await secondTab.evaluate(`(async () => {
+      const base = new Date(${JSON.stringify(publicDate)} + 'T12:00:00Z');
+      for (let offset = 1; offset <= 30; offset++) {
+        const candidate = new Date(base);
+        candidate.setUTCDate(candidate.getUTCDate() + offset);
+        const date = candidate.toISOString().slice(0, 10);
+        const query = new URLSearchParams({serviceId:${JSON.stringify(publicService.serviceId)}, from:date, to:date});
+        const response = await fetch('/api/v1/public/' + encodeURIComponent(${JSON.stringify(publication.slug)}) + '/availability?' + query);
+        if (!response.ok) continue;
+        const page = await response.json();
+        if (page.days?.[0]?.slots?.length) return date;
+      }
+      return null;
+    })()`);
+    if (!blockedBookingDate) throw new Error('Não há slot de teste futuro para provar rejeição pública neutra.');
+    await setFieldById('public-date', blockedBookingDate, secondTab.evaluate);
+    await waitUntil(() => secondTab.evaluate("document.querySelectorAll('.public-page__slot').length > 0"));
+    await secondTab.evaluate("document.querySelector('.public-page__slot')?.click()");
+    await setFieldById('public-client-name', 'Reserva administrativa E2E', secondTab.evaluate);
+    await setFieldById('public-client-phone', restrictedPhone, secondTab.evaluate);
+    const appointmentsBeforeRestrictedAttempt = Number(queryPostgres(
+        `SELECT count(*) FROM agendamento.appointment WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
+        appEnvironment,
+    ));
+    await clickButtonByText('Confirmar reserva', secondTab.evaluate);
+    await waitForText('Não foi possível concluir a reserva.', secondTab.evaluate);
+    const restrictedPublicText = await secondTab.evaluate("document.body.innerText");
+    if (restrictedPublicText.includes('NO_SHOW') || restrictedPublicText.includes('falta') || restrictedPublicText.includes(activeRestrictionId)) {
+        throw new Error('A página pública revelou o motivo/identificador da restrição.');
+    }
+    const appointmentsAfterRestrictedAttempt = Number(queryPostgres(
+        `SELECT count(*) FROM agendamento.appointment WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
+        appEnvironment,
+    ));
+    if (appointmentsAfterRestrictedAttempt !== appointmentsBeforeRestrictedAttempt) {
+        throw new Error('Tentativa pública bloqueada deixou reserva persistida.');
+    }
+    await navigate(`http://localhost:5173/admin`, secondTab.command, secondTab.evaluate);
     await waitForText('Faltas de clientes', evaluate);
     await setFieldById('no-show-client-search', 'Reserva administrativa E2E', evaluate);
     await clickButtonByText('Buscar', evaluate);
     await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === 'Reserva administrativa E2E')`));
     await clickButtonByText('Reserva administrativa E2E', evaluate);
     await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('conta na janela')`));
+    await waitForText('Restrição ativa desde', evaluate);
+    const activeRestrictionDom = await evaluate(`document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')?.innerText ?? ''`);
+    if (!activeRestrictionDom.includes('1 de 1 faltas') || !activeRestrictionDom.includes(`política v${restrictionPolicyUpdate.body.version}`)) {
+        throw new Error(`Decisão ativa não explicou contagem/limite/versão: ${activeRestrictionDom}`);
+    }
+    await setTextareaById('restriction-lift-reason', 'Revisão administrativa E2E', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__restrictionLiftAttempts = [];
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const url = String(args[0]);
+        if (url.endsWith('/restrictions/${activeRestrictionId}/lift') && args[1]?.method === 'POST') {
+          const attempt = {url, body:args[1].body, key:args[1].headers['Idempotency-Key'], status:response.status, replayed:response.headers.get('Idempotency-Replayed'), receipt:response.ok ? await response.clone().json() : null};
+          window.__restrictionLiftAttempts.push(attempt);
+          if (response.ok && window.__restrictionLiftAttempts.length === 1) {
+            throw new TypeError('Simulated lost restriction lift response after commit');
+          }
+          window.fetch = originalFetch;
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Desbloquear autoagendamento', evaluate);
+    await waitForText('Resultado do desbloqueio incerto.', evaluate);
+    await clickButtonByText('Recuperar mesmo desbloqueio', evaluate);
+    await waitForText('Autoagendamento desbloqueado.', evaluate);
+    await waitUntil(() => evaluate(`(() => {
+      const summary = document.querySelector('section[aria-labelledby="client-no-shows-title"]')?.innerText ?? '';
+      return summary.includes('Situação do autoagendamento: CLEAR') && summary.includes('Bloqueio removido');
+    })()`));
+    const liftAttempts = await evaluate('window.__restrictionLiftAttempts');
+    if (liftAttempts.length !== 2 || liftAttempts[0].url !== liftAttempts[1].url || liftAttempts[0].body !== liftAttempts[1].body || liftAttempts[0].key !== liftAttempts[1].key || liftAttempts[1].replayed !== 'true' || liftAttempts[1].receipt?.status !== 'LIFTED') {
+        throw new Error(`Retry do desbloqueio não recuperou a intenção original: ${JSON.stringify(liftAttempts)}`);
+    }
+    const liftEffects = Number(queryPostgres(
+        `SELECT CASE WHEN (SELECT status = 'LIFTED' AND version = 2 FROM agendamento.client_booking_restriction WHERE restriction_id = '${activeRestrictionId}') AND (SELECT count(*) = 2 FROM agendamento.client_booking_restriction_history WHERE restriction_id = '${activeRestrictionId}') AND (SELECT count(*) = 1 FROM agendamento.audit_event WHERE target_id = '${activeRestrictionId}' AND action = 'CLIENT_SELF_BOOKING_UNBLOCKED') AND (SELECT count(*) = 1 FROM agendamento.outbox_event WHERE aggregate_id = '${activeRestrictionId}' AND event_type = 'ClientSelfBookingUnblocked') AND (SELECT count(*) = 1 FROM agendamento.idempotency_record WHERE command_scope = 'clients.booking-restriction.lift.v1' AND state = 'COMPLETED' AND operation_id = '${liftAttempts[1].receipt.operationId}') THEN 1 ELSE 0 END`,
+        appEnvironment,
+    ));
+    if (liftEffects !== 1) throw new Error('Retry do desbloqueio duplicou ou omitiu efeitos transacionais.');
+    await command('Page.reload');
+    await waitForText('Sessão administrativa ativa.', evaluate);
+    await waitForText('Faltas de clientes', evaluate);
+    await setFieldById('no-show-client-search', 'Reserva administrativa E2E', evaluate);
+    await clickButtonByText('Buscar', evaluate);
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === 'Reserva administrativa E2E')`));
+    await clickButtonByText('Reserva administrativa E2E', evaluate);
+    await waitUntil(() => evaluate(`document.querySelector('section[aria-labelledby="client-no-shows-title"]')?.innerText.includes('Bloqueio removido')`));
+    const restrictionAfterReload = await evaluate(`document.querySelector('section[aria-labelledby="client-no-shows-title"]')?.innerText ?? ''`);
+    if (restrictionAfterReload.includes('Restrição ativa desde') || !restrictionAfterReload.includes('Faltas que contam: 1') || !restrictionAfterReload.includes('Bloqueio removido')) {
+        throw new Error(`Desbloqueio/fatos não persistiram após reload: ${restrictionAfterReload}`);
+    }
     await setTextareaById(`no-show-reason-${administrativeAppointmentId}`, 'Correção compensatória comprovada E2E', evaluate);
     await evaluate(`(() => {
       const originalFetch = window.fetch;

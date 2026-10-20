@@ -95,7 +95,7 @@ class ClientNoShowPolicyIT {
         .andExpect(jsonPath("$.configured").value(false))
         .andExpect(jsonPath("$.version").value(0))
         .andExpect(jsonPath("$.threshold").value(org.hamcrest.Matchers.nullValue()))
-        .andExpect(jsonPath("$.restrictionStatus").value("NOT_TRACKED"));
+        .andExpect(jsonPath("$.restrictionIntegrationStatus").value("TRACKED"));
 
     UUID otherTenant = UUID.randomUUID();
     migrationJdbc.update(
@@ -159,7 +159,7 @@ class ClientNoShowPolicyIT {
         .andExpect(jsonPath("$.configured").value(true))
         .andExpect(jsonPath("$.threshold").value(3))
         .andExpect(jsonPath("$.version").value(1))
-        .andExpect(jsonPath("$.restrictionStatus").value("NOT_TRACKED"));
+        .andExpect(jsonPath("$.restrictionIntegrationStatus").value("TRACKED"));
 
     mvc.perform(
             put(PATH)

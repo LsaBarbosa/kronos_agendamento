@@ -14,6 +14,8 @@ import com.appagendamento.audit.api.AuditEvent;
 import com.appagendamento.audit.api.AuditEventRecorder;
 import com.appagendamento.catalog.api.ServiceAvailabilityQuery;
 import com.appagendamento.catalog.api.ServiceAvailabilityView;
+import com.appagendamento.clients.api.ClientBookingRestrictionQuery;
+import com.appagendamento.clients.api.ClientBookingRestrictionStatus;
 import com.appagendamento.clients.api.PublicClientRegistry;
 import com.appagendamento.idempotency.api.CommandDigest;
 import com.appagendamento.idempotency.api.IdempotencyCoordinator;
@@ -44,6 +46,7 @@ public class CreatePublicAppointment {
   private final AuditCorrelationId correlation;
   private final OutboxEventRecorder outbox;
   private final Clock clock;
+  private final ClientBookingRestrictionQuery restrictions;
 
   public CreatePublicAppointment(
       PublicBookingGate gate,
@@ -59,7 +62,8 @@ public class CreatePublicAppointment {
       AuditEventRecorder audit,
       AuditCorrelationId correlation,
       OutboxEventRecorder outbox,
-      Clock clock) {
+      Clock clock,
+      ClientBookingRestrictionQuery restrictions) {
     this.gate = gate;
     this.services = services;
     this.clients = clients;
@@ -74,6 +78,7 @@ public class CreatePublicAppointment {
     this.correlation = correlation;
     this.outbox = outbox;
     this.clock = clock;
+    this.restrictions = restrictions;
   }
 
   public IdempotentCommandResult<PublicAppointmentReceipt> execute(
@@ -156,6 +161,15 @@ public class CreatePublicAppointment {
     Optional<ValidatedAppointmentSlot> currentSlot =
         slots.findCurrentSlot(tenantId, serviceId, requestedStart);
     ValidatedAppointmentSlot slot = currentSlot.orElseThrow(SlotNoLongerAvailableException::new);
+    boolean restricted =
+        clients
+            .findExisting(tenantId, phone)
+            .map(
+                clientId ->
+                    restrictions.status(tenantId, clientId)
+                        == ClientBookingRestrictionStatus.RESTRICTED)
+            .orElse(false);
+    if (restricted) throw new PublicAppointmentUnavailableException();
     UUID clientId = clients.findOrCreate(tenantId, name, phone);
     UUID appointmentId = operationId;
     var start = slot.startsAt().toInstant();

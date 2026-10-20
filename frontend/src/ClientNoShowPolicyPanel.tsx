@@ -7,7 +7,7 @@ type Policy = {
     policyStatus: 'CONFIGURED' | 'NOT_CONFIGURED';
     version: number;
     threshold: number | null;
-    restrictionStatus: 'NOT_TRACKED';
+    restrictionIntegrationStatus: 'TRACKED';
 };
 type Csrf = { headerName: string; token: string };
 
@@ -176,9 +176,7 @@ export function ClientNoShowPolicyPanel({
             setThreshold(String(saved.threshold));
             pending.current = null;
             setUncertain(false);
-            setNotice(
-                'Limite salvo. A aplicação efetiva de restrições depende de AGD-033.',
-            );
+            setNotice('Limite de faltas salvo para este tenant.');
         } catch {
             setUncertain(true);
             setError(
@@ -207,13 +205,12 @@ export function ClientNoShowPolicyPanel({
                             : 'Limite ainda não configurado. Nenhum valor padrão é aplicado.'}
                     </p>
                     <p>
-                        Estado da política: {policy.policyStatus}. Estado de
-                        restrição: {policy.restrictionStatus}.
+                        Estado da política: {policy.policyStatus}. Restrições
+                        são avaliadas por cliente na consulta de faltas.
                     </p>
                     <p>
-                        Estado da restrição automática: não acompanhado nesta
-                        história. Esta configuração não bloqueia reservas; isso
-                        depende de AGD-033.
+                        Reavaliação de restrições após mudança do limite depende
+                        de decisão de produto registrada em aberto.
                     </p>
                     <label htmlFor="no-show-threshold">
                         Faltas na janela móvel de 12 meses (limite 1 a 5)

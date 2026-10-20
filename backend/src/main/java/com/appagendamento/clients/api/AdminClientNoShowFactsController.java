@@ -44,6 +44,8 @@ public class AdminClientNoShowFactsController {
       Integer threshold,
       long policyVersion,
       String restrictionStatus,
+      ClientBookingRestrictionQuery.ClientBookingRestriction activeRestriction,
+      List<ClientBookingRestrictionQuery.ClientBookingRestrictionHistory> restrictionHistory,
       List<Fact> facts,
       String nextCursor,
       boolean hasMore) {
@@ -60,6 +62,8 @@ public class AdminClientNoShowFactsController {
           result.threshold(),
           result.policyVersion(),
           result.restrictionStatus(),
+          result.activeRestriction(),
+          result.restrictionHistory(),
           result.facts().stream().map(Fact::from).toList(),
           result.nextCursor(),
           result.hasMore());

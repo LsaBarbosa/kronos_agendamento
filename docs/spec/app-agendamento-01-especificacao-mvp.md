@@ -316,7 +316,7 @@ Regras:
 - Uma nova falta posterior pode voltar a bloquear conforme a política vigente.
 - Mudança do limite não deve reescrever história; pode recalcular restrições atuais por job versionado e auditado.
 
-Política ausente é `NOT_CONFIGURED`, sem limite padrão. Contagem e fatos continuam consultáveis, mas a ausência não permite inferir `CLEAR` nem bloqueio. `restrictionStatus=NOT_TRACKED` é separado e permanece até integração efetiva de AGD-033; configurar limite não materializa restrição.
+Política ausente é `NOT_CONFIGURED`, sem limite padrão. Contagem e fatos continuam consultáveis, mas a ausência não permite inferir `CLEAR` nem bloqueio. O status da política é independente do status da restrição (`NOT_CONFIGURED`, `CLEAR` ou `RESTRICTED`). Uma restrição ativa é tenant-scoped e verificada no servidor antes do commit do autoagendamento público; não impede consulta/cancelamento do cliente nem reserva administrativa. Desbloqueio exige ação administrativa explícita com motivo e não apaga faltas. Decisões sobre liberação e reconciliação de política permanecem em `OPEN-QUESTIONS.md`.
 
 ## 11. Notificações
 
