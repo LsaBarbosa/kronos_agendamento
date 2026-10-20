@@ -951,6 +951,11 @@ function PublicPageContent({
                             'A página deixou de estar disponível e o resultado da intenção original não pôde ser verificado. Não inicie outra reserva.',
                         );
                     } else {
+                        const otherIntent = discardResolvedIntent();
+                        if (otherIntent) {
+                            adoptSharedIntent(otherIntent);
+                            return;
+                        }
                         const outcome = unavailableBookingOutcome(false);
                         setBookingState(outcome.state);
                         setBookingMessage(

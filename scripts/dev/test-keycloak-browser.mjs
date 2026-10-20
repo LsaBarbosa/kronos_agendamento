@@ -1454,6 +1454,12 @@ try {
     if (restrictedPublicText.includes('NO_SHOW') || restrictedPublicText.includes('falta') || restrictedPublicText.includes(activeRestrictionId)) {
         throw new Error('A página pública revelou o motivo/identificador da restrição.');
     }
+    const restrictedIntentWasCleared = await secondTab.evaluate(
+        `localStorage.getItem('kronos.public-booking.intent.' + ${JSON.stringify(publication.slug)}) === null`,
+    );
+    if (!restrictedIntentWasCleared) {
+        throw new Error('A rejeição definitiva da reserva restrita deixou uma intenção recuperável sem receipt.');
+    }
     const appointmentsAfterRestrictedAttempt = Number(queryPostgres(
         `SELECT count(*) FROM agendamento.appointment WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
         appEnvironment,
