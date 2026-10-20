@@ -4,6 +4,7 @@ import { commandKey } from './commandKey';
 
 type Policy = {
     configured: boolean;
+    policyStatus: 'CONFIGURED' | 'NOT_CONFIGURED';
     version: number;
     threshold: number | null;
     restrictionStatus: 'NOT_TRACKED';
@@ -204,6 +205,10 @@ export function ClientNoShowPolicyPanel({
                         {policy.configured
                             ? `Limite configurado: ${policy.threshold} falta(s), versão ${policy.version}.`
                             : 'Limite ainda não configurado. Nenhum valor padrão é aplicado.'}
+                    </p>
+                    <p>
+                        Estado da política: {policy.policyStatus}. Estado de
+                        restrição: {policy.restrictionStatus}.
                     </p>
                     <p>
                         Estado da restrição automática: não acompanhado nesta

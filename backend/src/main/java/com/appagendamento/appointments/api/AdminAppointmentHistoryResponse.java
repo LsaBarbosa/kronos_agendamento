@@ -35,7 +35,8 @@ public record AdminAppointmentHistoryResponse(String timeZone, List<Entry> items
                             ? null
                             : item.newOccupiedUntil().atZone(zone).toOffsetDateTime(),
                         item.versionBefore(),
-                        item.versionAfter()))
+                        item.versionAfter(),
+                        item.correctsHistoryId()))
             .toList());
   }
 
@@ -52,5 +53,6 @@ public record AdminAppointmentHistoryResponse(String timeZone, List<Entry> items
       OffsetDateTime newStartsAt,
       OffsetDateTime newOccupiedUntil,
       Long versionBefore,
-      Long versionAfter) {}
+      Long versionAfter,
+      java.util.UUID correctsHistoryId) {}
 }

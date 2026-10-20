@@ -38,7 +38,7 @@ public record AuditEvent(
             || actorType.equals("CLIENT") && actorRef.equals("VERIFIED_CLIENT"))
         || !result.equals("COMMITTED")
         || !action.matches(
-            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|CLIENT_NO_SHOW_POLICY_UPDATED|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)|PUBLICATION_(PUBLISHED|UNPUBLISHED)|PUBLIC_PROFILE_UPDATED|APPOINTMENT_CONFIRMED|APPOINTMENT_RESCHEDULED|APPOINTMENT_CANCELLED_BY_PROVIDER|APPOINTMENT_CANCELLED_BY_CLIENT|APPOINTMENT_COMPLETED|APPOINTMENT_NO_SHOW_RECORDED")) {
+            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|CLIENT_NO_SHOW_POLICY_UPDATED|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)|PUBLICATION_(PUBLISHED|UNPUBLISHED)|PUBLIC_PROFILE_UPDATED|APPOINTMENT_CONFIRMED|APPOINTMENT_RESCHEDULED|APPOINTMENT_CANCELLED_BY_PROVIDER|APPOINTMENT_CANCELLED_BY_CLIENT|APPOINTMENT_COMPLETED|APPOINTMENT_NO_SHOW_RECORDED|APPOINTMENT_NO_SHOW_CORRECTED")) {
       throw new IllegalArgumentException("Ator ou resultado de auditoria inválido");
     }
     if (((actorType.equals("ADMIN") || actorType.equals("CLIENT")) && actorId == null)
@@ -115,6 +115,12 @@ public record AuditEvent(
               "APPOINTMENT_NO_SHOW_RECORDED" ->
               actorType.equals("ADMIN")
                   && actorRef.equals("TENANT_ADMIN")
+                  && validOutcomeDetails(detailsJson);
+          case "APPOINTMENT_NO_SHOW_CORRECTED" ->
+              actorType.equals("ADMIN")
+                  && actorRef.equals("TENANT_ADMIN")
+                  && detailsJson.matches(
+                      "\\{\\\"changed_fields\\\":\\[\\\"status\\\"\\],\\\"version_before\\\":[1-9][0-9]*,\\\"version_after\\\":[1-9][0-9]*,\\\"reason_provided\\\":true\\}")
                   && validOutcomeDetails(detailsJson);
           case "APPOINTMENT_CANCELLED_BY_CLIENT" ->
               actorType.equals("CLIENT")

@@ -1379,6 +1379,75 @@ try {
       return text.includes('NO_SHOW') && text.includes('versão 2') && text.includes('APPOINTMENT_NO_SHOW');
     })()`));
 
+    const noShowClientId = queryPostgres(
+        `SELECT client_id FROM agendamento.appointment WHERE appointment_id = '${administrativeAppointmentId}'`,
+        appEnvironment,
+    );
+    await waitForText('Faltas de clientes', evaluate);
+    await setFieldByLabel('Buscar cliente por nome', 'Reserva administrativa E2E', evaluate);
+    await clickButtonByText('Buscar', evaluate);
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === 'Reserva administrativa E2E')`));
+    await clickButtonByText('Reserva administrativa E2E', evaluate);
+    await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('conta na janela')`));
+    await setTextareaById(`no-show-reason-${administrativeAppointmentId}`, 'Correção compensatória comprovada E2E', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch;
+      window.__noShowCorrectionRequests = [];
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const url = String(args[0]);
+        if (url.endsWith('/correct-no-show') && args[1]?.method === 'POST') {
+          const request = {url, body: args[1].body, key: args[1].headers['Idempotency-Key']};
+          if (response.ok && window.__noShowCorrectionRequests.length === 0) {
+            window.__noShowCorrectionRequests.push(request);
+            throw new TypeError('Simulated lost no-show correction response after commit');
+          }
+          window.__noShowCorrectionRequests.push({...request, status: response.status, replayed: response.headers.get('Idempotency-Replayed'), receipt: response.ok ? await response.clone().json() : null});
+          window.fetch = originalFetch;
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Corrigir para concluída', evaluate);
+    await waitForText('Resultado incerto. Repita a mesma correção para recuperar o receipt original.', evaluate);
+    await clickButtonByText('Recuperar mesma correção', evaluate);
+    await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('corrigida; não conta')`));
+    const correctionDom = await evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText ?? ''`);
+    if (!correctionDom.includes('COMPLETED, versão 3') || !correctionDom.includes('Correção compensatória comprovada E2E')) {
+        throw new Error(`DOM não mostrou correção e motivo persistidos: ${correctionDom}`);
+    }
+    const correctionRequests = await evaluate('window.__noShowCorrectionRequests');
+    if (correctionRequests.length !== 2 || correctionRequests[0].url !== correctionRequests[1].url || correctionRequests[0].body !== correctionRequests[1].body || correctionRequests[0].key !== correctionRequests[1].key || correctionRequests[1].replayed !== 'true') {
+        throw new Error(`Retry da correção alterou a intenção ou não reproduziu receipt: ${JSON.stringify(correctionRequests)}`);
+    }
+    const correctionEffects = Number(queryPostgres(
+        `SELECT CASE WHEN (SELECT status = 'COMPLETED' AND version = 3 FROM agendamento.appointment WHERE appointment_id = '${administrativeAppointmentId}') AND (SELECT count(*) FROM agendamento.appointment_history WHERE appointment_id = '${administrativeAppointmentId}' AND reason_code = 'APPOINTMENT_NO_SHOW') = 1 AND (SELECT count(*) FROM agendamento.appointment_history WHERE appointment_id = '${administrativeAppointmentId}' AND reason_code = 'APPOINTMENT_NO_SHOW_CORRECTED' AND corrects_history_id IS NOT NULL) = 1 AND (SELECT count(*) FROM agendamento.audit_event WHERE target_id = '${administrativeAppointmentId}' AND action = 'APPOINTMENT_NO_SHOW_CORRECTED') = 1 AND (SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = '${administrativeAppointmentId}' AND event_type = 'ClientNoShowCorrected') = 1 AND (SELECT count(*) FROM agendamento.idempotency_record WHERE command_scope = 'appointments.admin.correct-no-show.v1' AND state = 'COMPLETED' AND operation_id = '${correctionRequests[1].receipt.operationId}') = 1 THEN 1 ELSE 0 END`,
+        appEnvironment,
+    ));
+    if (correctionEffects !== 1) throw new Error('Correção após resposta perdida duplicou ou omitiu efeitos persistidos.');
+    const correctionHistory = await evaluate(
+        `fetch('/api/v1/admin/appointments/${administrativeAppointmentId}/history', {credentials:'same-origin'}).then(response => response.json())`,
+    );
+    if (!correctionHistory.items.some(item => item.reasonCode === 'APPOINTMENT_NO_SHOW_CORRECTED' && item.correctsHistoryId)) {
+        throw new Error('História compensatória referenciada não apareceu na consulta administrativa.');
+    }
+    await command('Page.reload');
+    await waitForText('Sessão administrativa ativa.', evaluate);
+    await waitForText('Faltas de clientes', evaluate);
+    await setFieldByLabel('Buscar cliente por nome', 'Reserva administrativa E2E', evaluate);
+    await clickButtonByText('Buscar', evaluate);
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === 'Reserva administrativa E2E')`));
+    await clickButtonByText('Reserva administrativa E2E', evaluate);
+    await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('corrigida; não conta')`));
+    const correctedFactsAfterReload = await evaluate(`(() => ({
+      text: document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText ?? '',
+      summary: document.querySelector('section[aria-labelledby="client-no-shows-title"]')?.innerText ?? ''
+    }))()`);
+    if (!correctedFactsAfterReload.text.includes('COMPLETED, versão 3') || !correctedFactsAfterReload.summary.includes('Faltas que contam: 0')) {
+        throw new Error(`Correção/count não persistiram após reload: ${JSON.stringify(correctedFactsAfterReload)}`);
+    }
+    console.log(`Browser: falta consultada e corrigida com motivo, retry idempotente, história e reload (cliente ${noShowClientId}).`);
+
     const cancelRetryAppointmentId = queryPostgres(
         `SELECT a.appointment_id FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.client_name_snapshot = 'Encaixe administrativo E2E' AND a.status = 'CONFIRMED'`,
         appEnvironment,

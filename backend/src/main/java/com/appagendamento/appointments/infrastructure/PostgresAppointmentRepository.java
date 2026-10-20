@@ -485,6 +485,54 @@ public class PostgresAppointmentRepository
   }
 
   @Override
+  public boolean correctNoShow(Appointment current, long expectedVersion, String reason) {
+    try {
+      UUID originalHistoryId =
+          jdbc.queryForObject(
+              """
+              SELECT history_id FROM agendamento.appointment_history
+              WHERE tenant_id = ? AND appointment_id = ? AND to_status = 'NO_SHOW'
+                AND reason_code = 'APPOINTMENT_NO_SHOW' AND corrects_history_id IS NULL
+              ORDER BY occurred_at DESC, history_id DESC
+              LIMIT 1
+              """,
+              UUID.class,
+              current.tenantId(),
+              current.appointmentId());
+      int updated =
+          jdbc.update(
+              """
+              UPDATE agendamento.appointment
+              SET status = 'COMPLETED', version = version + 1
+              WHERE tenant_id = ? AND appointment_id = ? AND status = 'NO_SHOW' AND version = ?
+              """,
+              current.tenantId(),
+              current.appointmentId(),
+              expectedVersion);
+      if (updated != 1) return false;
+      jdbc.update(
+          """
+          INSERT INTO agendamento.appointment_history (
+            history_id, tenant_id, appointment_id, from_status, to_status,
+            actor_type, actor_ref, reason_code, reason, occurred_at,
+            version_before, version_after, corrects_history_id
+          ) VALUES (?, ?, ?, 'NO_SHOW', 'COMPLETED', 'ADMIN', 'TENANT_ADMIN',
+                    'APPOINTMENT_NO_SHOW_CORRECTED', ?, clock_timestamp(), ?, ?, ?)
+          """,
+          UUID.randomUUID(),
+          current.tenantId(),
+          current.appointmentId(),
+          reason,
+          expectedVersion,
+          expectedVersion + 1,
+          originalHistoryId);
+      return true;
+    } catch (DataAccessException exception) {
+      throw new AppointmentDataUnavailableException(exception);
+    }
+  }
+
+  @Override
   public boolean transitionClientCancellation(
       Appointment current, UUID clientId, long expectedVersion) {
     try {
@@ -531,7 +579,7 @@ public class PostgresAppointmentRepository
           """
           SELECT from_status, to_status, actor_type, actor_ref, reason_code, reason, occurred_at,
                  previous_starts_at, previous_occupied_until, new_starts_at, new_occupied_until,
-                 version_before, version_after
+                 version_before, version_after, corrects_history_id
           FROM agendamento.appointment_history
           WHERE tenant_id = ? AND appointment_id = ?
           ORDER BY occurred_at ASC, history_id ASC
@@ -558,7 +606,8 @@ public class PostgresAppointmentRepository
                       ? null
                       : row.getTimestamp("new_occupied_until").toInstant(),
                   (Long) row.getObject("version_before"),
-                  (Long) row.getObject("version_after")),
+                  (Long) row.getObject("version_after"),
+                  row.getObject("corrects_history_id", UUID.class)),
           tenantId,
           appointmentId);
     } catch (DataAccessException exception) {

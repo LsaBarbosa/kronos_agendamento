@@ -1,5 +1,15 @@
 # Evidências de validação — AGD-001
 
+## AGD-032 — implementação de contagem e correção (follow-up do PR #20)
+
+- Continuação na branch `agd-032-faltas-janela-movel`, sobre o head revisado `d7ce49cc5c536a20d00d62ac935033be77258caa`. Decisões aprovadas nesta instrução e registradas em ADR-0023, requisitos e contrato: janela UTC de 12 meses de calendário `[windowStart,asOf)`, correção compensatória `NO_SHOW → COMPLETED`, política ausente `NOT_CONFIGURED` separada de `NOT_TRACKED`.
+- Implementação: `GET /api/v1/admin/clients/{id}/no-shows` com paginação keyset e leitura `REPEATABLE_READ`; `POST /api/v1/admin/appointments/{id}/correct-no-show` com motivo obrigatório, autorização atual, CAS, idempotência e transação completa de reserva/história/auditoria/receipt/outbox. Migration V27 acrescenta referência única e FK composta; V1–V26 permanecem imutáveis.
+- `backend/`: `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` — `BUILD SUCCESS`, 78 testes unitários/arquiteturais + 210 integrações PostgreSQL 16.13/Testcontainers; `PublicAppointmentIT` 55/55, `TenantPersistenceIT` 26/26, `ClientNoShowPolicyIT` 7/7. V27 passou em instalação limpa e upgrade V26→V27, Flyway validate/rerun e grants runtime.
+- `frontend/`: `npm run format:check && npm run lint && npm test -- --run && npm run check` — passou; 23 Vitest, TypeScript e build. `node --check scripts/dev/test-keycloak-browser.mjs` e `prettier --parser yaml docs/openapi/admin-no-shows.yaml` passaram.
+- A primeira execução integral desta rodada encontrou uma fixture de agenda tentando reservar em passo/ocupação incompatíveis e quatro expectativas de histórico que não contavam a migration repeatable. A fixture foi alinhada ao passo e extensão da grade; expectativas foram corrigidas para 28 entradas de histórico; a execução integral subsequente passou sem reduzir assertions.
+- Chrome/Keycloak/PostgreSQL: roteiro E2E inclui correção com motivo, resposta perdida após commit, retry com body/chave originais, receipt original, efeitos únicos em PostgreSQL, estado/história/contagem no DOM e reload. Não executado localmente para preservar o Compose/tenant compartilhado; aguarda `oidc-browser-e2e` em ambiente limpo do CI no SHA final.
+- Pendente: publicação e App CI/CodeQL push/PR com todos os jobs/check-runs concluídos, E2E remoto e revisão humana. Revisores independentes indisponíveis pelo limite de threads; revisão sequencial não equivale a aprovação humana. AGD-033, homologação e gates operacionais permanecem abertos.
+
 ## AGD-032 — validação local pré-publicação
 
 - Base `de4be40aa99e1b9db64527f25cb02552f786dc46`; código validado no commit `d39700f`; branch `agd-032-faltas-janela-movel`. V1–V25 preservadas; V26 adiciona somente a política opcional de limite por tenant.

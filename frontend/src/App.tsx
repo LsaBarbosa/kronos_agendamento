@@ -9,6 +9,7 @@ import { PublicPublicationPanel } from './PublicPublicationPanel';
 import { AdminAgendaPanel } from './AdminAgendaPanel';
 import { ClientAccessPage } from './ClientAccessPage';
 import { ClientNoShowPolicyPanel } from './ClientNoShowPolicyPanel';
+import { ClientNoShowFactsPanel } from './ClientNoShowFactsPanel';
 
 type Session = { authenticated: boolean; tenantId: string; role: string };
 type Csrf = { headerName: string; token: string };
@@ -537,6 +538,13 @@ function AdminApp() {
                 />
                 {session && (
                     <ClientNoShowPolicyPanel
+                        enabled
+                        csrf={csrf}
+                        onSessionInvalid={handleNoShowPolicySessionInvalid}
+                    />
+                )}
+                {session && (
+                    <ClientNoShowFactsPanel
                         enabled
                         csrf={csrf}
                         onSessionInvalid={handleNoShowPolicySessionInvalid}

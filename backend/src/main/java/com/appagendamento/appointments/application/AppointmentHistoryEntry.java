@@ -15,4 +15,5 @@ public record AppointmentHistoryEntry(
     Instant newStartsAt,
     Instant newOccupiedUntil,
     Long versionBefore,
-    Long versionAfter) {}
+    Long versionAfter,
+    java.util.UUID correctsHistoryId) {}

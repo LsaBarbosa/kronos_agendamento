@@ -1,5 +1,6 @@
 package com.appagendamento.appointments.api;
 
+import com.appagendamento.appointments.application.CorrectAdministrativeNoShow;
 import com.appagendamento.appointments.application.CreateAdministrativeAppointment;
 import com.appagendamento.appointments.application.GetAdminAppointments;
 import com.appagendamento.appointments.application.RescheduleAdministrativeAppointment;
@@ -28,17 +29,39 @@ public class AdminAppointmentController {
   private final CreateAdministrativeAppointment createAppointment;
   private final RescheduleAdministrativeAppointment rescheduleAppointment;
   private final TransitionAdministrativeAppointment transitionAppointment;
+  private final CorrectAdministrativeNoShow correctNoShow;
 
   public AdminAppointmentController(
       GetAdminAppointments appointments,
       CreateAdministrativeAppointment createAppointment,
       RescheduleAdministrativeAppointment rescheduleAppointment,
-      TransitionAdministrativeAppointment transitionAppointment) {
+      TransitionAdministrativeAppointment transitionAppointment,
+      CorrectAdministrativeNoShow correctNoShow) {
     this.appointments = appointments;
     this.createAppointment = createAppointment;
     this.rescheduleAppointment = rescheduleAppointment;
     this.transitionAppointment = transitionAppointment;
+    this.correctNoShow = correctNoShow;
   }
+
+  @PostMapping("/api/v1/admin/appointments/{id}/correct-no-show")
+  ResponseEntity<AdministrativeAppointmentOutcomeResponse> correctNoShow(
+      @AuthenticationPrincipal AuthenticatedAdmin actor,
+      @PathVariable UUID id,
+      @RequestHeader("Idempotency-Key") @Size(min = 16, max = 128) String key,
+      @Valid @RequestBody CorrectNoShowRequest request) {
+    var result = correctNoShow.execute(actor, key, id, request.expectedVersion(), request.reason());
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .header("Idempotency-Replayed", Boolean.toString(result.replayed()))
+        .header("X-Operation-Id", result.operationId().toString())
+        .body(AdministrativeAppointmentOutcomeResponse.from(result.value()));
+  }
+
+  record CorrectNoShowRequest(
+      @jakarta.validation.constraints.NotNull @jakarta.validation.constraints.Positive
+          Long expectedVersion,
+      @jakarta.validation.constraints.NotBlank @Size(max = 500) String reason) {}
 
   @PostMapping("/api/v1/admin/appointments/{id}/cancel")
   ResponseEntity<AdministrativeAppointmentOutcomeResponse> cancel(

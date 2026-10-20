@@ -2,65 +2,64 @@
 
 ## Identificação e objetivo
 
-- Implementar política tenant-scoped de faltas, leitura explicável e correção administrativa, sem concluir AGD-033.
-- Referências: documento 01 §10; documento 02 §§4.6/6; documento 03 seção Clientes e restrições; documento 06 critérios AGD-032/E2E-06; ADR-0018 e ADR-0021.
-- Base: main integrada em `de4be40aa99e1b9db64527f25cb02552f786dc46`; branch `agd-032-faltas-janela-movel`.
-
-## Escopo e exclusões
-
-- Inclui: política de limite 1–5 por tenant; leitura administrativa tenant-scoped de eventos `NO_SHOW`; contagem explicável na janela de 12 meses; correção explícita e auditada; controles de autorização/CAS/idempotência e efeitos transacionais necessários.
-- Exclui: bloqueio público, restrição efetiva em novas reservas, desbloqueio e reativação concorrente de restrições (AGD-033); não altera `CONFIRMED` por edição genérica; não implementa faltas artificiais nem integra fornecedores.
-- `NOT_TRACKED` permanece fronteira não implementada; não significa “sem restrição”.
+- Incremento do PR #20 na branch `agd-032-faltas-janela-movel`, continuação sobre a referência revisada `d7ce49cc5c536a20d00d62ac935033be77258caa`.
+- Tornar a configuração opcional de limite funcional com consulta explicável e correção administrativa compensatória, sem implementar bloqueio/desbloqueio de AGD-033.
+- Requisitos: documento 01 §6.4; documento 02 §§4.6/6; documento 03 contratos administrativos de clientes/faltas; documento 06 AGD-032 e E2E-06. Decisões desta instrução em ADR-0023.
 
 ## Estado e dependências
 
-- `NO_SHOW` já é estado terminal persistido em `appointment`, com `appointment_history`, auditoria e `ClientNoShowRecorded` transacionais (AGD-023).
-- `clients` ainda fornece `UntrackedClientBookingRestrictionQuery`; não há política persistida nem consulta de faltas.
-- Última migration integrada: V25 (`V1–V25` preservadas); próxima migration funcional, se necessária: V26.
-- Revisão independente não disponível: duas delegações foram recusadas pelo limite de threads; revisão será sequencial e não equivale a aprovação humana.
+- V26 já persiste `client_no_show_policy` tenant-scoped, limite 1–5, CAS/idempotência e auditoria. V27 adiciona referência íntegra à correção compensatória e índice tenant/data para fatos.
+- `appointment_history` persiste fatos originais, inclusive `NO_SHOW`, e a infraestrutura atual já fornece lock por tenant, CAS, idempotência, auditoria e outbox.
+- AGD-033 não materializa restrição real; `NOT_TRACKED` permanece independente da política `NOT_CONFIGURED/CONFIGURED`.
+- Não alterar migrations publicadas V1–V26. V27 é funcional e contempla referência única da história corrigida, FK composta, índice de consulta e allowlists de auditoria/outbox.
 
-## Critérios verificáveis e decisões pendentes
+## Escopo
 
-| Critério | Evidência esperada | Estado |
+- Consultar contagem e fatos `NO_SHOW` por cliente e tenant, com política, janela e instante de avaliação.
+- Corrigir somente `NO_SHOW → COMPLETED`, mediante motivo obrigatório, CAS e chave idempotente.
+- Interface administrativa para localizar cliente, revisar fatos e corrigir com confirmação explícita.
+- Excluir bloqueio/desbloqueio, decisões de cliente, defaults, efeitos públicos, fornecedor de notificação e edição genérica de estados terminais.
+
+## Critérios verificáveis
+
+1. Uma avaliação captura um único `asOf` via `Clock`; calcula 12 meses de calendário UTC e intervalo `[windowStart, asOf)`, ajustando dia inválido ao último dia do mês-alvo. O fato é o `occurred_at` original de `NO_SHOW`; timezone do tenant apenas apresenta.
+2. Cada falta não corrigida aparece uma vez. Cancelamento/conclusão não contam. A correção referencia o fato original, preserva reservas/snapshots, incrementa versão exatamente uma vez e remove somente a contribuição corrigida.
+3. Política ausente é `NOT_CONFIGURED`, sem limite padrão; fatos/contagem são consultáveis e não inferem `CLEAR` nem restrição. Com política configurada, exibir limite 1–5. Restrição real continua `NOT_TRACKED` até AGD-033.
+4. Tenant/ator decorrem da sessão OIDC e associação atual; leitura/correção entre tenants ou após revogação são rejeitadas sem revelar dados.
+5. Mutação, história compensatória, auditoria, receipt idempotente e `ClientNoShowCorrected` são atômicos; replay autorizado não duplica efeitos.
+6. Consultas explicáveis retornam `asOf`, fronteiras, timezone, política, contagem e fatos minimizados em leitura coerente. Paginação preserva `asOf` e ordenação keyset, sem alegar snapshot físico entre requests.
+
+## Decisões e contrato
+
+- Produto aprovou em 19/10/2026 (ADR-0023): instante único; 12 meses de calendário UTC; `[start,asOf)`; correção administrativa apenas `NO_SHOW → COMPLETED`, motivo obrigatório e compensação referenciada; ausência de política `NOT_CONFIGURED` e distinta de `NOT_TRACKED`.
+- `GET /api/v1/admin/clients/{id}/no-shows?cursor=&limit=` retorna fatos da janela e metadados; sem PII além do nome administrativo minimizado quando já autorizado.
+- `POST /api/v1/admin/appointments/{id}/correct-no-show` recebe `expectedVersion` e `reason`, usa `Idempotency-Key`; autorização revalidada antes do replay.
+- Correção toma lock do tenant e da reserva pelo protocolo existente. Consulta e count/facts usam snapshot transacional/repeatable-read. Cursor mantém `asOf` e posição; o escopo de tenant/cliente vem sempre do request autorizado, não do cursor.
+- História compensatória registra `corrects_history_id` único; V27 reforça integridade da relação e allowlists de auditoria/outbox. Runtime recebe apenas grants necessários.
+
+## Estratégia de teste
+
+- PostgreSQL/Testcontainers: fronteiras UTC, subtração calendário/ano bissexto, contagem explicável, isolamento, revogação, correção/replay/digest/CAS, disputa concorrente, rollback e grants.
+- Teste coerente de count/facts durante correção sob transação de leitura.
+- Frontend: estados de sessão, carregamento, busca de cliente, fatos, motivo, conflito, resposta perdida/retry e descarte de resposta após troca/encerramento.
+- Browser E2E com Keycloak/PostgreSQL: consulta, correção, contagem/história atualizadas, reload e recovery de resposta perdida com efeito único.
+- Preservar testes da política de limite, GET atrasado e 503 já corrigidos.
+
+## Progresso e validação
+
+| Critério | Procedimento | Resultado observado |
 |---|---|---|
-| Política tenant-scoped configurável de 1–5 | API administrativa, CAS/idempotência/auditoria, PostgreSQL e UI | Implementação independente em andamento; ausência deve aparecer explicitamente como não configurada, sem valor default |
-| Contagem de faltas nos 12 meses | Consulta com `Clock`, tenant/timezone e limites definidos, PostgreSQL | Bloqueada pela decisão temporal solicitada ao usuário |
-| Eventos explicáveis na UI | Eventos/fatos e correções ordenados, sem dados excessivos | Aguardando decisão temporal e semântica de correção |
-| Correção administrativa | CAS/idempotência, compensação e auditoria sem apagar história | Aguardando decisão sobre estado resultante/efeitos da correção |
-| Restrição automática de autoagendamento | Não faz parte da prova deste incremento; manter `NOT_TRACKED` onde aplicável | AGD-033 |
+| Decisões registradas | requisitos 01/02/03/06, ADR-0023, plano, contratos e OPEN-QUESTIONS | Aprovadas nesta instrução de 19/10/2026; removidas das questões de produto |
+| Consulta explicável e calendário | `ClientNoShowFactsTest`, `PublicAppointmentIT`, PostgreSQL/Testcontainers | Maven passou: `PublicAppointmentIT` 55/55; ano bissexto, início inclusivo, `asOf` exclusivo, política ausente/configurada, fatos únicos e timezone de apresentação cobertos |
+| Correção compensatória e atomicidade | `PublicAppointmentIT`, PostgreSQL real: CAS/replay/rollback/duas transações | Maven passou: replay/digest, CAS, disputa com um vencedor, rollback, associação revogada, história original + referência, auditoria/outbox/receipt únicos e snapshots preservados |
+| Migration e grants | `TenantPersistenceIT`, instalação limpa e upgrade V26→V27 | V27 passou; `TenantPersistenceIT` 26/26, Flyway validate/rerun e runtime grants mínimos; Flyway validou 28 migrations descobertas, incluindo a repetível existente |
+| UI e recuperação | Vitest, script `scripts/dev/test-keycloak-browser.mjs`, Chrome E2E autenticado | UI implementada; 23 Vitest, format/lint/typecheck/build e sintaxe E2E passaram. E2E local não executado para não reutilizar Compose/volumes e tenant local; job limpo no CI do PR é obrigatório antes de retirar draft |
+| CI remoto | App CI/CodeQL push e PR no SHA final | Pendente publicação e conclusão de todos os jobs/check-runs |
+| Homologação | ambiente HTTPS/staging | Pendente operacional; CI não equivale a homologação |
 
-Perguntas abertas registradas em `OPEN-QUESTIONS.md`:
-1. âncora da janela, limites inclusivos e uso de calendário/timezone;
-2. efeito da correção da falta sobre o estado atual da reserva;
-3. consequência de uma política de limite ausente.
+## Retomada/limites
 
-## Estratégia
-
-1. Implementar somente a configuração de limite e a representação explícita de política ausente enquanto as perguntas não forem respondidas.
-2. Após decisão, definir um instante de referência único via `Clock`, obter timezone da fonte confiável e consultar fatos de falta por tenant sem inferir restrição efetiva.
-3. Implementar correção como comando específico, preserving estado/história original e registrando fato compensatório, autorização, versão e motivo conforme decisão aprovada.
-4. Atualizar o caminho administrativo para mostrar política, contagem e fatos explicáveis; não exibir telefone, dados de terceiros ou `NOT_TRACKED` como resultado de contagem.
-5. Usar nova migration somente para schema funcional real, com grants mínimos e rollback integral de auditoria/receipt.
-6. Validar com JDK 21, PostgreSQL real/Testcontainers, conexões independentes para concorrência/CAS e browser Keycloak/PostgreSQL.
-
-## Validação
-
-### Follow-up P2 do PR #20
-
-No head-base revisado `6b884853d910354e3f980361d1151b28394a5dae`, foram identificados três defeitos: CAS só criava a política, GETs antigos podiam sobrescrever estado após PUT e respostas gateway ambíguas liberavam a intenção. O ajuste mantém V1–V26; não há mudança de schema. O CAS passa a separar criação exclusiva `expectedVersion=0` da atualização tenant-scoped com versão esperada. A UI usa callback estável, geração/abort para leituras e invalida leituras na mutação; respostas 408/5xx e falhas de transporte preservam body/chave e bloqueiam edição até replay/reconciliação. Rejeições definitivas continuam liberando correção conforme contrato.
-
-Regressões adicionadas: criação v0→v1, atualização v1→v2, replay, versão obsoleta/inicial incorreta, concorrência com um vencedor, rollback de política/auditoria/receipt; E2E com dois GETs ausentes liberados fora de ordem e HTTP 503 após commit seguido de retry com body/chave idênticos, receipt e efeitos únicos conferidos no DOM e PostgreSQL. Em 19/10/2026, JDK21 `./mvnw -B -ntp spotless:check verify` passou: 77 testes unitários/arquiteturais e 205 integrações em PostgreSQL 16.13; `ClientNoShowPolicyIT` passou 7/7. Frontend: format, lint, 23 Vitest, typecheck, build e sintaxe do roteiro passaram. O browser E2E passou no push [39336408761](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39336408761) e PR [39336412642](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39336412642); App CI e CodeQL em push/PR passaram no SHA funcional `0fa225ac92dbc46233993bc578787b230c1c0115`, todos os jobs concluídos. A tentativa inicial do Maven foi bloqueada pelo sandbox no socket Docker; a repetição autorizada passou. Decisões de janela, correção de `NO_SHOW` e política ausente permanecem pendentes em `OPEN-QUESTIONS.md`.
-
-| Critério | Comando/procedimento | Resultado esperado | Resultado observado |
-|---|---|---|---|
-| Política 1–5, CAS e isolamento | `ClientNoShowPolicyIT` em PostgreSQL real | Apenas tenant autenticado, limites rejeitam inválidos, versão não se perde | Passou 5/5: ausência explícita, tenant isolation, associação revogada, replay único, entradas inválidas, CAS inicial concorrente |
-| Janela móvel | Testes com `Clock` e fronteiras | Limites e calendário exatamente conforme decisão de produto | Pendente de decisão |
-| Correção e histórico | PostgreSQL: correção, replay, concorrência e rollback | Sem apagar evento/história; efeitos únicos | Pendente de decisão |
-| Browser administrativo | Chrome + Keycloak + PostgreSQL | Configura política, vê contagem/eventos e corrige conforme fluxo aprovado | No head de código `b2ddd9fd65b98d1e9ad3eecbd607e6c687c4228e`, App CI push [39332705108](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39332705108) e PR [39332710807](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39332710807) passaram `oidc-browser-e2e`, incluindo configuração e recarga do limite em banco limpo. No head anterior `5a2e307`, ambos E2Es falharam porque o helper procurava `<select>` dentro do label; corrigido para selecionar `no-show-threshold` pelo ID, sem reduzir assertions. E2E local não comprovado: o ambiente persistido tinha serviços e não corresponde à fixture limpa; nenhum dado foi apagado |
-| Gate completo | `cd backend && export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH && ./mvnw -B -ntp spotless:check verify`; frontend gates | Gate aplicável verde | Backend passou: 77 testes unitários/arquiteturais + 203 integrações PostgreSQL; frontend 23 Vitest, format/lint/typecheck/build passou. No head de código `b2ddd9fd65b98d1e9ad3eecbd607e6c687c4228e`, App CI push/PR e CodeQL push/PR concluíram todos os jobs com sucesso: [39332705108](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39332705108), [39332710807](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39332710807), [39332705265](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39332705265), [39332710873](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39332710873). Após a atualização dos registros no commit documental, os checks de App CI/CodeQL push/PR também concluíram com sucesso; ver evidências no `VALIDATION.md` |
-
-## Limites e retomada
-
-- Não declarar bloqueio ou desbloqueio público real até AGD-033.
-- Manter pendentes homologação HTTPS/staging, preflight hospedado, segredo gerenciado/rotação, scan completo, retenção e integrações reais.
-- Próximo passo: receber as três decisões registradas em `OPEN-QUESTIONS.md`, concluir contagem/correção, revisar, validar, publicar branch e PR; não fazer merge/deploy.
+- AGD-032 permanece parcial enquanto qualquer prova obrigatória ou CI final não passar.
+- Gates locais em 19/10/2026: JDK 21 `./mvnw -B -ntp spotless:check verify` — BUILD SUCCESS, 78 testes unitários/arquiteturais + 210 integrações PostgreSQL 16.13/Testcontainers; `ClientNoShowPolicyIT` 7/7, `PublicAppointmentIT` 55/55, `TenantPersistenceIT` 26/26. Frontend `npm run format:check && npm run lint && npm test -- --run && npm run check` — passou, 23 Vitest, TypeScript/build; `node --check` no roteiro E2E e parse YAML OpenAPI via Prettier passaram. A execução integral anterior falhou em uma fixture que usava horários fora do passo/ocupação e quatro expectativas de contagem de histórico; ambos corrigidos sem reduzir assertions, e a execução final integral passou.
+- Revisão final sequencial; agentes independentes indisponíveis pelo limite de threads, sem alegação de revisão independente nem aprovação humana. Limites: fatos e contagem são tenant-scoped e coerentes por `REPEATABLE_READ`; páginas independentes não prometem snapshot imutável. `NOT_TRACKED` não materializa bloqueio/desbloqueio nem substitui AGD-033. Nenhuma retenção nova, dado em log ou PII adicional foi criada.
+- Pendente antes de retirar draft: E2E browser limpo no CI, App CI/CodeQL push e PR em SHA final, conferência de todos os jobs/check-runs, publicação e revisão humana. Sem merge/deploy.
