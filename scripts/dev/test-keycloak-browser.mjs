@@ -1695,7 +1695,7 @@ try {
     await waitUntil(() => evaluate('typeof window.__releaseStaleClientFacts === "function"'));
     await evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).find(button => button.innerText.trim() === '${secondRestrictedClientName}')?.click()`);
     await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${secondRestrictedClientId}' && document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]'))`));
-    await evaluate('window.__releaseStaleClientFacts?.(); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+    await evaluate('(async () => { window.__releaseStaleClientFacts?.(); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); })()');
     const staleFactsDom = await evaluate(`({selected:document.querySelector('[data-testid="selected-no-show-client"]')?.innerText, selectedId:document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId, factsId:document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId, restriction:document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')?.innerText ?? ''})`);
     if (staleFactsDom.selectedId !== secondRestrictedClientId || staleFactsDom.factsId !== secondRestrictedClientId || !staleFactsDom.selected?.includes(secondRestrictedClientName) || !staleFactsDom.restriction) {
         throw new Error(`Resposta tardia dos fatos do cliente A contaminou o cliente B: ${JSON.stringify(staleFactsDom)}`);
