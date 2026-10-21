@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 
 const chromePath = process.env.CHROME_BIN || '/usr/bin/google-chrome';
@@ -3012,6 +3012,7 @@ try {
     async function sendSyntheticPaymentEvent(event) {
         const body = JSON.stringify(event);
         const signature = createHmac('sha256', eventSecret).update(body).digest('hex');
+        console.log(`Browser: webhook E2E diagnostic secret_bytes=${Buffer.byteLength(eventSecret)} body_length=${Buffer.byteLength(body)} signature_hex_length=${signature.length} body_sha256=${createHash('sha256').update(body).digest('hex')}.`);
         return fetch(`http://localhost:${appEnvironment.APP_PORT || 8080}/api/v1/webhooks/payments/e2e`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-Payment-Signature': `sha256=${signature}`},

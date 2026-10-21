@@ -53,7 +53,12 @@ public class E2ePaymentWebhookAuthenticator implements PaymentWebhookAuthenticat
       if (!MessageDigest.isEqual(
           expected.getBytes(StandardCharsets.US_ASCII),
           signatureHeader.getBytes(StandardCharsets.US_ASCII))) {
-        LOGGER.warn("payment_webhook_e2e rejected reason=signature_mismatch");
+        LOGGER.warn(
+            "payment_webhook_e2e rejected reason=signature_mismatch secret_bytes={} body_length={} signature_header_length={} body_sha256={}",
+            secret.length,
+            rawBody.length,
+            signatureHeader.length(),
+            HexFormat.of().formatHex(sha256(rawBody)));
         return Optional.empty();
       }
       JsonNode json = mapper.readTree(rawBody);
@@ -85,6 +90,14 @@ public class E2ePaymentWebhookAuthenticator implements PaymentWebhookAuthenticat
       return mac.doFinal(body);
     } catch (java.security.GeneralSecurityException failure) {
       throw new IllegalStateException("HMAC indisponível", failure);
+    }
+  }
+
+  private byte[] sha256(byte[] body) {
+    try {
+      return MessageDigest.getInstance("SHA-256").digest(body);
+    } catch (java.security.NoSuchAlgorithmException failure) {
+      throw new IllegalStateException("SHA-256 indisponível", failure);
     }
   }
 }
