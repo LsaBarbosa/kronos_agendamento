@@ -100,9 +100,6 @@ export function AdminSubscriptionPanel({
     const [loading, setLoading] = useState(true);
     const [checkoutBusy, setCheckoutBusy] = useState(false);
     const [checkoutMessage, setCheckoutMessage] = useState('');
-    const [checkoutPhase, setCheckoutPhase] = useState<
-        'IDLE' | 'PREPARED' | 'SENDING' | 'UNCERTAIN' | 'KNOWN'
-    >('IDLE');
     const [checkoutView, setCheckoutView] = useState<CheckoutView | null>(null);
     const [checkoutAttempts, setCheckoutAttempts] = useState<CheckoutAttempt[]>(
         [],
@@ -110,6 +107,9 @@ export function AdminSubscriptionPanel({
     const [intent, setIntent] = useState<CheckoutIntent | null>(() =>
         readIntent(tenantContextId),
     );
+    const [checkoutPhase, setCheckoutPhase] = useState<
+        'IDLE' | 'PREPARED' | 'SENDING' | 'UNCERTAIN' | 'KNOWN'
+    >(() => intent?.phase ?? 'IDLE');
     const generation = useRef(0);
     const contextEpoch = useRef(0);
     const contextRef = useRef(tenantContextId);
