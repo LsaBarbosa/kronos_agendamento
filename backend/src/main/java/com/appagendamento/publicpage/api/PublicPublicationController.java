@@ -1,5 +1,6 @@
 package com.appagendamento.publicpage.api;
 
+import com.appagendamento.appointments.domain.PublicAppointmentUnavailableException;
 import com.appagendamento.availability.application.CalculateAvailabilityForDateRange;
 import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import com.appagendamento.publicpage.application.ChangePublicationStatus;
@@ -10,6 +11,7 @@ import com.appagendamento.publicpage.application.ListPublicServices;
 import com.appagendamento.publicpage.application.UpdatePublicContact;
 import com.appagendamento.publicpage.domain.PublicBusiness;
 import com.appagendamento.publicpage.domain.PublicService;
+import com.appagendamento.subscriptions.api.PublicSubscriptionEligibility;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
@@ -38,6 +40,7 @@ public class PublicPublicationController {
   private final GetPublicService getService;
   private final CalculateAvailabilityForDateRange calculateAvailability;
   private final MeterRegistry meters;
+  private final PublicSubscriptionEligibility subscriptionEligibility;
 
   public PublicPublicationController(
       GetPublicationStatus getStatus,
@@ -47,7 +50,8 @@ public class PublicPublicationController {
       ListPublicServices listServices,
       GetPublicService getService,
       CalculateAvailabilityForDateRange calculateAvailability,
-      MeterRegistry meters) {
+      MeterRegistry meters,
+      PublicSubscriptionEligibility subscriptionEligibility) {
     this.getStatus = getStatus;
     this.changeStatus = changeStatus;
     this.updateContact = updateContact;
@@ -56,6 +60,7 @@ public class PublicPublicationController {
     this.getService = getService;
     this.calculateAvailability = calculateAvailability;
     this.meters = meters;
+    this.subscriptionEligibility = subscriptionEligibility;
   }
 
   @GetMapping("/api/v1/admin/publication")
@@ -120,9 +125,12 @@ public class PublicPublicationController {
       @RequestParam UUID serviceId,
       @RequestParam LocalDate from,
       @RequestParam LocalDate to) {
+    UUID tenantId = getBusiness.execute(slug).tenantId();
+    if (!subscriptionEligibility.allowsNewPublicAppointments(tenantId)) {
+      throw new PublicAppointmentUnavailableException();
+    }
     return publicResponse(
-        calculateAvailability.executeForAuthorizedTenant(
-            () -> getBusiness.execute(slug).tenantId(), serviceId, from, to));
+        calculateAvailability.executeForAuthorizedTenant(() -> tenantId, serviceId, from, to));
   }
 
   @PostMapping("/api/v1/public/{slug}/telemetry")

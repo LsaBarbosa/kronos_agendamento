@@ -3,6 +3,7 @@ package com.appagendamento.publicpage.infrastructure;
 import com.appagendamento.appointments.api.PublicBookingGate;
 import com.appagendamento.publicpage.application.GetPublicBusiness;
 import com.appagendamento.publicpage.application.PublicationNotFoundException;
+import com.appagendamento.subscriptions.api.PublicSubscriptionEligibility;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -13,10 +14,15 @@ public class PublicBookingGateAdapter implements PublicBookingGate {
 
   private final GetPublicBusiness businesses;
   private final JdbcTemplate jdbc;
+  private final PublicSubscriptionEligibility subscriptionEligibility;
 
-  public PublicBookingGateAdapter(GetPublicBusiness businesses, JdbcTemplate jdbc) {
+  public PublicBookingGateAdapter(
+      GetPublicBusiness businesses,
+      JdbcTemplate jdbc,
+      PublicSubscriptionEligibility subscriptionEligibility) {
     this.businesses = businesses;
     this.jdbc = jdbc;
+    this.subscriptionEligibility = subscriptionEligibility;
   }
 
   @Override
@@ -47,5 +53,10 @@ public class PublicBookingGateAdapter implements PublicBookingGate {
     if (visible.isEmpty() || !visible.getFirst().equals(expectedTenantId)) {
       throw new PublicationNotFoundException();
     }
+  }
+
+  @Override
+  public boolean allowsNewPublicAppointments(UUID tenantId) {
+    return subscriptionEligibility.allowsNewPublicAppointments(tenantId);
   }
 }

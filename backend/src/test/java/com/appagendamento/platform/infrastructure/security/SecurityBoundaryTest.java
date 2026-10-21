@@ -46,6 +46,8 @@ import com.appagendamento.publicpage.application.GetPublicationStatus;
 import com.appagendamento.publicpage.application.ListPublicServices;
 import com.appagendamento.publicpage.application.UpdatePublicContact;
 import com.appagendamento.publicpage.domain.PublicPageUnavailableException;
+import com.appagendamento.subscriptions.api.PublicSubscriptionEligibility;
+import com.appagendamento.subscriptions.application.GetAdminSubscription;
 import com.appagendamento.tenant.application.GetTenant;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.UUID;
@@ -67,6 +69,9 @@ import org.springframework.test.web.servlet.MockMvc;
 })
 @Import({SecurityConfiguration.class, SecurityErrorWriter.class, CorrelationIdFilter.class})
 class SecurityBoundaryTest {
+
+  @MockitoBean private PublicSubscriptionEligibility subscriptionEligibility;
+  @MockitoBean private GetAdminSubscription getAdminSubscription;
   @Autowired private MockMvc mvc;
 
   @MockitoBean private CreatePublicAppointment createPublicAppointment;

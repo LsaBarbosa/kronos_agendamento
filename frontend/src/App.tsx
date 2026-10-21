@@ -551,10 +551,13 @@ function AdminApp() {
                         onSessionInvalid={handleNoShowPolicySessionInvalid}
                     />
                 )}
-                <AdminSubscriptionPanel
-                    enabled={Boolean(session)}
-                    onSessionInvalid={handleNoShowPolicySessionInvalid}
-                />
+                {session && (
+                    <AdminSubscriptionPanel
+                        key={`${session.tenantId}:${session.role}`}
+                        enabled
+                        onSessionInvalid={handleNoShowPolicySessionInvalid}
+                    />
+                )}
                 <AdminAgendaPanel
                     enabled={Boolean(session)}
                     csrf={csrf}

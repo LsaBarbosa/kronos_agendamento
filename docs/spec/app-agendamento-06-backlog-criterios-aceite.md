@@ -343,6 +343,8 @@ Critérios de aceite:
 - Datas e status são visíveis ao administrador.
 - Fim do trial sem contratação fecha novas reservas conforme estado definido.
 
+O provisionamento real exige identidade comercial estável, opaca e verificada por fonte confiável do servidor. Não derivar identidade de tenant, slug, e-mail, subject OIDC ou declaração do navegador. Enquanto essa fonte não estiver aprovada/configurada, não conceder trial em produção; adapters sintéticos são restritos a testes/E2E. A validade termina em `now >= trialEndsAt` e o gate do servidor bloqueia imediatamente novas reservas, mesmo que a materialização `TRIALING → SUSPENDED` esteja pendente. O anual é apresentado como dez mensalidades sem preço/moeda inventados; trial/plano não equivale a pagamento nem substitui os gates legais/comerciais de publicação.
+
 ### AGD-041 — Checkout e webhook financeiro
 
 **Prioridade:** P0 · **Tamanho:** L

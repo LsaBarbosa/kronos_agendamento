@@ -727,6 +727,8 @@ No SHA funcional `0fa225ac92dbc46233993bc578787b230c1c0115`, App CI push [393364
 
 ## AGD-040 — início
 
+> Esta seção registra a fotografia inicial da história e foi supersedida pelo complemento “AGD-040 — trial persistido e gate” ao final deste arquivo. As afirmações de que persistência, concessão, expiração e gate estavam pendentes não descrevem mais a implementação atual; a fonte comercial real continua deliberadamente pendente.
+
 - Base local sincronizada: `5df1035d08a2cf2f39705b9fbc4f7ed2412da90d`; branch `agd-040-trial-planos`.
 - Requisitos lidos: documento 01 §12 (trial 14 dias, sem cartão; mensal recorrente, anual = dez mensalidades; trial uma vez por tenant/identidade comercial; TRIALING vai a SUSPENDED no fim), documento 02 §7 (máquina de estados; tolerância de sete dias só em PAST_DUE), documento 03 §§2/12 (contratos e assinatura), documento 04 módulo subscriptions, documento 06 AGD-040/041.
 - Identidade verificável para deduplicar trial após recriação não está definida. Não se escolheu identificador nem se concedeu trial com base em slug/e-mail/OIDC. Preço/moeda, pagamento, fornecedor, publicação real e homologação permanecem fora do que se pode inferir. Ver OPEN-QUESTIONS.
@@ -737,3 +739,14 @@ No SHA funcional `0fa225ac92dbc46233993bc578787b230c1c0115`, App CI push [393364
 - Testcontainers/migration: não aplicável à fatia publicada até aqui; nenhuma migration ou persistência de assinatura foi criada. A ausência é uma pendência funcional, não aprovação.
 - Revisão independente não disponível porque o limite de threads de agentes está atingido; revisão sequencial do delta e CI remoto ainda pendentes.
 - Commit `2c972dd17b46466bc2d08b950ce35a0396cd527f` implementou a fatia funcional; head documental `33a4cb0c3788257a85ecdc3e54c6c81747b6813f` no PR draft [#22](https://github.com/LsaBarbosa/kronos_agendamento/pull/22). No SHA `33a4cb0c3788257a85ecdc3e54c6c81747b6813f`, App CI push/PR e CodeQL push/PR concluíram `success`; todos os jobs/check-runs, inclusive os dois E2Es de browser, finalizaram. E2E local continua não executado; não confundir com o E2E real do CI.
+
+## AGD-040 — trial persistido e gate (continuação 21/10/2026)
+
+- Base revisada antes da continuação: head `1ad113122e7618fb180a1431cef1dbf834a29769`, branch `agd-040-trial-planos`, PR #22 draft. Nenhuma alteração local do usuário foi descartada.
+- Backend: `cd backend && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` — `BUILD SUCCESS`; 79 unitários/arquiteturais e 235 integrações, zero falhas, PostgreSQL 16.13/Testcontainers. `TenantPersistenceIT` (28) inclui instalação limpa, upgrade, Flyway validate/rerun e grants runtime; `SubscriptionTrialIT` (8) cobre fonte ausente/inconclusiva, concessão/replay, tenant recriado, concorrência cross-tenant, rollback, igualdade/antes/depois do vencimento, CAS do worker e isolamento de FK.
+- Gate de reserva: `PublicAppointmentIT` (69) e `PublicPageIT` (7) passaram na mesma suíte. A elegibilidade é revalidada no commit sob lock tenant-scoped; vencimento fecha novas reservas desde `now >= trialEndsAt`, inclusive quando o worker ainda não materializou. Estados existentes e acesso à reserva continuam fora do gate de nova criação.
+- Frontend: em `frontend`, `npm run format:check`, `npm run lint`, `npm test -- --run` (23) e `npm run check` (TypeScript + Vite build) passaram com Node 24.14.1. `node --check scripts/dev/test-keycloak-browser.mjs`, `bash -n scripts/dev/provision-demo-admin.sh` e `git diff --check` passaram.
+- Migration V30 preserva V1–V29. PostgreSQL real validou fresh install, upgrades a partir de versões anteriores, rerun/validate, FKs/constraints e privilégios runtime; concessão, histórico, auditoria e receipt idempotente são transacionais.
+- E2E local Chrome/Keycloak não executado: a composição compartilhada ativa contém PostgreSQL e Keycloak, mas não o backend/frontend da aplicação; não foi reiniciada nem modificada. O roteiro real foi ampliado para o App CI; resultado do `oidc-browser-e2e` será registrado somente após o SHA final publicado.
+- Revisão: inspeção sequencial de camadas, locks, porta de identidade, migração, DTO/UI e testes. Revisores independentes não puderam ser iniciados pelo limite de threads disponível; isso não é aprovação humana.
+- Estado remoto desta continuação: pendente até commit/push; não reutilizar os checks do SHA antigo como validação do conteúdo atual. PR #22 deve continuar draft. Sem checkout, cobrança, deploy ou envio real.

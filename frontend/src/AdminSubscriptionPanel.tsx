@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiBaseUrl } from './config';
 
 type Plan = {
@@ -9,9 +9,16 @@ type Plan = {
 };
 
 type Overview = {
-    subscription: null;
+    subscription: {
+        subscriptionId: string;
+        status: 'TRIALING' | 'SUSPENDED';
+        trialStartedAt: string;
+        trialEndsAt: string;
+        version: number;
+    } | null;
     plans: Plan[];
     trialEligibilityPending: boolean;
+    commercialEligibility: 'VERIFICATION_UNAVAILABLE' | 'VERIFIED';
 };
 
 export function AdminSubscriptionPanel({
@@ -23,34 +30,68 @@ export function AdminSubscriptionPanel({
 }) {
     const [overview, setOverview] = useState<Overview | null>(null);
     const [error, setError] = useState('');
+    const [loading, setLoading] = useState(true);
+    const generation = useRef(0);
 
     useEffect(() => {
+        const generationRef = generation;
+        const requestGeneration = ++generation.current;
         if (!enabled) return;
         const controller = new AbortController();
-        void fetch(apiBaseUrl + '/v1/admin/subscription', {
-            credentials: 'same-origin',
-            cache: 'no-store',
-            signal: controller.signal,
-        })
-            .then(async (response) => {
+        void (async () => {
+            try {
+                const response = await fetch(
+                    apiBaseUrl + '/v1/admin/subscription',
+                    {
+                        credentials: 'same-origin',
+                        cache: 'no-store',
+                        signal: controller.signal,
+                    },
+                );
+                if (
+                    controller.signal.aborted ||
+                    generation.current !== requestGeneration
+                )
+                    return;
                 if (response.status === 401 || response.status === 403) {
                     onSessionInvalid(response.status);
                     return;
                 }
                 if (!response.ok)
                     throw new Error(`Falha HTTP ${response.status}.`);
-                setOverview((await response.json()) as Overview);
-            })
-            .catch((cause: unknown) => {
-                if (!controller.signal.aborted) {
+                const body = (await response.json()) as Overview;
+                if (
+                    controller.signal.aborted ||
+                    generation.current !== requestGeneration
+                )
+                    return;
+                setOverview(body);
+                setError('');
+            } catch (cause: unknown) {
+                if (
+                    !controller.signal.aborted &&
+                    generation.current === requestGeneration
+                ) {
                     setError(
                         cause instanceof Error
                             ? cause.message
                             : 'Não foi possível carregar os planos.',
                     );
                 }
-            });
-        return () => controller.abort();
+            } finally {
+                if (
+                    !controller.signal.aborted &&
+                    generation.current === requestGeneration
+                ) {
+                    setLoading(false);
+                }
+            }
+        })();
+        return () => {
+            controller.abort();
+            if (generationRef.current === requestGeneration)
+                generationRef.current++;
+        };
     }, [enabled, onSessionInvalid]);
 
     if (!enabled) return null;
@@ -58,7 +99,7 @@ export function AdminSubscriptionPanel({
     return (
         <section aria-labelledby="subscription-heading">
             <h2 id="subscription-heading">Plano e período de avaliação</h2>
-            {!overview && !error && (
+            {loading && !overview && !error && (
                 <output aria-live="polite">
                     Carregando informações comerciais…
                 </output>
@@ -70,6 +111,31 @@ export function AdminSubscriptionPanel({
                     elegível ainda não pode ser verificada. A seleção de um
                     plano não confirma pagamento nem libera publicação.
                 </output>
+            )}
+            {overview?.subscription && (
+                <section aria-label="Estado do trial">
+                    <p>
+                        Estado:{' '}
+                        {overview.subscription.status === 'TRIALING'
+                            ? 'Trial ativo'
+                            : 'Trial encerrado'}
+                        .
+                    </p>
+                    <p>
+                        Início:{' '}
+                        {new Date(
+                            overview.subscription.trialStartedAt,
+                        ).toLocaleString('pt-BR', { timeZone: 'UTC' })}{' '}
+                        UTC
+                    </p>
+                    <p>
+                        Fim:{' '}
+                        {new Date(
+                            overview.subscription.trialEndsAt,
+                        ).toLocaleString('pt-BR', { timeZone: 'UTC' })}{' '}
+                        UTC
+                    </p>
+                </section>
             )}
             {overview && (
                 <ul aria-label="Planos disponíveis">
@@ -91,9 +157,8 @@ export function AdminSubscriptionPanel({
                 </ul>
             )}
             <p>
-                Nenhum checkout ou pagamento é realizado nesta etapa. O trial
-                aprovado pela especificação tem duração de 14 dias e não exige
-                cartão; sua concessão aguarda verificação de elegibilidade.
+                Nenhum checkout ou pagamento é realizado nesta etapa. Trial
+                elegível tem 14 dias e não exige cartão.
             </p>
         </section>
     );

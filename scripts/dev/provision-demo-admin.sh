@@ -62,6 +62,7 @@ existing_tenant=$(docker compose -p agendamento exec -T \
 SELECT EXISTS (SELECT 1 FROM agendamento.tenant WHERE slug = :'tenant_slug');
 SQL
 )
+
 if [[ "$existing_tenant" == "t" ]]; then
   echo "Slug já provisionado; use um slug novo. Nenhuma credencial foi alterada." >&2
   exit 1
@@ -128,7 +129,52 @@ COMMIT;
 SQL
 )
 
+if [[ "${AGD_E2E_TRIAL_FIXTURE:-false}" == "true" ]]; then
+  trial_subscription_id=$(uuidgen)
+  trial_grant_id=$(uuidgen)
+  trial_operation_id=$(uuidgen)
+  trial_trace_id=$(uuidgen)
+  trial_identity_digest=$(printf '%s' 'e2e-only-stable-commercial-identity' | sha256sum | cut -d' ' -f1)
+  docker compose -p agendamento exec -T \
+    -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
+    psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
+    -d "${POSTGRES_DB:-agendamento}" \
+    -v tenant_id="$tenant_id" -v subscription_id="$trial_subscription_id" \
+    -v grant_id="$trial_grant_id" -v operation_id="$trial_operation_id" \
+    -v identity_digest="$trial_identity_digest" -v trace_id="$trial_trace_id" <<'SQL'
+BEGIN;
+WITH timing AS (SELECT clock_timestamp() AS started_at)
+INSERT INTO agendamento.subscription
+  (subscription_id, tenant_id, status, trial_started_at, trial_ends_at, version)
+SELECT :'subscription_id', :'tenant_id', 'TRIALING', started_at,
+       started_at + INTERVAL '336 hours', 1
+FROM timing;
+INSERT INTO agendamento.commercial_trial_grant
+  (grant_id, tenant_id, commercial_identity_digest, operation_id, granted_at)
+SELECT :'grant_id', :'tenant_id', :'identity_digest', :'operation_id', trial_started_at
+FROM agendamento.subscription WHERE subscription_id = :'subscription_id';
+INSERT INTO agendamento.subscription_history
+  (event_id, tenant_id, subscription_id, event_type, from_status, to_status,
+   event_at, version, operation_id)
+SELECT gen_random_uuid(), tenant_id, subscription_id, 'TRIAL_GRANTED', NULL, 'TRIALING',
+       trial_started_at, 1, :'operation_id'
+FROM agendamento.subscription WHERE subscription_id = :'subscription_id';
+INSERT INTO agendamento.audit_event
+  (event_id, tenant_id, actor_type, actor_ref, action, target_type, target_id, result,
+   correlation_id, trace_id, details)
+VALUES
+  (gen_random_uuid(), :'tenant_id', 'SYSTEM', 'SUBSCRIPTION_LIFECYCLE',
+   'SUBSCRIPTION_TRIAL_GRANTED', 'SUBSCRIPTION', :'subscription_id', 'COMMITTED',
+   :'trace_id', :'trace_id',
+   '{"changed_fields":["subscription"],"version_before":0,"version_after":1}'::jsonb);
+COMMIT;
+SQL
+fi
+
 umask 077
 printf 'KEYCLOAK_DEMO_USERNAME=%s\nKEYCLOAK_DEMO_PASSWORD=%s\nKEYCLOAK_UNLINKED_USERNAME=%s\nKEYCLOAK_UNLINKED_PASSWORD=%s\nDEMO_TENANT_ID=%s\n' \
   "$username" "$temporary_password" "$unlinked_username" "$unlinked_password" "$tenant_id" > .demo-admin.credentials
 echo "Admin associado e identidade não associada provisionados. Credenciais e tenant_id estão em .demo-admin.credentials (ignorado pelo Git)."
+if [[ "${AGD_E2E_TRIAL_FIXTURE:-false}" == "true" ]]; then
+  echo "Trial sintético de 14 dias provisionado somente como fixture explícita de E2E."
+fi

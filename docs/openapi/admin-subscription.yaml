@@ -4,7 +4,7 @@ info:
   version: 1.0.0
   description: >-
     Leitura tenant-scoped de estado comercial e apresentação de planos. Não inicia
-    checkout, não confirma pagamento e não concede trial sem identidade elegível verificada.
+    checkout, não confirma pagamento e não concede trial sem identidade elegível verificada por fonte confiável do servidor.
 servers:
   - url: /
 paths:
@@ -24,7 +24,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [subscription, plans, trialEligibilityPending]
+                required: [subscription, plans, trialEligibilityPending, commercialEligibility]
                 properties:
                   subscription:
                     oneOf:
@@ -34,6 +34,9 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/Plan' }
                   trialEligibilityPending: { type: boolean }
+                  commercialEligibility:
+                    type: string
+                    enum: [VERIFICATION_UNAVAILABLE, VERIFIED]
         '401': { description: Sessão ausente/expirada }
         '403': { description: Associação administrativa inválida ou revogada }
 components:
@@ -45,15 +48,12 @@ components:
   schemas:
     Subscription:
       type: object
-      required: [subscriptionId, status, version]
+      required: [subscriptionId, status, trialStartedAt, trialEndsAt, version]
       properties:
         subscriptionId: { type: string, format: uuid }
-        planCode: { type: string, enum: [MONTHLY, ANNUAL], nullable: true }
-        status: { type: string, enum: [TRIALING, ACTIVE, PAST_DUE, SUSPENDED, CANCELLED] }
-        trialStartedAt: { type: string, format: date-time, nullable: true }
-        trialEndsAt: { type: string, format: date-time, nullable: true }
-        currentPeriodEndsAt: { type: string, format: date-time, nullable: true }
-        graceEndsAt: { type: string, format: date-time, nullable: true }
+        status: { type: string, enum: [TRIALING, SUSPENDED] }
+        trialStartedAt: { type: string, format: date-time }
+        trialEndsAt: { type: string, format: date-time }
         version: { type: integer, minimum: 1 }
     Plan:
       type: object

@@ -39,6 +39,7 @@ import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import com.appagendamento.publicpage.application.ChangePublicationStatus;
 import com.appagendamento.publicpage.application.PublicationEvidence;
 import com.appagendamento.publicpage.application.UpdatePublicContact;
+import com.appagendamento.subscriptions.api.PublicSubscriptionEligibility;
 import com.appagendamento.support.PostgresTestEnvironment;
 import java.security.SecureRandom;
 import java.time.DayOfWeek;
@@ -87,7 +88,8 @@ import tools.jackson.databind.ObjectMapper;
       "identity.oidc.user-info-uri=https://identity.test/realms/agendamento/protocol/openid-connect/userinfo",
       "identity.oidc.client-id=integration-test",
       "identity.oidc.client-secret=not-a-real-secret",
-      "identity.oidc.redirect-uri={baseUrl}/login/oauth2/code/keycloak"
+      "identity.oidc.redirect-uri={baseUrl}/login/oauth2/code/keycloak",
+      "app.subscriptions.trial-expiry-worker.enabled=false"
     })
 @AutoConfigureMockMvc
 class PublicAppointmentIT {
@@ -116,6 +118,7 @@ class PublicAppointmentIT {
   @Autowired private ObjectMapper objectMapper;
   @MockitoBean private java.time.Clock clock;
   @MockitoBean private PublicationEvidence publicationEvidence;
+  @MockitoBean private PublicSubscriptionEligibility subscriptionEligibility;
   @MockitoBean private AccessCodeSender accessCodeSender;
 
   private JdbcTemplate migrationJdbc;
@@ -153,6 +156,8 @@ class PublicAppointmentIT {
         .thenReturn(List.of());
     migrationJdbc = new JdbcTemplate(PostgresTestEnvironment.migrationDataSource());
     tenantId = UUID.randomUUID();
+    org.mockito.Mockito.when(subscriptionEligibility.allowsNewPublicAppointments(tenantId))
+        .thenReturn(true);
     UUID adminId = UUID.randomUUID();
     String subject = UUID.randomUUID().toString();
     slug = "book-" + UUID.randomUUID().toString().substring(0, 8);

@@ -24,6 +24,7 @@ import com.appagendamento.publicpage.application.ChangePublicationStatus;
 import com.appagendamento.publicpage.application.GetPublicBusiness;
 import com.appagendamento.publicpage.application.PublicationEvidence;
 import com.appagendamento.publicpage.application.UpdatePublicContact;
+import com.appagendamento.subscriptions.api.PublicSubscriptionEligibility;
 import com.appagendamento.support.PostgresTestEnvironment;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
@@ -58,6 +59,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest(
     properties = {
+      "app.subscriptions.trial-expiry-worker.enabled=false",
       "identity.oidc.enabled=true",
       "identity.oidc.issuer-uri=https://identity.test/realms/agendamento",
       "identity.oidc.authorization-uri=https://identity.test/realms/agendamento/protocol/openid-connect/auth",
@@ -86,6 +88,7 @@ class PublicPageIT {
   @Autowired private GetPublicBusiness getPublicBusiness;
   @Autowired private MockMvc mvc;
   @MockitoBean private PublicationEvidence publicationEvidence;
+  @MockitoBean private PublicSubscriptionEligibility subscriptionEligibility;
 
   @org.springframework.beans.factory.annotation.Autowired
   @org.springframework.beans.factory.annotation.Qualifier("testAppointmentOccupancyQuery")
@@ -109,6 +112,7 @@ class PublicPageIT {
     when(appointmentOccupancyQuery.findOverlapping(any(), any(), any())).thenReturn(List.of());
     migrationJdbc = new JdbcTemplate(PostgresTestEnvironment.migrationDataSource());
     tenantId = UUID.randomUUID();
+    when(subscriptionEligibility.allowsNewPublicAppointments(tenantId)).thenReturn(true);
     UUID adminId = UUID.randomUUID();
     String subject = UUID.randomUUID().toString();
     slug = "public-" + UUID.randomUUID().toString().substring(0, 8);

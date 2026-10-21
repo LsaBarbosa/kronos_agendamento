@@ -91,3 +91,7 @@ app:
       lease-seconds: ${OUTBOX_WORKER_LEASE_SECONDS:60}
       max-attempts: ${OUTBOX_WORKER_MAX_ATTEMPTS:8}
       poll-delay-ms: ${OUTBOX_WORKER_POLL_DELAY_MS:1000}
+  subscriptions:
+    trial-expiry-worker:
+      enabled: ${SUBSCRIPTION_TRIAL_EXPIRY_WORKER_ENABLED:true}
+      poll-delay-ms: ${SUBSCRIPTION_TRIAL_EXPIRY_POLL_DELAY_MS:60000}
