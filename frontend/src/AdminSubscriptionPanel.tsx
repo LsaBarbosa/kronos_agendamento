@@ -591,6 +591,14 @@ export function AdminSubscriptionPanel({
 
     if (!enabled) return null;
 
+    const checkoutPhaseLabel = {
+        IDLE: 'inativa',
+        PREPARED: 'preparada',
+        SENDING: 'em envio',
+        UNCERTAIN: 'incerta',
+        KNOWN: 'conhecida',
+    }[checkoutPhase];
+
     return (
         <section aria-labelledby="subscription-heading">
             <h2 id="subscription-heading">Plano e período de avaliação</h2>
@@ -708,9 +716,9 @@ export function AdminSubscriptionPanel({
             {intent && (
                 <section aria-label="Operação de checkout pendente">
                     <p>
-                        Operação {checkoutPhase.toLowerCase()}:{' '}
-                        {intent.body.planCode}. O tenant, corpo e chave da
-                        intenção serão preservados até resultado conhecido.
+                        Operação {checkoutPhaseLabel}: {intent.body.planCode}. O
+                        tenant, corpo e chave da intenção serão preservados até
+                        resultado conhecido.
                     </p>
                     <button
                         type="button"
