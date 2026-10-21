@@ -3023,7 +3023,12 @@ try {
     const paidThroughAt = new Date(Date.now() + 30 * 86400000).toISOString();
     const confirmation = {eventId: `confirmation-${checkoutOperationId}`, reference: providerReference, sequence: 2, outcome: 'CONFIRMED', amountMinorUnits: 1, currency: 'XTS', occurredAt: new Date().toISOString(), paidThroughAt};
     const confirmationResponse = await sendSyntheticPaymentEvent(confirmation);
-    if (confirmationResponse.status !== 202) throw new Error(`Evidência E2E válida não foi admitida: HTTP ${confirmationResponse.status}`);
+    if (confirmationResponse.status !== 202) {
+        const responseError = await confirmationResponse.clone().json().catch(() => null);
+        const errorCode = responseError?.error?.code;
+        const safeErrorCode = typeof errorCode === 'string' && /^[A-Z0-9_]{1,64}$/.test(errorCode) ? errorCode : 'unavailable';
+        throw new Error(`Evidência E2E válida não foi admitida: HTTP ${confirmationResponse.status}, code=${safeErrorCode}`);
+    }
     const duplicateResponse = await sendSyntheticPaymentEvent(confirmation);
     if (duplicateResponse.status !== 200) throw new Error(`Webhook repetido não foi reconhecido: HTTP ${duplicateResponse.status}`);
     const olderResponse = await sendSyntheticPaymentEvent({...confirmation, eventId: `older-${checkoutOperationId}`, sequence: 1, outcome: 'DECLINED', paidThroughAt: undefined});

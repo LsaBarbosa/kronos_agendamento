@@ -44,6 +44,12 @@ public class E2ePaymentWebhookAuthenticator implements PaymentWebhookAuthenticat
   @Override
   public Optional<AuthenticatedPaymentEvent> authenticate(byte[] rawBody, String signatureHeader) {
     if (secret.length < 32) return Optional.empty();
+    LOGGER.info(
+        "payment_webhook_e2e request secret_bytes={} body_length={} signature_header_length={} body_sha256={}",
+        secret.length,
+        rawBody.length,
+        signatureHeader == null ? 0 : signatureHeader.length(),
+        HexFormat.of().formatHex(sha256(rawBody)));
     if (signatureHeader == null) {
       LOGGER.warn("payment_webhook_e2e rejected reason=signature_missing");
       return Optional.empty();
@@ -53,12 +59,7 @@ public class E2ePaymentWebhookAuthenticator implements PaymentWebhookAuthenticat
       if (!MessageDigest.isEqual(
           expected.getBytes(StandardCharsets.US_ASCII),
           signatureHeader.getBytes(StandardCharsets.US_ASCII))) {
-        LOGGER.warn(
-            "payment_webhook_e2e rejected reason=signature_mismatch secret_bytes={} body_length={} signature_header_length={} body_sha256={}",
-            secret.length,
-            rawBody.length,
-            signatureHeader.length(),
-            HexFormat.of().formatHex(sha256(rawBody)));
+        LOGGER.warn("payment_webhook_e2e rejected reason=signature_mismatch");
         return Optional.empty();
       }
       JsonNode json = mapper.readTree(rawBody);
