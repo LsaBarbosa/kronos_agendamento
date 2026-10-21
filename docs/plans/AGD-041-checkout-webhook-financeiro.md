@@ -74,7 +74,8 @@
 - [x] PR #22 AGD-040 integrado por merge commit `d5bac636310780b699a2c471acbb0c3d50a2a580`; App CI/CodeQL pós-merge completos, incluindo E2E e todos os check-runs (evidência em STATUS/VALIDATION).
 - [x] Núcleo checkout/webhook, adapters de produção fail-closed, painel de recuperação e fixtures restritas ao E2E implementados; sem oferta/provider real, a produção não inicia checkout nem admite evento.
 - [x] V32 aplicada em instalação limpa e upgrade; `TenantPersistenceIT` (30) e `BillingWebhookIT` (6) passaram em PostgreSQL 16.13/Testcontainers, incluindo concorrência de checkouts; Flyway validate/rerun e grants verificados.
-- [ ] Browser E2E em CI do head final — registrar após publicação; o ambiente local compartilhado tem PostgreSQL/Keycloak, mas não backend/frontend da aplicação.
+- [x] A primeira execução App CI push no SHA `798570b8a88718d4dbd38e8ec8e2cded174f6ae1` encontrou falha de compilação exclusiva da fixture E2E (`IOException` não lançada). Catch corrigido e compilação Docker `INCLUDE_E2E_FIXTURES=true` passou; aguardando novo CI no SHA corrigido.
+- [ ] Browser E2E em CI do head final — o ambiente local compartilhado tem PostgreSQL/Keycloak, mas não backend/frontend da aplicação.
 - [ ] Preço/moeda/oferta, fornecedor, sandbox, credenciais gerenciadas, homologação HTTPS, prontidão legal/comercial e retenção continuam pendentes.
 
 ## Evidências locais

@@ -59,7 +59,7 @@ public class E2ePaymentWebhookAuthenticator implements PaymentWebhookAuthenticat
                   ? Instant.parse(json.path("paidThroughAt").asString())
                   : null);
       return Optional.of(event);
-    } catch (RuntimeException | java.io.IOException invalid) {
+    } catch (RuntimeException invalid) {
       return Optional.empty();
     }
   }
