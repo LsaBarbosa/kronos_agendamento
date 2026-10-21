@@ -53,7 +53,7 @@ Trade-off: fail-closed pode impedir novas reservas enquanto trial não estiver p
 - [ ] E2E local real não executado: Compose compartilhado tem somente PostgreSQL/Keycloak, sem backend/frontend; não foi reiniciado. E2E de PR/CI ficará pendente até publicação.
 - [ ] Revisão independente indisponível pelo limite de threads; revisão sequencial final ainda pendente.
 - [x] 2026-10-21 — PR draft [#22](https://github.com/LsaBarbosa/kronos_agendamento/pull/22) aberto para `main`, commit funcional `2c972dd17b46466bc2d08b950ce35a0396cd527f`; sem merge/deploy.
-- [ ] App CI/CodeQL push e PR precisam concluir no head documental final.
+- [x] 2026-10-21 — App CI/CodeQL push e PR concluídos em `33a4cb0c3788257a85ecdc3e54c6c81747b6813f`; todos os jobs/check-runs passaram, incluindo E2E browser. E2E local não executado.
 - [ ] Homologação e gates comerciais/legais continuam fora da evidência local/CI.
 
 ## Validação
