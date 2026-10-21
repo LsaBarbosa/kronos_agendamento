@@ -3029,7 +3029,14 @@ try {
         const safeErrorCode = typeof errorCode === 'string' && /^[A-Z0-9_]{1,64}$/.test(errorCode) ? errorCode : 'unavailable';
         const errorTraceId = responseError?.error?.traceId;
         const safeTraceId = typeof errorTraceId === 'string' && /^[0-9a-f-]{36}$/i.test(errorTraceId) ? errorTraceId : 'unavailable';
-        throw new Error(`Evidência E2E válida não foi admitida: HTTP ${confirmationResponse.status}, code=${safeErrorCode}, trace=${safeTraceId}`);
+        let inboxRows = 'unavailable';
+        try {
+            inboxRows = queryPostgres(`SELECT count(*) FROM agendamento.billing_event_inbox WHERE provider_code = 'e2e' AND provider_event_id = 'confirmation-${checkoutOperationId}'`, appEnvironment);
+        } catch {
+            inboxRows = 'unavailable';
+        }
+        const responsePath = new URL(confirmationResponse.url).pathname;
+        throw new Error(`Evidência E2E válida não foi admitida: HTTP ${confirmationResponse.status}, code=${safeErrorCode}, trace=${safeTraceId}, path=${responsePath}, redirected=${confirmationResponse.redirected}, inbox_rows=${inboxRows}`);
     }
     const duplicateResponse = await sendSyntheticPaymentEvent(confirmation);
     if (duplicateResponse.status !== 200) throw new Error(`Webhook repetido não foi reconhecido: HTTP ${duplicateResponse.status}`);

@@ -98,6 +98,8 @@ O App CI PR no head `45c08280e0a6a561b2f1548f4c0dd0bfe185a51a` alcançou o webho
 
 ## Evidências locais
 
+**Atualização diagnóstica do head `dada554b45cb524ecd1a54d124251dd620ecf031`:** App CI push [39657662007](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39657662007) e PR [39657671131](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39657671131) falharam no browser, enquanto os demais jobs e CodeQL push/PR [39657662029](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39657662029)/[39657671486](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39657671486) passaram. O evento válido foi autenticado no adapter E2E; o HTTP 401 `AUTHENTICATION_REQUIRED` compartilha seu trace. Para distinguir erro antes/depois da persistência e eventual dispatch, o roteiro agora consulta somente a contagem de inbox para o event ID sintético e registra apenas o path final e flag de redirect. Nada identifica a causa antes do CI seguinte.
+
 | Critério | Procedimento | Resultado observado |
 |---|---|---|
 | Migration limpa, upgrades e permissões | `TenantPersistenceIT` | Passou: 30 testes; inclui instalação limpa, upgrade até V32, `validate`/rerun e grants. |
