@@ -52,7 +52,8 @@ Trade-off: fail-closed pode impedir novas reservas enquanto trial não estiver p
 - [x] 2026-10-21 — validação local da fatia independente: `cd backend && ./mvnw -B -ntp spotless:check test` (79 testes) e `./mvnw -B -ntp spotless:check -Dtest=SecurityBoundaryTest,PlanCatalogTest test` (8 testes) passaram com JDK 21; frontend format/lint, 23 Vitest, TypeScript/build e `node --check` passaram.
 - [ ] E2E local real não executado: Compose compartilhado tem somente PostgreSQL/Keycloak, sem backend/frontend; não foi reiniciado. E2E de PR/CI ficará pendente até publicação.
 - [ ] Revisão independente indisponível pelo limite de threads; revisão sequencial final ainda pendente.
-- [ ] Publicar PR e aguardar App CI/CodeQL no SHA final.
+- [x] 2026-10-21 — PR draft [#22](https://github.com/LsaBarbosa/kronos_agendamento/pull/22) aberto para `main`, commit funcional `2c972dd17b46466bc2d08b950ce35a0396cd527f`; sem merge/deploy.
+- [ ] App CI/CodeQL push e PR precisam concluir no head documental final.
 - [ ] Homologação e gates comerciais/legais continuam fora da evidência local/CI.
 
 ## Validação

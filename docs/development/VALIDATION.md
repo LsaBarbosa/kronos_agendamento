@@ -735,3 +735,4 @@ No SHA funcional `0fa225ac92dbc46233993bc578787b230c1c0115`, App CI push [393364
 - E2E local: não executado; `docker compose ps` mostrou apenas PostgreSQL e Keycloak compartilhados, e probes localhost em 5173/8080 retornaram conexão recusada. Não reiniciei o Compose; o browser E2E novo foi acrescentado ao script e depende do App CI após publicação.
 - Testcontainers/migration: não aplicável à fatia publicada até aqui; nenhuma migration ou persistência de assinatura foi criada. A ausência é uma pendência funcional, não aprovação.
 - Revisão independente não disponível porque o limite de threads de agentes está atingido; revisão sequencial do delta e CI remoto ainda pendentes.
+- Commit `2c972dd17b46466bc2d08b950ce35a0396cd527f` publicado no PR draft [#22](https://github.com/LsaBarbosa/kronos_agendamento/pull/22). Esta atualização documental gera novo head; App CI/CodeQL push/PR do head final ainda pendentes.
