@@ -1840,7 +1840,7 @@ try {
       };
     })()`);
     await clickButtonByText('Reavaliar política para este cliente', evaluate);
-    await waitForText('Resultado incerto. Recupere a mesma reconciliação sem alterar cliente ou versão da política.', evaluate);
+    await waitForText('Resultado incerto. Repita a mesma reconciliação para recuperar o receipt original.', evaluate);
     await clickButtonByText('Recuperar mesma reconciliação', evaluate);
     await waitForText('ACTIVATED', evaluate);
     await waitUntil(() => evaluate(`Boolean(document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]') && document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${reconciliationClientId}')`));
