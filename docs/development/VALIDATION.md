@@ -2,6 +2,14 @@
 
 ## AGD-041 — checkout e webhook financeiro (21/10/2026)
 
+### Follow-up P2 do PR #23 — validação desta rodada
+
+- Base remota conferida sem delta posterior: `61960c0a19220f07afe75e4781acb4ae7e992f86`; branch `agd-041-checkout-webhook-financeiro`; V1–V33 preservadas, V34 adicionada.
+- Backend, JDK 21: `cd backend && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp clean spotless:check -Dtest=SecurityBoundaryTest,StartSubscriptionCheckoutTest -Dit.test=TenantPersistenceIT,BillingWebhookIT verify` — `BUILD SUCCESS`; 8 testes unitários/segurança e 41 integrações PostgreSQL 16.13/Testcontainers (TenantPersistenceIT 33, BillingWebhookIT 8). Inclui V34 em instalação limpa e upgrade V33→V34, Flyway validate/rerun, grants, preflight fail-closed com legado intacto, estados nulos/incompletos, contexto administrativo e inbox antecipada reconciliada sem efeitos duplicados.
+- Frontend: `npm run format:check`, `npm run lint`, `npm test -- --run`, `npm run check` e `node --check ../scripts/dev/test-keycloak-browser.mjs` — Prettier/lint sem avisos, 23 Vitest, TypeScript e Vite build aprovados; sintaxe E2E válida.
+- Chrome/Keycloak E2E real não executado localmente: o Compose compartilhado visível contém PostgreSQL/Keycloak, mas não os serviços backend/frontend da aplicação; não foi reiniciado nem alterado. O roteiro foi ampliado para o E2E do App CI. A validação do CI remoto será registrada após conclusão de todos os jobs/check-runs no SHA publicado.
+- Execuções iniciais desta rodada falharam primeiro por sintaxe SQL e depois por expectativas/fixtures dos testes V34; corrigidas sem reduzir assertions. A execução limpa final acima passou. Falhas anteriores não são tratadas como aprovação.
+
 **Correção V33 — validação local e CI:** o App CI do head anterior `eb825710187b1102d62258d6b8ee509c791b01e4` revelou `PSQLException` SQLState `42501` após autenticar o evento, com inbox vazia. A confirmação atualiza `plan_code` e `paid_through_at`, mas o grant de V30 cobria apenas `status/version`. V33 concede UPDATE somente nas duas colunas financeiras.
 
 - `cd backend && export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH && ./mvnw -B -ntp spotless:check '-Dit.test=TenantPersistenceIT,BillingWebhookIT' verify` — `BUILD SUCCESS`; 79 testes unitários/arquiteturais e 38 integrações PostgreSQL 16.13/Testcontainers (TenantPersistenceIT 31, BillingWebhookIT 7). Cobriu V1–V33 em instalação limpa, upgrade direto V32→V33, Flyway validate/rerun, grants mínimos, confirmação de trial por `agendamento_app`, rollback e cenários de webhook.

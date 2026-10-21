@@ -23,9 +23,13 @@ public class GetAdminCheckoutOperation {
     this.provider = provider;
   }
 
-  public CheckoutView execute(AuthenticatedAdmin admin, UUID operationId) {
+  public CheckoutView execute(
+      AuthenticatedAdmin admin, UUID expectedTenantContextId, UUID operationId) {
     if (admin == null || !"TENANT_ADMIN".equals(admin.role()) || !access.isCurrent(admin)) {
       throw new SubscriptionAccessDeniedException();
+    }
+    if (expectedTenantContextId == null || !admin.tenantId().equals(expectedTenantContextId)) {
+      throw new SubscriptionCheckoutConflictException("TENANT_CONTEXT_CHANGED");
     }
     CheckoutOperation operation =
         billing

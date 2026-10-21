@@ -2,11 +2,19 @@ package com.appagendamento.subscriptions;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
+import com.appagendamento.identityaccess.api.AdminAccessPolicy;
+import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import com.appagendamento.subscriptions.api.AuthenticatedPaymentEvent;
+import com.appagendamento.subscriptions.api.BillingOffer;
+import com.appagendamento.subscriptions.api.BillingOfferCatalog;
+import com.appagendamento.subscriptions.api.HostedCheckoutProvider;
 import com.appagendamento.subscriptions.api.HostedCheckoutProvider.CheckoutSession;
 import com.appagendamento.subscriptions.application.AdmitPaymentWebhook;
 import com.appagendamento.subscriptions.application.BillingRepository;
+import com.appagendamento.subscriptions.application.StartSubscriptionCheckout;
 import com.appagendamento.subscriptions.domain.CheckoutOperation;
 import com.appagendamento.subscriptions.domain.PlanCode;
 import com.appagendamento.support.PostgresTestEnvironment;
@@ -23,6 +31,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 @SpringBootTest(properties = "app.subscriptions.trial-expiry-worker.enabled=false")
 class BillingWebhookIT {
@@ -35,6 +44,10 @@ class BillingWebhookIT {
   @Autowired private BillingRepository billing;
   @Autowired private JdbcTemplate jdbc;
   @Autowired private AdmitPaymentWebhook webhook;
+  @Autowired private StartSubscriptionCheckout startCheckout;
+  @MockitoBean private HostedCheckoutProvider checkoutProvider;
+  @MockitoBean private BillingOfferCatalog offerCatalog;
+  @MockitoBean private AdminAccessPolicy adminAccessPolicy;
 
   @DynamicPropertySource
   static void postgres(DynamicPropertyRegistry registry) {
@@ -72,6 +85,58 @@ class BillingWebhookIT {
     assertThat(historyCount(tenant.tenantId())).isEqualTo(1);
     assertThat(outboxCount(tenant.tenantId())).isEqualTo(1);
     assertThat(paymentAuditCount(tenant.tenantId())).isEqualTo(1);
+  }
+
+  @Test
+  void checkoutRecoveryReturnsPersistedConfirmationWhenInboxEvidenceWasEarly() {
+    Tenant tenant = tenant("billing-early-confirmation-recovery");
+    AuthenticatedAdmin admin = admin(tenant.tenantId());
+    when(adminAccessPolicy.isCurrent(admin)).thenReturn(true);
+    when(checkoutProvider.isConfigured()).thenReturn(true);
+    when(checkoutProvider.providerCode()).thenReturn(PROVIDER);
+    when(checkoutProvider.providerAccountId()).thenReturn(ACCOUNT);
+    when(offerCatalog.findApprovedOffer(PlanCode.MONTHLY))
+        .thenReturn(
+            java.util.Optional.of(new BillingOffer(PlanCode.MONTHLY, 1, "XTS", "terms", "offer")));
+    when(checkoutProvider.create(any())).thenThrow(new IllegalStateException("synthetic timeout"));
+
+    var first =
+        startCheckout.execute(
+            admin, tenant.tenantId(), PlanCode.MONTHLY, 0, "checkout-early-event-key");
+    assertThat(first.state()).isEqualTo("OUTCOME_UNKNOWN");
+    UUID operationId = first.operationId();
+    String reference = "early-confirmation-" + operationId;
+    AuthenticatedPaymentEvent earlyConfirmation =
+        confirmed("early-confirmation-event", reference, 1, 1);
+    assertThat(billing.recordAuthenticatedEvent(earlyConfirmation)).isTrue();
+    assertThat(eventDisposition("early-confirmation-event")).isEqualTo("UNLINKED");
+
+    when(checkoutProvider.findByOperationId(operationId))
+        .thenReturn(
+            java.util.Optional.of(
+                new CheckoutSession(reference, "https://checkout.example.invalid/session")));
+    var recovered =
+        startCheckout.execute(
+            admin, tenant.tenantId(), PlanCode.MONTHLY, 0, "checkout-early-event-key");
+
+    assertThat(recovered.replayed()).isTrue();
+    assertThat(recovered.operationId()).isEqualTo(operationId);
+    assertThat(recovered.state()).isEqualTo("CONFIRMED");
+    assertThat(recovered.redirectUrl()).isNull();
+    assertThat(status(tenant.tenantId())).isEqualTo("ACTIVE:1");
+    assertThat(eventDisposition("early-confirmation-event")).isEqualTo("APPLIED");
+    assertThat(eventOperation("early-confirmation-event")).isEqualTo(operationId);
+    assertThat(historyCount(tenant.tenantId())).isEqualTo(1);
+    assertThat(paymentAuditCount(tenant.tenantId())).isEqualTo(1);
+    assertThat(outboxCount(tenant.tenantId())).isEqualTo(1);
+    var repeated =
+        startCheckout.execute(
+            admin, tenant.tenantId(), PlanCode.MONTHLY, 0, "checkout-early-event-key");
+    assertThat(repeated.state()).isEqualTo("CONFIRMED");
+    assertThat(repeated.redirectUrl()).isNull();
+    assertThat(historyCount(tenant.tenantId())).isEqualTo(1);
+    assertThat(paymentAuditCount(tenant.tenantId())).isEqualTo(1);
+    assertThat(outboxCount(tenant.tenantId())).isEqualTo(1);
   }
 
   @Test
@@ -251,6 +316,37 @@ class BillingWebhookIT {
   private Tenant tenant(String prefix) {
     return createTenant.execute(
         "Billing " + prefix, prefix + "-" + UUID.randomUUID().toString().substring(0, 8), "UTC");
+  }
+
+  private static AuthenticatedAdmin admin(UUID tenantId) {
+    UUID adminId = UUID.randomUUID();
+    String subject = UUID.randomUUID().toString();
+    return new AuthenticatedAdmin() {
+      @Override
+      public UUID adminUserId() {
+        return adminId;
+      }
+
+      @Override
+      public String issuer() {
+        return "https://identity.test/realms/agendamento";
+      }
+
+      @Override
+      public String subject() {
+        return subject;
+      }
+
+      @Override
+      public UUID tenantId() {
+        return tenantId;
+      }
+
+      @Override
+      public String role() {
+        return "TENANT_ADMIN";
+      }
+    };
   }
 
   private static CheckoutOperation operation(UUID tenantId) {

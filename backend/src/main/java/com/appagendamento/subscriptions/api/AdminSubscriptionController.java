@@ -40,27 +40,37 @@ public class AdminSubscriptionController {
   ResponseEntity<CheckoutView> checkout(
       @AuthenticationPrincipal AuthenticatedAdmin admin,
       @org.springframework.web.bind.annotation.RequestHeader("Idempotency-Key") String key,
+      @org.springframework.web.bind.annotation.RequestHeader("X-Expected-Tenant-Context")
+          UUID expectedTenantContextId,
       @org.springframework.web.bind.annotation.RequestBody CheckoutRequest request) {
     CheckoutView view =
-        startCheckout.execute(admin, request.planCode(), request.expectedVersion(), key);
+        startCheckout.execute(
+            admin, expectedTenantContextId, request.planCode(), request.expectedVersion(), key);
     return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(view);
   }
 
   @GetMapping("/api/v1/admin/subscription/payment-attempts")
   ResponseEntity<List<CheckoutAttemptView>> attempts(
-      @AuthenticationPrincipal AuthenticatedAdmin admin) {
+      @AuthenticationPrincipal AuthenticatedAdmin admin,
+      @org.springframework.web.bind.annotation.RequestHeader("X-Expected-Tenant-Context")
+          UUID expectedTenantContextId) {
     return ResponseEntity.ok()
         .cacheControl(CacheControl.noStore())
-        .body(listCheckouts.execute(admin).stream().map(CheckoutAttemptView::from).toList());
+        .body(
+            listCheckouts.execute(admin, expectedTenantContextId).stream()
+                .map(CheckoutAttemptView::from)
+                .toList());
   }
 
   @GetMapping("/api/v1/admin/subscription/payment-attempts/{operationId}")
   ResponseEntity<CheckoutView> attempt(
       @AuthenticationPrincipal AuthenticatedAdmin admin,
+      @org.springframework.web.bind.annotation.RequestHeader("X-Expected-Tenant-Context")
+          UUID expectedTenantContextId,
       @org.springframework.web.bind.annotation.PathVariable UUID operationId) {
     return ResponseEntity.ok()
         .cacheControl(CacheControl.noStore())
-        .body(getCheckout.execute(admin, operationId));
+        .body(getCheckout.execute(admin, expectedTenantContextId, operationId));
   }
 
   record CheckoutRequest(PlanCode planCode, long expectedVersion) {}
@@ -89,6 +99,7 @@ public class AdminSubscriptionController {
         .cacheControl(CacheControl.noStore())
         .body(
             new AdminSubscriptionResponse(
+                overview.tenantContextId(),
                 SubscriptionView.from(overview.subscription()),
                 overview.plans(),
                 overview.checkoutOffers(),
@@ -98,6 +109,7 @@ public class AdminSubscriptionController {
   }
 
   record AdminSubscriptionResponse(
+      UUID tenantContextId,
       SubscriptionView subscription,
       List<SubscriptionPlan> plans,
       List<BillingOffer> checkoutOffers,

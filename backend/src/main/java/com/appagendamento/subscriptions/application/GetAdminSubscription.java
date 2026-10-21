@@ -42,6 +42,7 @@ public class GetAdminSubscription {
     lifecycle.allowsNewPublicAppointments(admin.tenantId());
     Optional<Subscription> subscription = subscriptions.findCurrent(admin.tenantId());
     return new Overview(
+        admin.tenantId(),
         subscription.orElse(null),
         PlanCatalog.plans(),
         checkoutProvider.isConfigured()
@@ -54,6 +55,7 @@ public class GetAdminSubscription {
   }
 
   public record Overview(
+      java.util.UUID tenantContextId,
       Subscription subscription,
       List<SubscriptionPlan> plans,
       List<BillingOffer> checkoutOffers,

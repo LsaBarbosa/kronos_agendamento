@@ -56,8 +56,13 @@ public class StartSubscriptionCheckout {
   }
 
   public CheckoutView execute(
-      AuthenticatedAdmin admin, PlanCode planCode, long expectedVersion, String key) {
+      AuthenticatedAdmin admin,
+      UUID expectedTenantContextId,
+      PlanCode planCode,
+      long expectedVersion,
+      String key) {
     validateAdmin(admin);
+    validateTenantContext(admin, expectedTenantContextId);
     if (planCode == null || expectedVersion < 0) {
       throw new IllegalArgumentException("Comando de checkout inválido");
     }
@@ -71,7 +76,10 @@ public class StartSubscriptionCheckout {
             SCOPE,
             key,
             digest,
-            () -> validateAdmin(admin),
+            () -> {
+              validateAdmin(admin);
+              validateTenantContext(admin, expectedTenantContextId);
+            },
             operationId -> {
               if (!provider.isConfigured()) throw new PaymentIntegrationUnavailableException();
               BillingOffer offer =
@@ -148,7 +156,11 @@ public class StartSubscriptionCheckout {
               session);
           CheckoutOperation current =
               billing.findCheckout(tenantId, operation.operationId()).orElse(operation);
-          return view(current, current.state(), session.redirectUrl(), replayed);
+          return view(
+              current,
+              current.state(),
+              current.state().equals("CHECKOUT_READY") ? session.redirectUrl() : null,
+              replayed);
         } catch (RuntimeException uncertain) {
           billing.markCheckoutUnknown(tenantId, operation.operationId(), claim.get());
           return view(operation, "OUTCOME_UNKNOWN", null, replayed);
@@ -168,7 +180,13 @@ public class StartSubscriptionCheckout {
               operation.providerCode(),
               operation.providerAccountId(),
               recovered.get());
-          return view(operation, "CHECKOUT_READY", recovered.get().redirectUrl(), replayed);
+          CheckoutOperation current =
+              billing.findCheckout(tenantId, operation.operationId()).orElse(operation);
+          return view(
+              current,
+              current.state(),
+              current.state().equals("CHECKOUT_READY") ? recovered.get().redirectUrl() : null,
+              replayed);
         }
       } catch (RuntimeException ignored) {
       }
@@ -194,6 +212,13 @@ public class StartSubscriptionCheckout {
   private void validateAdmin(AuthenticatedAdmin admin) {
     if (admin == null || !"TENANT_ADMIN".equals(admin.role()) || !access.isCurrent(admin)) {
       throw new SubscriptionAccessDeniedException();
+    }
+  }
+
+  private static void validateTenantContext(
+      AuthenticatedAdmin admin, UUID expectedTenantContextId) {
+    if (expectedTenantContextId == null || !admin.tenantId().equals(expectedTenantContextId)) {
+      throw new SubscriptionCheckoutConflictException("TENANT_CONTEXT_CHANGED");
     }
   }
 }

@@ -555,6 +555,7 @@ function AdminApp() {
                     <AdminSubscriptionPanel
                         key={`${session.tenantId}:${session.role}`}
                         enabled
+                        tenantContextId={session.tenantId}
                         onSessionInvalid={handleNoShowPolicySessionInvalid}
                     />
                 )}

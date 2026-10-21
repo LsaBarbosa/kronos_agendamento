@@ -2704,7 +2704,7 @@ try {
       window.__dropClientCancellationResponse = true;
     })()`);
     await clickButtonByText('Confirmar cancelamento', evaluate);
-    await waitForText('Não foi possível confirmar o resultado.', evaluate);
+    await waitForText('Resultado ainda incerto. Recupere esta mesma operação', evaluate);
     await waitUntil(() =>
         evaluate(
             "Boolean([...document.querySelectorAll('button')].find(button => button.innerText === 'Repetir a mesma tentativa' && !button.disabled))",
@@ -2936,7 +2936,52 @@ try {
     console.log('Browser: trial persistido atravessou reload; vencimento foi materializado em SUSPENDED/v2, bloqueou disponibilidade nova e preservou consulta da reserva existente.');
 
     await waitForText('Selecionar plano', evaluate);
+    const checkoutIntentStorageKey = `agd041.checkout-intent.v2:${authenticatedSession.tenantId}`;
     await clickButtonByText('Selecionar plano', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__checkoutPostCount = 0;
+      window.__csrfHeld = false;
+      window.__csrfReleased = false;
+      window.__releaseHeldCsrf = null;
+      window.fetch = async (input, init) => {
+        const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+        if (url.pathname === '/api/v1/admin/subscription/checkout') window.__checkoutPostCount++;
+        if (url.pathname === '/api/v1/csrf' && !window.__csrfHeld) {
+          window.__csrfHeld = true;
+          return await new Promise(resolve => {
+            window.__releaseHeldCsrf = () => {
+              originalFetch(input, init).then(response => {
+                window.__csrfReleased = true;
+                resolve(response);
+              });
+            };
+          });
+        }
+        return originalFetch(input, init);
+      };
+    })()`);
+    const intentBeforeContextChange = await evaluate(`JSON.parse(sessionStorage.getItem(${JSON.stringify(checkoutIntentStorageKey)}))`);
+    await clickButtonByText('Iniciar ou recuperar a mesma operação', evaluate);
+    await waitUntil(async () => await evaluate('window.__csrfHeld === true'));
+    await clickButtonByText('Sair', evaluate);
+    await waitForText('Entrar como administrador', evaluate);
+    await evaluate('window.__releaseHeldCsrf()');
+    await waitUntil(async () => await evaluate('window.__csrfReleased === true'));
+    const checkoutAfterContextChange = await evaluate(`({
+      postCount: window.__checkoutPostCount,
+      intent: JSON.parse(sessionStorage.getItem(${JSON.stringify(checkoutIntentStorageKey)})),
+    })`);
+    if (
+        checkoutAfterContextChange.postCount !== 0 ||
+        checkoutAfterContextChange.intent?.key !== intentBeforeContextChange.key ||
+        JSON.stringify(checkoutAfterContextChange.intent?.body) !== JSON.stringify(intentBeforeContextChange.body)
+    ) {
+        throw new Error(`A troca de contexto durante CSRF enviou checkout ou perdeu a intenção original: ${JSON.stringify(checkoutAfterContextChange)}`);
+    }
+    await submitLogin(credentials.KEYCLOAK_DEMO_USERNAME, credentials.KEYCLOAK_DEMO_PASSWORD, evaluate);
+    await waitForText('Sessão administrativa ativa.', evaluate);
+    await waitForText('Operação preparada: MONTHLY', evaluate);
     const checkoutRetryScript = await command('Page.addScriptToEvaluateOnNewDocument', {
         source: `(() => {
           const originalFetch = window.fetch.bind(window);
@@ -2945,9 +2990,11 @@ try {
             const url = new URL(typeof input === 'string' ? input : input.url, location.href);
             if (url.pathname !== '/api/v1/admin/subscription/checkout') return originalFetch(input, init);
             const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
-            window.__checkoutRequests.push({key:headers.get('Idempotency-Key'), body:init?.body || ''});
+            window.__checkoutRequests.push({key:headers.get('Idempotency-Key'), context:headers.get('X-Expected-Tenant-Context'), body:init?.body || ''});
             const response = await originalFetch(input, init);
-            if (window.__checkoutRequests.length === 1 && response.ok) throw new TypeError('Simulated checkout response lost after commit');
+            if (window.__checkoutRequests.length === 1 && response.ok) {
+              return new Response(JSON.stringify({error:{code:'GATEWAY_TIMEOUT'}}), {status:408, headers:{'Content-Type':'application/json'}});
+            }
             return response;
           };
         })();`,
@@ -2960,9 +3007,10 @@ try {
     const pendingCheckoutIntent = await evaluate(`({
       requests: window.__checkoutRequests,
       intent: document.querySelector('[aria-label="Operação de checkout pendente"]')?.innerText,
-      stored: sessionStorage.getItem('agd041.checkout-intent.v1'),
+      stored: sessionStorage.getItem(${JSON.stringify(checkoutIntentStorageKey)}),
+      discardDisabled: [...document.querySelectorAll('[aria-label="Operação de checkout pendente"] button')].find(button => button.innerText.includes('Descartar'))?.disabled,
     })`);
-    if (pendingCheckoutIntent.requests?.length !== 1 || !pendingCheckoutIntent.intent || !pendingCheckoutIntent.stored) {
+    if (pendingCheckoutIntent.requests?.length !== 1 || !pendingCheckoutIntent.intent || !pendingCheckoutIntent.stored || pendingCheckoutIntent.discardDisabled !== true) {
         throw new Error(`Intenção de checkout não foi preservada após perda de resposta: ${JSON.stringify(pendingCheckoutIntent)}`);
     }
     await clickButtonByText('Iniciar ou recuperar a mesma operação', evaluate);
@@ -2970,11 +3018,13 @@ try {
     const checkoutReplay = await evaluate(`({
       requests: window.__checkoutRequests,
       result: document.querySelector('[aria-label="Resultado do checkout"]')?.innerText,
-      intent: sessionStorage.getItem('agd041.checkout-intent.v1'),
+      intent: sessionStorage.getItem(${JSON.stringify(checkoutIntentStorageKey)}),
     })`);
     if (
         checkoutReplay.requests?.length !== 2 ||
         checkoutReplay.requests[0].key !== checkoutReplay.requests[1].key ||
+        checkoutReplay.requests[0].context !== authenticatedSession.tenantId ||
+        checkoutReplay.requests[1].context !== authenticatedSession.tenantId ||
         checkoutReplay.requests[0].body !== checkoutReplay.requests[1].body ||
         checkoutReplay.intent !== null ||
         !checkoutReplay.result?.includes('CHECKOUT_READY')
@@ -3052,7 +3102,7 @@ try {
     if (checkoutRows !== 1 || paymentHistoryRows !== 1 || paymentAuditRows !== 1 || paymentOutboxRows !== 1 || currentSubscription?.status !== 'ACTIVE' || currentSubscription?.planCode !== 'MONTHLY') {
         throw new Error(`Confirmação de pagamento sintética não foi aplicada uma única vez: ${JSON.stringify({checkoutRows, paymentHistoryRows, paymentAuditRows, paymentOutboxRows, currentSubscription})}`);
     }
-    console.log('Browser E2E: checkout sintético com resposta perdida recuperou a mesma chave/operação após reload; webhook inválido não alterou assinatura/inbox, evento autenticado duplicado/out-of-order manteve estado, histórico, auditoria e outbox únicos. Sem fornecedor ou cobrança real.');
+    console.log('Browser E2E: CSRF pendente durante logout não enviou checkout e preservou a intenção; HTTP 408 substituindo resposta após commit manteve descarte bloqueado e retry idêntico; webhook inválido não alterou assinatura/inbox, evento autenticado duplicado/out-of-order manteve estado, histórico, auditoria e outbox únicos. Sem fornecedor ou cobrança real.');
 
     await command('Network.clearBrowserCookies');
     await navigate('http://localhost:5173/admin', command, evaluate);

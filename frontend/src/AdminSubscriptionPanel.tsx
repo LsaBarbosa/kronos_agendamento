@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { apiBaseUrl } from './config';
 
 type Plan = {
@@ -9,6 +9,7 @@ type Plan = {
 };
 
 type Overview = {
+    tenantContextId: string;
     subscription: {
         subscriptionId: string;
         status: 'TRIALING' | 'SUSPENDED' | 'ACTIVE';
@@ -32,7 +33,9 @@ type Overview = {
 };
 
 type CheckoutIntent = {
+    tenantContextId: string;
     key: string;
+    phase: 'PREPARED' | 'SENDING' | 'UNCERTAIN';
     body: { planCode: Plan['code']; expectedVersion: number };
 };
 
@@ -56,13 +59,40 @@ type CheckoutAttempt = {
     expectedSubscriptionVersion: number;
 };
 
-const intentStorageKey = 'agd041.checkout-intent.v1';
+const intentStorageKey = (tenantContextId: string) =>
+    `agd041.checkout-intent.v2:${tenantContextId}`;
+
+function readIntent(tenantContextId: string): CheckoutIntent | null {
+    try {
+        const raw = sessionStorage.getItem(intentStorageKey(tenantContextId));
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as CheckoutIntent;
+        if (
+            parsed.tenantContextId === tenantContextId &&
+            typeof parsed.key === 'string' &&
+            (parsed.body?.planCode === 'MONTHLY' ||
+                parsed.body?.planCode === 'ANNUAL') &&
+            Number.isSafeInteger(parsed.body?.expectedVersion) &&
+            ['PREPARED', 'SENDING', 'UNCERTAIN'].includes(parsed.phase)
+        ) {
+            return {
+                ...parsed,
+                phase: parsed.phase === 'SENDING' ? 'UNCERTAIN' : parsed.phase,
+            };
+        }
+    } catch {
+        sessionStorage.removeItem(intentStorageKey(tenantContextId));
+    }
+    return null;
+}
 
 export function AdminSubscriptionPanel({
     enabled,
+    tenantContextId,
     onSessionInvalid,
 }: {
     enabled: boolean;
+    tenantContextId: string;
     onSessionInvalid: (status: number) => void;
 }) {
     const [overview, setOverview] = useState<Overview | null>(null);
@@ -70,34 +100,92 @@ export function AdminSubscriptionPanel({
     const [loading, setLoading] = useState(true);
     const [checkoutBusy, setCheckoutBusy] = useState(false);
     const [checkoutMessage, setCheckoutMessage] = useState('');
+    const [checkoutPhase, setCheckoutPhase] = useState<
+        'IDLE' | 'PREPARED' | 'SENDING' | 'UNCERTAIN' | 'KNOWN'
+    >('IDLE');
     const [checkoutView, setCheckoutView] = useState<CheckoutView | null>(null);
     const [checkoutAttempts, setCheckoutAttempts] = useState<CheckoutAttempt[]>(
         [],
     );
-    const [intent, setIntent] = useState<CheckoutIntent | null>(() => {
-        try {
-            const raw = sessionStorage.getItem(intentStorageKey);
-            if (!raw) return null;
-            const parsed = JSON.parse(raw) as CheckoutIntent;
-            if (
-                typeof parsed.key === 'string' &&
-                (parsed.body?.planCode === 'MONTHLY' ||
-                    parsed.body?.planCode === 'ANNUAL') &&
-                Number.isSafeInteger(parsed.body?.expectedVersion)
-            )
-                return parsed;
-        } catch {
-            sessionStorage.removeItem(intentStorageKey);
-        }
-        return null;
-    });
+    const [intent, setIntent] = useState<CheckoutIntent | null>(() =>
+        readIntent(tenantContextId),
+    );
     const generation = useRef(0);
+    const contextEpoch = useRef(0);
+    const contextRef = useRef(tenantContextId);
+    const enabledRef = useRef(enabled);
+    const intentRef = useRef(intent);
+    const checkoutBusyRef = useRef(false);
+
+    function invalidateContextEpoch() {
+        contextEpoch.current++;
+    }
+
+    useLayoutEffect(() => {
+        contextRef.current = tenantContextId;
+        enabledRef.current = enabled;
+        contextEpoch.current++;
+        return () => {
+            invalidateContextEpoch();
+        };
+    }, [enabled, tenantContextId]);
+
+    function updateIntent(
+        next: CheckoutIntent | null,
+        contextId = tenantContextId,
+    ) {
+        intentRef.current = next;
+        setIntent(next);
+        setCheckoutPhase(next?.phase ?? 'IDLE');
+        const key = intentStorageKey(contextId);
+        if (next) sessionStorage.setItem(key, JSON.stringify(next));
+        else sessionStorage.removeItem(key);
+    }
+
+    function isCurrent(contextId: string, epoch: number) {
+        return (
+            enabledRef.current &&
+            contextRef.current === contextId &&
+            contextEpoch.current === epoch
+        );
+    }
+
+    async function serverContextMatches(contextId: string, epoch: number) {
+        let response: Response;
+        try {
+            response = await fetch(apiBaseUrl + '/v1/admin/session', {
+                credentials: 'same-origin',
+                cache: 'no-store',
+            });
+        } catch {
+            return false;
+        }
+        if (!isCurrent(contextId, epoch)) return false;
+        if (response.status === 401 || response.status === 403) {
+            onSessionInvalid(response.status);
+            return false;
+        }
+        if (!response.ok) return false;
+        let currentSession: { authenticated?: boolean; tenantId?: string };
+        try {
+            currentSession = await response.json();
+        } catch {
+            return false;
+        }
+        if (!isCurrent(contextId, epoch)) return false;
+        if (
+            currentSession.authenticated !== true ||
+            currentSession.tenantId !== contextId
+        ) {
+            onSessionInvalid(403);
+            return false;
+        }
+        return true;
+    }
 
     useEffect(() => {
-        const generationRef = generation;
         const requestGeneration = ++generation.current;
         if (!enabled) {
-            sessionStorage.removeItem(intentStorageKey);
             return;
         }
         const controller = new AbortController();
@@ -128,6 +216,8 @@ export function AdminSubscriptionPanel({
                     generation.current !== requestGeneration
                 )
                     return;
+                if (body.tenantContextId !== tenantContextId)
+                    throw new Error('O contexto autenticado foi alterado.');
                 setOverview(body);
                 const attemptsResponse = await fetch(
                     apiBaseUrl + '/v1/admin/subscription/payment-attempts',
@@ -135,6 +225,9 @@ export function AdminSubscriptionPanel({
                         credentials: 'same-origin',
                         cache: 'no-store',
                         signal: controller.signal,
+                        headers: {
+                            'X-Expected-Tenant-Context': tenantContextId,
+                        },
                     },
                 );
                 if (
@@ -184,18 +277,26 @@ export function AdminSubscriptionPanel({
         })();
         return () => {
             controller.abort();
-            if (generationRef.current === requestGeneration)
-                generationRef.current++;
         };
-    }, [enabled, onSessionInvalid]);
+    }, [enabled, onSessionInvalid, tenantContextId]);
 
     async function submitCheckout() {
-        if (!enabled || !overview?.checkoutAvailable || checkoutBusy) return;
-        const activeIntent = intent;
+        if (
+            !enabledRef.current ||
+            !overview?.checkoutAvailable ||
+            checkoutBusyRef.current
+        )
+            return;
+        const activeIntent = intentRef.current;
         if (!activeIntent) {
             setCheckoutMessage('Selecione uma oferta aprovada para continuar.');
             return;
         }
+        if (activeIntent.tenantContextId !== tenantContextId) return;
+        checkoutBusyRef.current = true;
+        const contextId = activeIntent.tenantContextId;
+        const operationEpoch = contextEpoch.current;
+        const beforeSendPhase = activeIntent.phase;
         setCheckoutBusy(true);
         setCheckoutMessage('Verificando a operação financeira…');
         try {
@@ -203,11 +304,25 @@ export function AdminSubscriptionPanel({
                 credentials: 'same-origin',
                 cache: 'no-store',
             });
+            if (!isCurrent(contextId, operationEpoch)) return;
+            if (!(await serverContextMatches(contextId, operationEpoch)))
+                return;
+            if (!isCurrent(contextId, operationEpoch)) return;
             if (!csrfResponse.ok) throw new Error('UNAVAILABLE');
             const csrf = (await csrfResponse.json()) as {
                 headerName: string;
                 token: string;
             };
+            if (!isCurrent(contextId, operationEpoch)) return;
+            if (!(await serverContextMatches(contextId, operationEpoch)))
+                return;
+            if (!isCurrent(contextId, operationEpoch)) return;
+            const sendingIntent: CheckoutIntent = {
+                ...activeIntent,
+                phase: 'SENDING',
+            };
+            updateIntent(sendingIntent, contextId);
+            setCheckoutPhase('SENDING');
             const response = await fetch(
                 apiBaseUrl + '/v1/admin/subscription/checkout',
                 {
@@ -218,30 +333,115 @@ export function AdminSubscriptionPanel({
                         'Content-Type': 'application/json',
                         [csrf.headerName]: csrf.token,
                         'Idempotency-Key': activeIntent.key,
+                        'X-Expected-Tenant-Context': contextId,
                     },
                     body: JSON.stringify(activeIntent.body),
                 },
             );
+            if (!isCurrent(contextId, operationEpoch)) {
+                sessionStorage.setItem(
+                    intentStorageKey(contextId),
+                    JSON.stringify({ ...sendingIntent, phase: 'UNCERTAIN' }),
+                );
+                return;
+            }
             if (response.status === 401 || response.status === 403) {
+                updateIntent(
+                    { ...sendingIntent, phase: 'UNCERTAIN' },
+                    contextId,
+                );
                 onSessionInvalid(response.status);
                 throw new Error('SESSION');
             }
             if (!response.ok) {
-                if (response.status === 409 || response.status >= 500) {
+                const errorCode = await response
+                    .json()
+                    .then((body: { error?: { code?: string } }) =>
+                        typeof body.error?.code === 'string'
+                            ? body.error.code
+                            : undefined,
+                    )
+                    .catch(() => undefined);
+                if (!isCurrent(contextId, operationEpoch)) {
+                    sessionStorage.setItem(
+                        intentStorageKey(contextId),
+                        JSON.stringify({
+                            ...sendingIntent,
+                            phase: 'UNCERTAIN',
+                        }),
+                    );
+                    return;
+                }
+                const definitiveConflictCodes = new Set([
+                    'VERSION_CONFLICT',
+                    'SUBSCRIPTION_ALREADY_ACTIVE',
+                    'IDEMPOTENCY_KEY_REUSED',
+                ]);
+                if (
+                    response.status === 409 &&
+                    errorCode === 'TENANT_CONTEXT_CHANGED'
+                ) {
+                    const safePhase =
+                        beforeSendPhase === 'UNCERTAIN'
+                            ? 'UNCERTAIN'
+                            : 'PREPARED';
+                    updateIntent(
+                        { ...activeIntent, phase: safePhase },
+                        contextId,
+                    );
+                    setCheckoutMessage(
+                        'O contexto autenticado mudou. Nenhum checkout foi iniciado por esta tentativa; retorne ao tenant original para continuar a mesma intenção.',
+                    );
+                    return;
+                }
+                if (
+                    response.status === 408 ||
+                    response.status >= 500 ||
+                    !errorCode ||
+                    (response.status === 409 &&
+                        !definitiveConflictCodes.has(errorCode))
+                ) {
+                    updateIntent(
+                        { ...sendingIntent, phase: 'UNCERTAIN' },
+                        contextId,
+                    );
+                    setCheckoutPhase('UNCERTAIN');
                     setCheckoutMessage(
                         'Resultado ainda incerto. Recupere esta mesma operação; não inicie outra cobrança.',
                     );
                     return;
                 }
-                setIntent(null);
-                sessionStorage.removeItem(intentStorageKey);
+                updateIntent(null, contextId);
+                setCheckoutPhase('KNOWN');
                 setCheckoutMessage(
                     'A solicitação foi rejeitada sem confirmação de pagamento. Revise os dados e tente novamente.',
                 );
                 return;
             }
             const value = (await response.json()) as CheckoutView;
-            if (!enabled) return;
+            if (!isCurrent(contextId, operationEpoch)) {
+                sessionStorage.setItem(
+                    intentStorageKey(contextId),
+                    JSON.stringify({ ...sendingIntent, phase: 'UNCERTAIN' }),
+                );
+                return;
+            }
+            if (
+                !value ||
+                typeof value.operationId !== 'string' ||
+                typeof value.state !== 'string' ||
+                value.planCode !== activeIntent.body.planCode
+            ) {
+                updateIntent(
+                    { ...sendingIntent, phase: 'UNCERTAIN' },
+                    contextId,
+                );
+                setCheckoutPhase('UNCERTAIN');
+                setCheckoutMessage(
+                    'A resposta não permitiu confirmar o resultado. Recupere a mesma operação antes de iniciar outra.',
+                );
+                return;
+            }
             setCheckoutView(value);
             setCheckoutAttempts((current) => [
                 {
@@ -261,8 +461,8 @@ export function AdminSubscriptionPanel({
                     value.state,
                 )
             ) {
-                setIntent(null);
-                sessionStorage.removeItem(intentStorageKey);
+                updateIntent(null, contextId);
+                setCheckoutPhase('KNOWN');
                 setCheckoutMessage(
                     value.state === 'CHECKOUT_READY'
                         ? 'Sessão de checkout hospedado criada. Isso ainda não confirma pagamento.'
@@ -271,47 +471,79 @@ export function AdminSubscriptionPanel({
                           : 'O provedor recusou a operação; nenhuma assinatura foi ativada.',
                 );
             } else {
+                updateIntent(
+                    { ...sendingIntent, phase: 'UNCERTAIN' },
+                    contextId,
+                );
+                setCheckoutPhase('UNCERTAIN');
                 setCheckoutMessage(
                     'Operação ainda em resultado incerto. Preserve a intenção e tente recuperar novamente.',
                 );
             }
         } catch (cause: unknown) {
             if (cause instanceof Error && cause.message === 'SESSION') return;
-            setCheckoutMessage(
-                'Não foi possível confirmar o resultado. Recupere a mesma operação antes de iniciar outra.',
-            );
+            if (isCurrent(contextId, operationEpoch)) {
+                const currentIntent = intentRef.current;
+                if (currentIntent?.phase === 'SENDING') {
+                    updateIntent(
+                        { ...currentIntent, phase: 'UNCERTAIN' },
+                        contextId,
+                    );
+                    setCheckoutPhase('UNCERTAIN');
+                } else if (beforeSendPhase === 'PREPARED') {
+                    updateIntent(
+                        { ...activeIntent, phase: 'PREPARED' },
+                        contextId,
+                    );
+                }
+                setCheckoutMessage(
+                    currentIntent?.phase === 'SENDING' ||
+                        beforeSendPhase === 'UNCERTAIN'
+                        ? 'Não foi possível confirmar o resultado. Recupere a mesma operação antes de iniciar outra cobrança.'
+                        : 'Não foi possível preparar o envio. A seleção continua pronta e nenhuma solicitação financeira foi enviada.',
+                );
+            }
         } finally {
-            setCheckoutBusy(false);
+            checkoutBusyRef.current = false;
+            if (isCurrent(contextId, operationEpoch)) setCheckoutBusy(false);
         }
     }
 
     function choosePlan(planCode: Plan['code']) {
-        if (checkoutBusy || intent) return;
+        if (checkoutBusyRef.current || intentRef.current) return;
         const next: CheckoutIntent = {
+            tenantContextId,
             key: crypto.randomUUID(),
+            phase: 'PREPARED',
             body: {
                 planCode,
                 expectedVersion: overview?.subscription?.version ?? 0,
             },
         };
-        setIntent(next);
-        sessionStorage.setItem(intentStorageKey, JSON.stringify(next));
+        updateIntent(next);
         setCheckoutMessage(
             'Oferta selecionada; nenhum pagamento foi iniciado.',
         );
+        setCheckoutPhase('PREPARED');
     }
 
     function clearKnownIntent() {
-        if (checkoutBusy) return;
-        setIntent(null);
-        sessionStorage.removeItem(intentStorageKey);
+        const current = intentRef.current;
+        if (
+            checkoutBusyRef.current ||
+            (current && current.phase !== 'PREPARED')
+        )
+            return;
+        updateIntent(null);
         setCheckoutView(null);
         setCheckoutMessage('');
     }
 
     async function recoverCheckout(operationId: string) {
-        if (!enabled || checkoutBusy) return;
-        const contextGeneration = generation.current;
+        if (!enabledRef.current || checkoutBusyRef.current) return;
+        const contextGeneration = contextEpoch.current;
+        const contextId = tenantContextId;
+        checkoutBusyRef.current = true;
         setCheckoutBusy(true);
         setCheckoutMessage('Consultando a operação financeira existente…');
         try {
@@ -319,16 +551,20 @@ export function AdminSubscriptionPanel({
                 apiBaseUrl +
                     '/v1/admin/subscription/payment-attempts/' +
                     encodeURIComponent(operationId),
-                { credentials: 'same-origin', cache: 'no-store' },
+                {
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    headers: { 'X-Expected-Tenant-Context': contextId },
+                },
             );
-            if (!enabled || generation.current !== contextGeneration) return;
+            if (!isCurrent(contextId, contextGeneration)) return;
             if (response.status === 401 || response.status === 403) {
                 onSessionInvalid(response.status);
                 return;
             }
             if (!response.ok) throw new Error('RECOVERY_UNAVAILABLE');
             const value = (await response.json()) as CheckoutView;
-            if (!enabled || generation.current !== contextGeneration) return;
+            if (!isCurrent(contextId, contextGeneration)) return;
             setCheckoutView(value);
             setCheckoutAttempts((current) =>
                 current.map((attempt) =>
@@ -343,13 +579,13 @@ export function AdminSubscriptionPanel({
                     : 'Estado atual consultado; nenhuma cobrança foi iniciada pela consulta.',
             );
         } catch {
-            if (enabled && generation.current === contextGeneration)
+            if (isCurrent(contextId, contextGeneration))
                 setCheckoutMessage(
                     'Não foi possível consultar a operação. Tente recuperar a mesma operação novamente.',
                 );
         } finally {
-            if (enabled && generation.current === contextGeneration)
-                setCheckoutBusy(false);
+            checkoutBusyRef.current = false;
+            if (isCurrent(contextId, contextGeneration)) setCheckoutBusy(false);
         }
     }
 
@@ -472,8 +708,9 @@ export function AdminSubscriptionPanel({
             {intent && (
                 <section aria-label="Operação de checkout pendente">
                     <p>
-                        Operação preparada: {intent.body.planCode}. A chave da
-                        intenção será preservada até resultado conhecido.
+                        Operação {checkoutPhase.toLowerCase()}:{' '}
+                        {intent.body.planCode}. O tenant, corpo e chave da
+                        intenção serão preservados até resultado conhecido.
                     </p>
                     <button
                         type="button"
@@ -487,7 +724,7 @@ export function AdminSubscriptionPanel({
                     <button
                         type="button"
                         onClick={clearKnownIntent}
-                        disabled={checkoutBusy}
+                        disabled={checkoutBusy || intent.phase !== 'PREPARED'}
                     >
                         Descartar seleção ainda não enviada
                     </button>

@@ -30,3 +30,10 @@ Manter a integração neutra e avaliar Mercado Pago Checkout Pro para operação
 - O endpoint de checkout fica indisponível sem oferta e provider reais; o webhook não admite eventos de produção sem verificador específico configurado.
 - Testes com adapters não comprovam sandbox, assinatura de provider, pagamento, liquidação ou entrega.
 - Retenção de eventos/receipts não é definida por esta ADR; não há expurgo automático.
+
+## Hardening do PR #23 — contexto e reconciliação
+
+- Cada intenção de checkout do frontend é namespaceada por `tenantContextId` retornado pela consulta autenticada, e o envelope persistido repete esse vínculo. A UI verifica o contexto servidor antes do POST; o backend exige `X-Expected-Tenant-Context` e compara-o à associação OIDC atual antes de iniciar/reconciliar/listar. O cabeçalho é somente precondição, nunca autoridade. Troca/logout durante awaits invalida a resposta; um tenant distinto não pode executar a intenção antiga.
+- Uma intenção passa por `PREPARED`, `SENDING`, `UNCERTAIN` e resultado conhecido. Depois do primeiro envio, 408, rede, 5xx, resposta inválida e conflitos não reconhecidos preservam body/chave/contexto e bloqueiam descarte/alteração. Somente rejeições definitivas com códigos contratuais específicos encerram a intenção. Não se repete chamada externa ambígua; retry usa identidade lógica existente.
+- Depois de `reconcileAcceptedCheckout`, o comando relê a operação e responde com o estado persistido. Só `CHECKOUT_READY` pode expor a URL; evidência antecipada já aplicada retorna `CONFIRMED` sem link, sem alterar o receipt histórico nem fazer nova chamada para fabricar resposta positiva.
+- V34 corrige `ck_subscription_state` com a expressão completa `IS TRUE`. Um preflight somente leitura falha a migração se existir estado legado inválido; nenhum registro é reparado ou preenchido automaticamente. V1–V33 são imutáveis.

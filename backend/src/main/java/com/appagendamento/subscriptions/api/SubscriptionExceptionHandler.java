@@ -1,6 +1,7 @@
 package com.appagendamento.subscriptions.api;
 
 import com.appagendamento.audit.api.AuditCorrelationId;
+import com.appagendamento.idempotency.application.IdempotencyKeyReusedException;
 import com.appagendamento.platform.api.ApiErrorResponse;
 import com.appagendamento.subscriptions.application.InvalidPaymentWebhookException;
 import com.appagendamento.subscriptions.application.PaymentWebhookTooLargeException;
@@ -33,6 +34,11 @@ public class SubscriptionExceptionHandler {
   ResponseEntity<ApiErrorResponse> checkoutConflict(
       SubscriptionCheckoutConflictException exception) {
     return error(HttpStatus.CONFLICT, exception.getMessage());
+  }
+
+  @ExceptionHandler(IdempotencyKeyReusedException.class)
+  ResponseEntity<ApiErrorResponse> idempotencyConflict(IdempotencyKeyReusedException exception) {
+    return error(HttpStatus.CONFLICT, "IDEMPOTENCY_KEY_REUSED");
   }
 
   @ExceptionHandler(InvalidPaymentWebhookException.class)

@@ -6,7 +6,7 @@
 - Implementar a fundação persistida de checkout e admissão autenticada de fatos financeiros sem expor cartão, confiar no navegador ou habilitar um fornecedor/preço não aprovado.
 - Base: merge de AGD-040 em `d5bac636310780b699a2c471acbb0c3d50a2a580`; schema anterior V1–V31.
 
-**Atualização do schema:** V32 implementa checkout/inbox; V33 acrescenta o grant mínimo requerido pela ativação financeira de uma assinatura trial existente.
+**Atualização do schema:** V32 implementa checkout/inbox; V33 acrescenta o grant mínimo requerido pela ativação financeira de uma assinatura trial existente; V34 exige estado de assinatura válido com expressão `IS TRUE` e falha fechada após preflight somente leitura.
 
 ## Escopo
 
@@ -48,14 +48,16 @@
 
 - Manter `GET /api/v1/admin/subscription`; acrescentar `POST /api/v1/admin/subscription/checkout`, `GET /api/v1/admin/subscription/checkout/{operationId}`, `GET /api/v1/admin/subscription/payment-attempts` se já coberto pelo contrato, e `POST /api/v1/webhooks/payments/{provider}` somente atrás de autenticador configurado.
 - Checkout usa sessão OIDC, associação atual, CSRF, `Idempotency-Key` e versão esperada. Respostas privadas são `no-store`; valores do pedido são exclusivamente do servidor.
+- A intenção do navegador é namespaceada pelo UUID de contexto retornado pelo servidor e validada como precondição em checkout/recovery; o servidor compara com a associação autenticada, sem aceitar o cabeçalho como autoridade. Fases são PREPARED/SENDING/UNCERTAIN/KNOWN; só seleção preparada ou rejeição estruturada definitiva pode ser descartada.
 - Webhook limita corpo antes da leitura, autentica segundo protocolo real, persiste antes de confirmar sucesso e não revela correlação/tenant. Sem provider configurado, retorna indisponibilidade sem aceitar ou persistir payload.
 - React nunca recebe dados de cartão. Em timeout preserva intenção e permite consultar/reconciliar a mesma operação; logout/troca invalida respostas antigas. Retorno do provider é apenas navegação, não confirmação.
 
 ## Migração e compatibilidade
 
-- V32 ampliou `subscription_history` para o evento financeiro e criou operações de checkout/inbox; V33 concede UPDATE somente em `subscription.plan_code`/`paid_through_at` ao runtime para confirmar uma assinatura trial. V1–V32 permanecem imutáveis.
+- V32 ampliou `subscription_history` para o evento financeiro e criou operações de checkout/inbox; V33 concede UPDATE somente em `subscription.plan_code`/`paid_through_at` ao runtime; V34 substitui a constraint de estado com preflight que não altera dados. V1–V33 permanecem imutáveis.
+- Preflight operacional somente leitura antes do upgrade: consultar `subscription` com a expressão de estado de V32 encapsulada em `IS NOT TRUE`; qualquer linha retornada bloqueia a migração e requer investigação, sem reparo automático.
 - Constraints/FKs incluem tenant e impedem referência cruzada. Operação e inbox têm grants runtime de SELECT/INSERT/UPDATE necessários; histórico mantém SELECT/INSERT sem UPDATE/DELETE/TRUNCATE.
-- Cobrir instalação limpa, upgrade V31→nova, Flyway validate/rerun, unicidade/dedupe, CAS e rollback com PostgreSQL real.
+- Cobrir instalação limpa, upgrade V33→V34, Flyway validate/rerun, unicidade/dedupe, CAS e rollback com PostgreSQL real.
 
 ## Estratégia de testes/evidências
 
@@ -77,6 +79,8 @@
 - [x] Núcleo checkout/webhook, adapters de produção fail-closed, painel de recuperação e fixtures restritas ao E2E implementados; sem oferta/provider real, a produção não inicia checkout nem admite evento.
 - [x] V32 aplicada em instalação limpa e upgrade; `TenantPersistenceIT` (30) e `BillingWebhookIT` (6) passaram em PostgreSQL 16.13/Testcontainers, incluindo concorrência de checkouts; Flyway validate/rerun e grants verificados.
 - [x] V33 validada em instalação limpa e upgrade V32→V33; `TenantPersistenceIT` (31) e `BillingWebhookIT` (7) passaram localmente, incluindo confirmação de assinatura TRIALING sob usuário runtime e grants por coluna, Flyway validate/rerun.
+- [x] V34, intenção vinculada ao contexto e reconciliação do estado pós-inbox implementados; validação local registrada em `docs/development/VALIDATION.md`; CI desta rodada depende da publicação e execução no SHA final.
+- [x] Browser E2E mantém a intenção preparada durante logout enquanto a busca CSRF fica pendente; confirma zero POST e body/chave preservados após autenticação. A resposta do primeiro POST é substituída por HTTP 408 após commit, e retry usa o mesmo contexto/chave/body.
 - [x] A primeira execução App CI push no SHA `798570b8a88718d4dbd38e8ec8e2cded174f6ae1` encontrou falha de compilação exclusiva da fixture E2E (`IOException` não lançada). Catch corrigido e compilação Docker `INCLUDE_E2E_FIXTURES=true` passou; aguardando novo CI no SHA corrigido.
 - [x] App CI no SHA `c6e029525e92e2e6ae0160fee6e0e97899aaa134` revelou que o GET pós-reload reconciliava estado, mas descartava o URL hospedado retornado pelo provider. `GetAdminCheckoutOperation` agora inclui o URL recuperado somente para operação autorizada e `CHECKOUT_READY`; testes backend dirigidos passaram. Aguardar E2E no próximo head.
 - [x] O App CI PR do mesmo SHA também encontrou corrida no próprio roteiro: aguardava somente o cabeçalho da lista antes de clicar no botão da operação. O E2E agora aguarda o botão exato aparecer; a espera é por estado do DOM, sem atraso arbitrário.

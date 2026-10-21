@@ -26,8 +26,9 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [subscription, plans, checkoutOffers, checkoutAvailable, trialEligibilityPending, commercialEligibility]
+                required: [tenantContextId, subscription, plans, checkoutOffers, checkoutAvailable, trialEligibilityPending, commercialEligibility]
                 properties:
+                  tenantContextId: { type: string, format: uuid, description: Contexto retornado pelo servidor; é apenas precondição e nunca autoridade. }
                   subscription:
                     oneOf:
                       - $ref: '#/components/schemas/Subscription'
@@ -52,7 +53,10 @@ paths:
       description: >-
         O servidor resolve preço, moeda, versão de oferta e termos. O corpo não
         aceita valores financeiros nem dados de cartão. A mesma chave/body recupera
-        a operação; resultado incerto não autoriza uma nova cobrança lógica.
+        a operação; resultado incerto não autoriza uma nova cobrança lógica. O
+        cabeçalho X-Expected-Tenant-Context vincula a intenção ao contexto observado;
+        o servidor compara-o com a sessão autenticada antes de executar. Ele não
+        concede nem seleciona tenant.
       security:
         - adminSession: []
       parameters:
@@ -60,6 +64,11 @@ paths:
           name: Idempotency-Key
           required: true
           schema: { type: string, minLength: 1, maxLength: 128 }
+        - in: header
+          name: X-Expected-Tenant-Context
+          required: true
+          description: UUID devolvido pelo endpoint autenticado; precondição contra troca de contexto, não autoridade.
+          schema: { type: string, format: uuid }
       requestBody:
         required: true
         content:
@@ -81,7 +90,8 @@ paths:
               schema: { $ref: '#/components/schemas/CheckoutOperation' }
         '401': { description: Sessão ausente/expirada }
         '403': { description: Associação inválida ou revogada }
-        '409': { description: Versão incompatível, checkout concorrente ou chave reutilizada com conteúdo divergente }
+        '409': { description: Versão incompatível, checkout concorrente, chave divergente ou contexto de sessão alterado; códigos distinguem rejeições definitivas }
+        '408': { description: Resultado de transporte incerto; manter contexto, corpo e chave e recuperar a mesma operação }
         '503': { description: Oferta, checkout hospedado ou integração não configurados }
   /api/v1/admin/subscription/payment-attempts:
     get:
@@ -89,6 +99,12 @@ paths:
       summary: Listar operações de checkout minimizadas do tenant autenticado
       security:
         - adminSession: []
+      parameters:
+        - in: header
+          name: X-Expected-Tenant-Context
+          required: true
+          description: Precondição comparada à sessão autenticada; não seleciona nem autoriza tenant.
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: Operações sem dados de cartão nem payload bruto do provedor
@@ -108,6 +124,11 @@ paths:
       security:
         - adminSession: []
       parameters:
+        - in: header
+          name: X-Expected-Tenant-Context
+          required: true
+          description: Precondição comparada à sessão autenticada; não seleciona nem autoriza tenant.
+          schema: { type: string, format: uuid }
         - in: path
           name: operationId
           required: true
