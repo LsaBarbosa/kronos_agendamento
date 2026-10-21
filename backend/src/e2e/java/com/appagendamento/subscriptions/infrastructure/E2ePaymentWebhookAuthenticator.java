@@ -23,7 +23,7 @@ public class E2ePaymentWebhookAuthenticator implements PaymentWebhookAuthenticat
   private final byte[] secret;
 
   public E2ePaymentWebhookAuthenticator(
-      ObjectMapper mapper, @Value("${app.billing.e2e-webhook-secret:}") String secret) {
+      ObjectMapper mapper, @Value("${APP_BILLING_E2E_WEBHOOK_SECRET:}") String secret) {
     this.mapper = mapper;
     this.secret = secret.getBytes(StandardCharsets.UTF_8);
   }
