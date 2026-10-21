@@ -2704,7 +2704,7 @@ try {
       window.__dropClientCancellationResponse = true;
     })()`);
     await clickButtonByText('Confirmar cancelamento', evaluate);
-    await waitForText('Resultado ainda incerto. Recupere esta mesma operação', evaluate);
+    await waitForText('Não foi possível confirmar o resultado.', evaluate);
     await waitUntil(() =>
         evaluate(
             "Boolean([...document.querySelectorAll('button')].find(button => button.innerText === 'Repetir a mesma tentativa' && !button.disabled))",
