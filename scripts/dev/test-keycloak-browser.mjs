@@ -1773,6 +1773,88 @@ try {
     }
     console.log(`Browser: falta consultada e corrigida com motivo, retry idempotente, história e reload (cliente ${noShowClientId}).`);
 
+    const reconciliationClientId = randomUUID();
+    const reconciliationAppointmentId = randomUUID();
+    const reconciliationInitialHistoryId = randomUUID();
+    const reconciliationNoShowHistoryId = randomUUID();
+    const reconciliationClientName = `Cliente reconciliação AGD033 ${Date.now()}`;
+    const reconciliationPhone = `+5511999${String(Date.now()).slice(-7)}`;
+    queryPostgres(
+        `INSERT INTO agendamento.client (client_id, tenant_id, display_name, normalized_phone) VALUES ('${reconciliationClientId}', '${credentials.DEMO_TENANT_ID}', '${reconciliationClientName}', '${reconciliationPhone}');
+         WITH moment AS (SELECT clock_timestamp() AS now), service AS (SELECT duration_minutes, buffer_after_minutes, name FROM agendamento.service WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND service_id = '${publicService.serviceId}'::uuid)
+         INSERT INTO agendamento.appointment (appointment_id, tenant_id, client_id, service_id, starts_at, service_ends_at, occupied_until, time_zone, client_name_snapshot, service_name_snapshot, service_duration_minutes, service_buffer_after_minutes, status, created_at, version)
+         SELECT '${reconciliationAppointmentId}', '${credentials.DEMO_TENANT_ID}', '${reconciliationClientId}', '${publicService.serviceId}', moment.now - interval '2 days', moment.now - interval '2 days' + make_interval(mins => service.duration_minutes), moment.now - interval '2 days' + make_interval(mins => service.duration_minutes + service.buffer_after_minutes), '${publication.timeZone}', '${reconciliationClientName}', service.name, service.duration_minutes, service.buffer_after_minutes, 'NO_SHOW', moment.now - interval '2 days', 2 FROM moment CROSS JOIN service;
+         INSERT INTO agendamento.appointment_history (history_id, tenant_id, appointment_id, from_status, to_status, actor_type, actor_ref, reason_code, occurred_at) VALUES ('${reconciliationInitialHistoryId}', '${credentials.DEMO_TENANT_ID}', '${reconciliationAppointmentId}', NULL, 'CONFIRMED', 'PUBLIC', 'PUBLIC_BOOKING', 'APPOINTMENT_CREATED', clock_timestamp() - interval '2 days');
+         INSERT INTO agendamento.appointment_history (history_id, tenant_id, appointment_id, from_status, to_status, actor_type, actor_ref, reason_code, occurred_at, version_before, version_after) VALUES ('${reconciliationNoShowHistoryId}', '${credentials.DEMO_TENANT_ID}', '${reconciliationAppointmentId}', 'CONFIRMED', 'NO_SHOW', 'ADMIN', 'TENANT_ADMIN', 'APPOINTMENT_NO_SHOW', clock_timestamp() - interval '1 day', 1, 2);
+         DELETE FROM agendamento.client_no_show_policy WHERE tenant_id = '${credentials.DEMO_TENANT_ID}';`,
+        appEnvironment,
+    );
+    const restoreNoShowPolicy = await evaluate(`(async () => {
+      const [policyResponse, csrfResponse] = await Promise.all([
+        fetch('/api/v1/admin/no-show-policy', {credentials:'same-origin', cache:'no-store'}),
+        fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'})
+      ]);
+      const [policy, csrf] = await Promise.all([policyResponse.json(), csrfResponse.json()]);
+      const response = await fetch('/api/v1/admin/no-show-policy', {
+        method:'PUT', credentials:'same-origin',
+        headers:{'Content-Type':'application/json', [csrf.headerName]:csrf.token, 'Idempotency-Key':crypto.randomUUID()},
+        body:JSON.stringify({expectedVersion:policy.version, threshold:1})
+      });
+      return {status:response.status, body:response.ok ? await response.json() : await response.text()};
+    })()`);
+    if (restoreNoShowPolicy.status !== 200 || restoreNoShowPolicy.body.version !== 1) {
+        throw new Error(`Não foi possível restaurar política para prova explícita de reconciliação: ${JSON.stringify(restoreNoShowPolicy)}`);
+    }
+    const restrictionBeforeExplicitReconciliation = queryPostgres(
+        `SELECT count(*) FROM agendamento.client_booking_restriction WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${reconciliationClientId}'`,
+        appEnvironment,
+    );
+    if (restrictionBeforeExplicitReconciliation !== '0') {
+        throw new Error('Salvar a política executou uma reconciliação implícita.');
+    }
+    await setFieldById('no-show-client-search', reconciliationClientName, evaluate);
+    await clickButtonByText('Buscar', evaluate);
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === ${JSON.stringify(reconciliationClientName)})`));
+    await clickButtonByText(reconciliationClientName, evaluate);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${reconciliationClientId}' && [...document.querySelectorAll('button')].some(button => button.innerText === 'Reavaliar política para este cliente'))`));
+    const unreconciledFacts = await evaluate(`(() => ({text:document.querySelector('[data-testid="client-no-show-facts"]')?.innerText ?? '', active:Boolean(document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]'))}))()`);
+    if (!unreconciledFacts.text.includes('Faltas que contam: 1') || unreconciledFacts.active) {
+        throw new Error(`A política atualizou o cliente sem reconciliação explícita: ${JSON.stringify(unreconciledFacts)}`);
+    }
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__restrictionReconciliationAttempts = [];
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const url = String(args[0]);
+        if (url.endsWith('/restrictions/reconcile') && args[1]?.method === 'POST') {
+          const request = {url, body:args[1].body, key:args[1].headers['Idempotency-Key']};
+          if (response.ok && window.__restrictionReconciliationAttempts.length === 0) {
+            window.__restrictionReconciliationAttempts.push(request);
+            throw new TypeError('Simulated lost reconciliation response after commit');
+          }
+          window.__restrictionReconciliationAttempts.push({...request, status:response.status, replayed:response.headers.get('Idempotency-Replayed'), receipt:response.ok ? await response.clone().json() : null});
+          window.fetch = originalFetch;
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Reavaliar política para este cliente', evaluate);
+    await waitForText('Resultado incerto. Recupere a mesma reconciliação sem alterar cliente ou versão da política.', evaluate);
+    await clickButtonByText('Recuperar mesma reconciliação', evaluate);
+    await waitForText('ACTIVATED', evaluate);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]') && document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${reconciliationClientId}')`));
+    const reconciliationAttempts = await evaluate('window.__restrictionReconciliationAttempts');
+    if (reconciliationAttempts.length !== 2 || reconciliationAttempts[0].url !== reconciliationAttempts[1].url || reconciliationAttempts[0].body !== reconciliationAttempts[1].body || reconciliationAttempts[0].key !== reconciliationAttempts[1].key || reconciliationAttempts[1].replayed !== 'true' || reconciliationAttempts[1].receipt?.decision !== 'ACTIVATED') {
+        throw new Error(`Retry da reconciliação alterou a intenção ou não recuperou o receipt: ${JSON.stringify(reconciliationAttempts)}`);
+    }
+    const reconciliationEffects = Number(queryPostgres(
+        `SELECT CASE WHEN (SELECT status = 'ACTIVE' AND version = 1 AND source_history_id = '${reconciliationNoShowHistoryId}' FROM agendamento.client_booking_restriction WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${reconciliationClientId}') AND (SELECT count(*) = 1 FROM agendamento.client_booking_restriction_history WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND event_type = 'RECONCILED' AND actor_type = 'ADMIN' AND restriction_id = (SELECT restriction_id FROM agendamento.client_booking_restriction WHERE client_id = '${reconciliationClientId}')) AND (SELECT count(*) = 1 FROM agendamento.audit_event WHERE action = 'CLIENT_SELF_BOOKING_RECONCILED' AND target_id = '${reconciliationClientId}') AND (SELECT count(*) = 1 FROM agendamento.outbox_event WHERE event_type = 'ClientSelfBookingBlocked' AND aggregate_id = (SELECT restriction_id FROM agendamento.client_booking_restriction WHERE client_id = '${reconciliationClientId}')) AND (SELECT count(*) = 1 FROM agendamento.idempotency_record WHERE command_scope = 'clients.booking-restriction.reconcile.v1' AND state = 'COMPLETED' AND operation_id = '${reconciliationAttempts[1].receipt.operationId}') THEN 1 ELSE 0 END`,
+        appEnvironment,
+    ));
+    if (reconciliationEffects !== 1) throw new Error('Retry da reconciliação duplicou ou omitiu efeitos transacionais.');
+    console.log('Browser: redução retroativa não executou no PUT; reconciliação explícita ativou uma restrição, e retry após resposta perdida preservou cliente/body/chave e efeitos únicos.');
+
     const cancelRetryAppointmentId = queryPostgres(
         `SELECT a.appointment_id FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.client_name_snapshot = 'Encaixe administrativo E2E' AND a.status = 'CONFIRMED'`,
         appEnvironment,

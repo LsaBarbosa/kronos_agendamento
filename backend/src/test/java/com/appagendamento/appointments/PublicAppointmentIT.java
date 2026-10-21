@@ -994,6 +994,396 @@ class PublicAppointmentIT {
   }
 
   @Test
+  void loweringThresholdRequiresExplicitReconciliationAndSameCauseIsNotReactivatedAfterLift()
+      throws Exception {
+    UUID clientId = seedNoShowClient("Explicit reconciliation");
+    Instant asOf = Instant.now().plusSeconds(3600);
+    org.mockito.Mockito.when(clock.instant()).thenReturn(asOf);
+    List<NoShowFactRef> causes = seedNoShowFacts(clientId, asOf.minusSeconds(60), 1);
+    replaceClientNoShowPolicy.execute(actor, "reconcile-policy-create-" + UUID.randomUUID(), 0, 3);
+    replaceClientNoShowPolicy.execute(actor, "reconcile-policy-lower-" + UUID.randomUUID(), 1, 1);
+
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND client_id = ?",
+                Integer.class,
+                tenantId,
+                clientId))
+        .isZero();
+    String key = "restriction-reconcile-" + UUID.randomUUID();
+    String body = "{\"expectedPolicyVersion\":2}";
+    var barrier = new CyclicBarrier(2);
+    var executor = Executors.newFixedThreadPool(2);
+    MvcResult first;
+    MvcResult second;
+    try {
+      Future<MvcResult> firstRequest =
+          executor.submit(() -> concurrentReconcile(barrier, clientId, key, body));
+      Future<MvcResult> secondRequest =
+          executor.submit(() -> concurrentReconcile(barrier, clientId, key, body));
+      first = firstRequest.get(20, TimeUnit.SECONDS);
+      second = secondRequest.get(20, TimeUnit.SECONDS);
+    } finally {
+      executor.shutdownNow();
+    }
+    assertThat(first.getResponse().getStatus()).isEqualTo(200);
+    assertThat(second.getResponse().getStatus()).isEqualTo(200);
+    assertThat(first.getResponse().getContentAsString())
+        .isEqualTo(second.getResponse().getContentAsString());
+    assertThat(
+            List.of(
+                first.getResponse().getHeader("Idempotency-Replayed"),
+                second.getResponse().getHeader("Idempotency-Replayed")))
+        .containsExactlyInAnyOrder("false", "true");
+    MvcResult initial =
+        "false".equals(first.getResponse().getHeader("Idempotency-Replayed")) ? first : second;
+    org.assertj.core.api.Assertions.assertThat(
+            objectMapper
+                .readTree(initial.getResponse().getContentAsString())
+                .get("decision")
+                .asText())
+        .isEqualTo("ACTIVATED");
+    org.assertj.core.api.Assertions.assertThat(
+            objectMapper.readTree(initial.getResponse().getContentAsString()).get("count").asInt())
+        .isEqualTo(1);
+    org.assertj.core.api.Assertions.assertThat(
+            objectMapper
+                .readTree(initial.getResponse().getContentAsString())
+                .get("threshold")
+                .asInt())
+        .isEqualTo(1);
+    org.assertj.core.api.Assertions.assertThat(
+            objectMapper
+                .readTree(initial.getResponse().getContentAsString())
+                .get("policyVersion")
+                .asInt())
+        .isEqualTo(2);
+    org.assertj.core.api.Assertions.assertThat(
+            objectMapper
+                .readTree(initial.getResponse().getContentAsString())
+                .get("restrictionVersion")
+                .asInt())
+        .isEqualTo(1);
+    UUID restrictionId =
+        UUID.fromString(
+            objectMapper
+                .readTree(initial.getResponse().getContentAsString())
+                .get("restrictionId")
+                .asText());
+    assertThat(initial.getResponse().getHeader("Idempotency-Replayed")).isEqualTo("false");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT source_history_id FROM agendamento.client_booking_restriction WHERE restriction_id = ?",
+                UUID.class,
+                restrictionId))
+        .isIn(causes.stream().map(NoShowFactRef::historyId).toList());
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT event_type || ':' || actor_type || ':' || policy_version || ':' || count_at_decision "
+                    + "FROM agendamento.client_booking_restriction_history WHERE restriction_id = ?",
+                String.class,
+                restrictionId))
+        .isEqualTo("RECONCILED:ADMIN:2:1");
+    assertThat(countByAction("CLIENT_SELF_BOOKING_RECONCILED")).isEqualTo(1);
+    assertThat(countByEvent("ClientSelfBookingBlocked")).isEqualTo(1);
+
+    reconcile(clientId, key, body)
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.restrictionId").value(restrictionId.toString()));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.client_booking_restriction_history WHERE restriction_id = ?",
+                Integer.class,
+                restrictionId))
+        .isEqualTo(1);
+    assertThat(countByAction("CLIENT_SELF_BOOKING_RECONCILED")).isEqualTo(1);
+    assertThat(countByEvent("ClientSelfBookingBlocked")).isEqualTo(1);
+
+    mvc.perform(
+            post(
+                    "/api/v1/admin/clients/{id}/restrictions/{restrictionId}/lift",
+                    clientId,
+                    restrictionId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "reconcile-lift-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1,\"reason\":\"Revisão explícita\"}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("LIFTED"));
+
+    reconcile(clientId, "reconcile-same-cause-" + UUID.randomUUID(), body)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.decision").value("NO_UNUSED_CAUSAL_FACT"));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status FROM agendamento.client_booking_restriction WHERE restriction_id = ?",
+                String.class,
+                restrictionId))
+        .isEqualTo("LIFTED");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND client_id = ? AND status = 'ACTIVE'",
+                Integer.class,
+                tenantId,
+                clientId))
+        .isZero();
+
+    NoShowFactRef newCause = seedNoShowFacts(clientId, asOf.plusSeconds(1), 1).getFirst();
+    noShowRestrictionActivation.evaluateAfterNoShow(
+        tenantId, clientId, newCause.appointmentId(), asOf.plusSeconds(2));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND client_id = ? AND status = 'ACTIVE'",
+                Integer.class,
+                tenantId,
+                clientId))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void correctionAndWindowAgingReduceCountWithoutLiftingActiveRestriction() throws Exception {
+    UUID clientId = seedNoShowClient("Restriction persists after count change");
+    Instant asOf = Instant.now().plusSeconds(3600);
+    org.mockito.Mockito.when(clock.instant()).thenReturn(asOf);
+    List<NoShowFactRef> facts = seedNoShowFacts(clientId, asOf.minusSeconds(60), 2);
+    replaceClientNoShowPolicy.execute(
+        actor, "persistent-restriction-policy-" + UUID.randomUUID(), 0, 2);
+    noShowRestrictionActivation.evaluateAfterNoShow(
+        tenantId, clientId, facts.getFirst().appointmentId(), asOf);
+    UUID restrictionId =
+        appJdbc.queryForObject(
+            "SELECT restriction_id FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND client_id = ? AND status = 'ACTIVE'",
+            UUID.class,
+            tenantId,
+            clientId);
+
+    mvc.perform(
+            post(
+                    "/api/v1/admin/appointments/{id}/correct-no-show",
+                    facts.getFirst().appointmentId())
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "reconcile-correct-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":2,\"reason\":\"Correção confirmada\"}"))
+        .andExpect(status().isOk());
+    mvc.perform(
+            get("/api/v1/admin/clients/{id}/no-shows", clientId)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.count").value(1))
+        .andExpect(jsonPath("$.restrictionStatus").value("RESTRICTED"));
+
+    org.mockito.Mockito.when(clock.instant()).thenReturn(asOf.plusSeconds(366L * 24 * 60 * 60));
+    mvc.perform(
+            get("/api/v1/admin/clients/{id}/no-shows", clientId)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.count").value(0))
+        .andExpect(jsonPath("$.restrictionStatus").value("RESTRICTED"))
+        .andExpect(jsonPath("$.activeRestriction.restrictionId").value(restrictionId.toString()));
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status || ':' || version FROM agendamento.client_booking_restriction WHERE restriction_id = ?",
+                String.class,
+                restrictionId))
+        .isEqualTo("ACTIVE:1");
+    assertThat(countByAction("CLIENT_SELF_BOOKING_UNBLOCKED")).isZero();
+  }
+
+  @Test
+  void reconciliationRequiresConfiguredCurrentPolicyAndCurrentTenantMembership() throws Exception {
+    UUID clientId = seedNoShowClient("Reconciliation authorization");
+    mvc.perform(
+            post("/api/v1/admin/clients/{id}/restrictions/reconcile", clientId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "reconcile-no-policy-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedPolicyVersion\":1}"))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("POLICY_NOT_CONFIGURED"));
+
+    replaceClientNoShowPolicy.execute(actor, "reconcile-auth-policy-" + UUID.randomUUID(), 0, 1);
+    reconcile(
+            clientId,
+            "reconcile-stale-policy-" + UUID.randomUUID(),
+            "{\"expectedPolicyVersion\":2}")
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("VERSION_CONFLICT"));
+    UUID foreignClient = seedForeignAppointment(bookingDate);
+    UUID foreignClientId =
+        migrationJdbc.queryForObject(
+            "SELECT client_id FROM agendamento.appointment WHERE appointment_id = ?",
+            UUID.class,
+            foreignClient);
+    mvc.perform(
+            post("/api/v1/admin/clients/{id}/restrictions/reconcile", foreignClientId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "reconcile-foreign-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedPolicyVersion\":1}"))
+        .andExpect(status().isNotFound());
+
+    mvc.perform(
+            post("/api/v1/admin/clients/{id}/restrictions/reconcile", clientId)
+                .with(authentication(principalToken(actor)))
+                .header("Idempotency-Key", "reconcile-no-csrf-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedPolicyVersion\":1}"))
+        .andExpect(status().isForbidden());
+
+    migrationJdbc.update(
+        "UPDATE agendamento.admin_tenant_membership SET status = 'DISABLED' WHERE tenant_id = ? AND user_id = ?",
+        tenantId,
+        actor.adminUserId());
+    mvc.perform(
+            post("/api/v1/admin/clients/{id}/restrictions/reconcile", clientId)
+                .with(authentication(principalToken(actor)))
+                .with(csrf())
+                .header("Idempotency-Key", "reconcile-revoked-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedPolicyVersion\":1}"))
+        .andExpect(status().isForbidden());
+    assertThat(countByAction("CLIENT_SELF_BOOKING_RECONCILED")).isZero();
+  }
+
+  @Test
+  void reconciliationAuditFailureRollsBackRestrictionHistoryOutboxAndReceipt() throws Exception {
+    UUID clientId = seedNoShowClient("Reconciliation rollback");
+    Instant asOf = Instant.now().plusSeconds(3600);
+    org.mockito.Mockito.when(clock.instant()).thenReturn(asOf);
+    seedNoShowFacts(clientId, asOf.minusSeconds(60), 1);
+    replaceClientNoShowPolicy.execute(
+        actor, "reconcile-rollback-policy-" + UUID.randomUUID(), 0, 1);
+    migrationJdbc.execute(
+        "CREATE FUNCTION agendamento.fail_reconciliation_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action = 'CLIENT_SELF_BOOKING_RECONCILED' THEN RAISE EXCEPTION 'injected reconciliation audit failure'; END IF; RETURN NEW; END $$");
+    migrationJdbc.execute(
+        "CREATE TRIGGER fail_reconciliation_audit BEFORE INSERT ON agendamento.audit_event FOR EACH ROW EXECUTE FUNCTION agendamento.fail_reconciliation_audit()");
+    String key = "reconcile-rollback-" + UUID.randomUUID();
+    try {
+      org.assertj.core.api.Assertions.assertThatThrownBy(
+              () -> reconcile(clientId, key, "{\"expectedPolicyVersion\":1}"))
+          .isInstanceOf(jakarta.servlet.ServletException.class)
+          .hasStackTraceContaining("injected reconciliation audit failure");
+    } finally {
+      migrationJdbc.execute("DROP TRIGGER fail_reconciliation_audit ON agendamento.audit_event");
+      migrationJdbc.execute("DROP FUNCTION agendamento.fail_reconciliation_audit()");
+    }
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND client_id = ?",
+                Integer.class,
+                tenantId,
+                clientId))
+        .isZero();
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.client_booking_restriction_history history JOIN agendamento.client_booking_restriction restriction USING (tenant_id, restriction_id) WHERE restriction.tenant_id = ? AND restriction.client_id = ?",
+                Integer.class,
+                tenantId,
+                clientId))
+        .isZero();
+    assertThat(countByAction("CLIENT_SELF_BOOKING_RECONCILED")).isZero();
+    assertThat(countByEvent("ClientSelfBookingBlocked")).isZero();
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope = 'clients.booking-restriction.reconcile.v1' AND key_digest = ?",
+                Integer.class,
+                tenantId,
+                com.appagendamento.idempotency.application.IdempotencyKey.digest(key)))
+        .isZero();
+  }
+
+  @Test
+  void absentPolicyAllowsUnrestrictedPublicBookingButDoesNotReleaseExistingRestriction()
+      throws Exception {
+    UUID unrestrictedClient = seedNoShowClient("No policy remains open");
+    String unrestrictedPhone =
+        migrationJdbc.queryForObject(
+            "SELECT normalized_phone FROM agendamento.client WHERE tenant_id = ? AND client_id = ?",
+            String.class,
+            tenantId,
+            unrestrictedClient);
+    String allowedStart = requestedStart;
+    submitBooking(
+            "no-policy-allowed-" + UUID.randomUUID(),
+            requestBody(serviceId, allowedStart, "Sem política", unrestrictedPhone))
+        .andExpect(status().isCreated());
+    mvc.perform(
+            get("/api/v1/admin/clients/{id}/no-shows", unrestrictedClient)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.policyStatus").value("NOT_CONFIGURED"))
+        .andExpect(jsonPath("$.restrictionStatus").value("NOT_CONFIGURED"));
+
+    UUID restrictedClient = seedNoShowClient("Policy removed but restriction remains");
+    String restrictedPhone =
+        migrationJdbc.queryForObject(
+            "SELECT normalized_phone FROM agendamento.client WHERE tenant_id = ? AND client_id = ?",
+            String.class,
+            tenantId,
+            restrictedClient);
+    Instant asOf = Instant.parse("2026-10-20T18:00:00Z");
+    replaceClientNoShowPolicy.execute(
+        actor, "no-policy-restriction-policy-" + UUID.randomUUID(), 0, 1);
+    NoShowFactRef cause = seedNoShowFacts(restrictedClient, asOf.minusSeconds(60), 1).getFirst();
+    noShowRestrictionActivation.evaluateAfterNoShow(
+        tenantId, restrictedClient, cause.appointmentId(), asOf);
+    migrationJdbc.update(
+        "DELETE FROM agendamento.client_no_show_policy WHERE tenant_id = ?", tenantId);
+    org.mockito.Mockito.when(clock.instant()).thenReturn(asOf.plusSeconds(1));
+
+    mvc.perform(
+            get("/api/v1/admin/clients/{id}/no-shows", restrictedClient)
+                .with(authentication(principalToken(actor))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.policyStatus").value("NOT_CONFIGURED"))
+        .andExpect(jsonPath("$.restrictionStatus").value("RESTRICTED"));
+    int appointmentsBefore = count("appointment", tenantId);
+    String blockedStart = bookingDate.atTime(10, 0).atZone(ZONE).toOffsetDateTime().toString();
+    var blocked =
+        submitBooking(
+                "no-policy-active-restriction-" + UUID.randomUUID(),
+                requestBody(serviceId, blockedStart, "Bloqueio mantido", restrictedPhone))
+            .andExpect(status().isNotFound())
+            .andReturn();
+    assertThat(blocked.getResponse().getContentAsString())
+        .doesNotContain("NO_SHOW", "falta", "restrição", restrictedClient.toString());
+    assertThat(count("appointment", tenantId)).isEqualTo(appointmentsBefore);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND client_id = ?",
+                String.class,
+                tenantId,
+                restrictedClient))
+        .isEqualTo("ACTIVE");
+  }
+
+  private ResultActions reconcile(UUID clientId, String key, String body) throws Exception {
+    return mvc.perform(
+        post("/api/v1/admin/clients/{id}/restrictions/reconcile", clientId)
+            .with(authentication(principalToken(actor)))
+            .with(csrf())
+            .header("Idempotency-Key", key)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(body));
+  }
+
+  private MvcResult concurrentReconcile(
+      CyclicBarrier barrier, UUID clientId, String key, String body) {
+    try {
+      barrier.await();
+      return reconcile(clientId, key, body).andReturn();
+    } catch (Exception exception) {
+      throw new IllegalStateException(exception);
+    }
+  }
+
+  @Test
   void noShowFactsAreCalendarWindowTenantScopedAndCorrectionPreservesOriginalFact()
       throws Exception {
     submitBooking(

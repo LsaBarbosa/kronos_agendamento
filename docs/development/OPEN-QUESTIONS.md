@@ -7,14 +7,18 @@
 | AGD-032 — correção de falta | documentos 02 §6, 03 AGD-032, 06 AGD-032 | estado e efeitos de corrigir `NO_SHOW` | **Aprovado pelo usuário em 19/10/2026 nesta instrução:** comando administrativo específico `NO_SHOW → COMPLETED`, motivo, CAS/idempotência, fato/história original preservados e fato compensatório referenciado; não retorna a `CONFIRMED`. ADR-0023. |
 | AGD-032 — política ausente | documentos 01 §6.4, 03 AGD-032 | resultado sem threshold configurado | **Aprovado pelo usuário em 19/10/2026 nesta instrução:** `NOT_CONFIGURED`, sem default; contagem/fatos consultáveis sem inferir `CLEAR` nem bloqueio. Após AGD-033, `NOT_TRACKED` é legado apenas em detalhes históricos de auditoria, não status corrente. ADR-0023/0024. |
 
-## AGD-033 — decisões pendentes
+## AGD-033 — decisões aprovadas em 20/10/2026
 
-| Referências | Decisão necessária | Proposta ainda não aprovada e impacto |
+As quatro decisões abaixo foram aprovadas explicitamente pelo usuário nesta instrução e registradas em ADR-0024 e nos documentos 01–03/06; não são atribuídas retroativamente à especificação anterior.
+
+| Referências | Decisão aprovada | Registro/limite |
 |---|---|---|
-| Documento 01 §6.4; documento 02 §6; documento 06 AGD-033; ADR-0023 | Quando correção de `NO_SHOW` ou envelhecimento da janela reduz a contagem abaixo do limite, a restrição ativa é removida automaticamente ou somente por desbloqueio administrativo? | Proposta: manter até desbloqueio administrativo explícito. Liberação automática pode reautorizar autoagendamento sem decisão do estabelecimento. |
-| Documentos 01 §6.4 e 03 AGD-032/033; ADR-0023 | Ao remover/deixar ausente a política, o que ocorre com restrições existentes: preservar, liberar ou impedir remoção enquanto houver restrição? | Proposta: `NOT_CONFIGURED` impede novas avaliações de limite, mas não altera restrição já materializada; liberar apenas por ação explícita. |
-| Documento 01 §6.4; documento 06 AGD-033 | Reduzir o limite abaixo da contagem atual ativa bloqueio retroativamente, só afeta faltas futuras, ou exige reconciliação versionada? | Proposta: operação/job versionado e auditável depois de salvar, evitando varredura implícita no request de política. |
-| Documento 01 §6.4; documentos 03 e 06 AGD-033; ADR-0023 | Sem política configurada e sem restrição ativa, a nova reserva pública continua permitida, ou o tenant deve configurar política antes de aceitar autoagendamento? | Proposta: preservar o comportamento existente de permitir reserva sem inferir `CLEAR`, mantendo estado `NOT_CONFIGURED`; exigir configuração bloquearia tenants sem decisão explícita e alteraria o gate público. |
+| Documento 01 §6.4; documento 02 §6; documento 06 AGD-033; ADR-0023/0024 | Correção de falta e envelhecimento atualizam a contagem, mas não liberam restrição ativa. Liberação exige desbloqueio administrativo explícito com motivo, CAS, idempotência e trilha transacional. | ADR-0024; efeitos de correção seguem ADR-0023. |
+| Documentos 01 §6.4 e 03 AGD-032/033; ADR-0024 | Política ausente/removida não libera restrição ativa nem cria novas ativações por limite. `NOT_CONFIGURED` permanece distinto de `CLEAR`; com bloqueio ativo, reserva pública continua bloqueada. | Sem política e sem bloqueio, reserva pública permanece permitida, sujeita aos demais gates. |
+| Documento 01 §6.4; documentos 03 e 06 AGD-033; ADR-0024 | Reduzir limite permite aplicação retroativa por reconciliação administrativa explícita, versionada, auditável e recuperável depois do PUT. O PUT não varre clientes implicitamente. | Reconciliação por cliente com `expectedPolicyVersion`; não reutiliza fato causal já consumido/desbloqueado. |
+| Documento 01 §6.4; documentos 03 e 06 AGD-033; ADR-0024 | Sem política e sem restrição ativa, novas reservas públicas permanecem permitidas com estado `NOT_CONFIGURED`. | Não abre publicação nem contorna gates legais/comerciais, serviço ou disponibilidade. Reserva administrativa, consulta e cancelamento próprios continuam permitidos. |
+
+Implementação e evidências de reconciliação permanecem em andamento no PR #21; aprovação de produto não é evidência de execução nem prontidão operacional.
 
 | AGD-024: comprimento OTP e TTL de sessão cliente | Documentos 01–03/06 | Challenge expira em 5 min; comprimento não especificado, proposta 6 dígitos. Sessão curta sem TTL/renovação definida; proposta 15 min absolutos sem renovação. Valores não são decisões aprovadas; produção exige configuração explícita. | ADR-0019; requer decisão antes da habilitação real. |
 | AGD-024: fornecedor/template WhatsApp | AGD-024/030 | Não há fornecedor, template, credenciais ou hospedagem aprovados; não contratar nem enviar implicitamente. | Pendente; emissor E2E controlado não comprova entrega. |

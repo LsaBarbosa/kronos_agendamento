@@ -1,6 +1,8 @@
 package com.appagendamento.clients.api;
 
 import com.appagendamento.audit.api.AuditCorrelationId;
+import com.appagendamento.clients.application.ClientNoShowPolicyNotConfiguredException;
+import com.appagendamento.clients.application.ClientNoShowPolicyVersionConflictException;
 import com.appagendamento.clients.application.ClientRestrictionAccessDeniedException;
 import com.appagendamento.clients.application.ClientRestrictionNotFoundException;
 import com.appagendamento.clients.application.ClientRestrictionVersionConflictException;
@@ -32,6 +34,21 @@ public class AdminClientRestrictionExceptionHandler {
   @ExceptionHandler(ClientRestrictionVersionConflictException.class)
   ResponseEntity<ApiErrorResponse> conflict(ClientRestrictionVersionConflictException exception) {
     return error(HttpStatus.CONFLICT, "VERSION_CONFLICT", "A restrição foi alterada.");
+  }
+
+  @ExceptionHandler(ClientNoShowPolicyVersionConflictException.class)
+  ResponseEntity<ApiErrorResponse> policyConflict(
+      ClientNoShowPolicyVersionConflictException exception) {
+    return error(HttpStatus.CONFLICT, "VERSION_CONFLICT", "A política foi alterada.");
+  }
+
+  @ExceptionHandler(ClientNoShowPolicyNotConfiguredException.class)
+  ResponseEntity<ApiErrorResponse> policyNotConfigured(
+      ClientNoShowPolicyNotConfiguredException exception) {
+    return error(
+        HttpStatus.CONFLICT,
+        "POLICY_NOT_CONFIGURED",
+        "Configure uma política de faltas antes de reconciliar.");
   }
 
   private ResponseEntity<ApiErrorResponse> error(HttpStatus status, String code, String message) {

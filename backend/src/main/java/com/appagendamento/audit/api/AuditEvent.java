@@ -1,6 +1,8 @@
 package com.appagendamento.audit.api;
 
+import java.time.Instant;
 import java.util.UUID;
+import java.util.regex.Matcher;
 
 public record AuditEvent(
     UUID eventId,
@@ -39,7 +41,7 @@ public record AuditEvent(
             || actorType.equals("CLIENT") && actorRef.equals("VERIFIED_CLIENT"))
         || !result.equals("COMMITTED")
         || !action.matches(
-            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|CLIENT_NO_SHOW_POLICY_UPDATED|CLIENT_SELF_BOOKING_(BLOCKED|UNBLOCKED)|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)|PUBLICATION_(PUBLISHED|UNPUBLISHED)|PUBLIC_PROFILE_UPDATED|APPOINTMENT_CONFIRMED|APPOINTMENT_RESCHEDULED|APPOINTMENT_CANCELLED_BY_PROVIDER|APPOINTMENT_CANCELLED_BY_CLIENT|APPOINTMENT_COMPLETED|APPOINTMENT_NO_SHOW_RECORDED|APPOINTMENT_NO_SHOW_CORRECTED")) {
+            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|CLIENT_NO_SHOW_POLICY_UPDATED|CLIENT_SELF_BOOKING_(BLOCKED|UNBLOCKED|RECONCILED)|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)|PUBLICATION_(PUBLISHED|UNPUBLISHED)|PUBLIC_PROFILE_UPDATED|APPOINTMENT_CONFIRMED|APPOINTMENT_RESCHEDULED|APPOINTMENT_CANCELLED_BY_PROVIDER|APPOINTMENT_CANCELLED_BY_CLIENT|APPOINTMENT_COMPLETED|APPOINTMENT_NO_SHOW_RECORDED|APPOINTMENT_NO_SHOW_CORRECTED")) {
       throw new IllegalArgumentException("Ator ou resultado de auditoria inválido");
     }
     if (((actorType.equals("ADMIN") || actorType.equals("CLIENT")) && actorId == null)
@@ -136,6 +138,10 @@ public record AuditEvent(
               actorType.equals("ADMIN")
                   && actorRef.equals("TENANT_ADMIN")
                   && validRestrictionLiftDetails(detailsJson);
+          case "CLIENT_SELF_BOOKING_RECONCILED" ->
+              actorType.equals("ADMIN")
+                  && actorRef.equals("TENANT_ADMIN")
+                  && validRestrictionReconciliationDetails(detailsJson);
           default -> false;
         };
     if (!validDetails) {
@@ -190,5 +196,27 @@ public record AuditEvent(
     long before = Long.parseLong(details.replaceAll(".*\\\"version_before\\\":([0-9]+).*", "$1"));
     long after = Long.parseLong(details.replaceAll(".*\\\"version_after\\\":([0-9]+).*", "$1"));
     return after == before + 1;
+  }
+
+  private static boolean validRestrictionReconciliationDetails(String details) {
+    Matcher matcher =
+        java.util.regex.Pattern.compile(
+                "^\\{\\\"decision\\\":\\\"(ACTIVATED|ALREADY_RESTRICTED|BELOW_THRESHOLD|NO_UNUSED_CAUSAL_FACT)\\\",\\\"count\\\":(0|[1-9][0-9]*),\\\"threshold\\\":([1-5]),\\\"policy_version\\\":([1-9][0-9]*),\\\"as_of\\\":\\\"([^\\\"]+)\\\"}$")
+            .matcher(details);
+    if (!matcher.matches()) return false;
+    try {
+      long count = Long.parseLong(matcher.group(2));
+      int threshold = Integer.parseInt(matcher.group(3));
+      Long.parseLong(matcher.group(4));
+      Instant.parse(matcher.group(5));
+      return switch (matcher.group(1)) {
+        case "ACTIVATED" -> count >= threshold;
+        case "BELOW_THRESHOLD" -> count < threshold;
+        case "ALREADY_RESTRICTED", "NO_UNUSED_CAUSAL_FACT" -> count >= threshold;
+        default -> false;
+      };
+    } catch (NumberFormatException | java.time.format.DateTimeParseException exception) {
+      return false;
+    }
   }
 }

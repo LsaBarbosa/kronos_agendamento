@@ -7,6 +7,8 @@ info:
     Política e restrição são estados separados. Política ausente é
     NOT_CONFIGURED e não implica CLEAR nem criação automática de restrição.
     Restrição ativa pode ser desbloqueada explicitamente pelo administrador.
+    Redução de política não reconcilia clientes implicitamente; o administrador
+    pode reconciliar um cliente por vez, informando a versão esperada.
 servers:
   - url: /
 paths:
@@ -147,6 +149,62 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/admin/clients/{id}/restrictions/reconcile:
+    post:
+      operationId: reconcileClientBookingRestriction
+      summary: Reavaliar explicitamente a política para um cliente
+      description: >-
+        Usa a política configurada e sua versão esperada depois do lock
+        tenant-scoped. Não desbloqueia restrição, não reutiliza falta causal
+        já consumida e não executa varredura global. Replay revalida autorização
+        e devolve a decisão original.
+      security: [{ adminSession: [], csrfToken: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedPolicyVersion]
+              additionalProperties: false
+              properties:
+                expectedPolicyVersion: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Decisão explicável persistida; receipt original em replay
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+            Idempotency-Replayed: { schema: { type: boolean } }
+            X-Operation-Id: { schema: { type: string, format: uuid } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [clientId, decision, asOf, windowStart, count, threshold, policyVersion, restrictionId, restrictionVersion]
+                properties:
+                  clientId: { type: string, format: uuid }
+                  decision: { type: string, enum: [ACTIVATED, ALREADY_RESTRICTED, BELOW_THRESHOLD, NO_UNUSED_CAUSAL_FACT] }
+                  asOf: { type: string, format: date-time }
+                  windowStart: { type: string, format: date-time }
+                  count: { type: integer, minimum: 0 }
+                  threshold: { type: integer, minimum: 1, maximum: 5 }
+                  policyVersion: { type: integer, minimum: 1 }
+                  restrictionId: { type: string, format: uuid, nullable: true }
+                  restrictionVersion: { type: integer, minimum: 1, nullable: true }
+        '400': { $ref: '#/components/responses/InvalidCommand' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 components:
   securitySchemes:
     adminSession: { type: apiKey, in: cookie, name: AGDSESSION }
@@ -187,7 +245,7 @@ components:
             properties:
               historyId: { type: string, format: uuid }
               restrictionId: { type: string, format: uuid }
-              eventType: { type: string, enum: [ACTIVATED, LIFTED] }
+              eventType: { type: string, enum: [ACTIVATED, RECONCILED, LIFTED] }
               actorType: { type: string, enum: [SYSTEM, ADMIN] }
               occurredAt: { type: string, format: date-time }
               countAtDecision: { type: integer, minimum: 0 }

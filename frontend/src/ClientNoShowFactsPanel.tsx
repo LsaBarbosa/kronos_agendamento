@@ -37,7 +37,7 @@ type Facts = {
     restrictionHistory: {
         historyId: string;
         restrictionId: string;
-        eventType: 'ACTIVATED' | 'LIFTED';
+        eventType: 'ACTIVATED' | 'LIFTED' | 'RECONCILED';
         actorType: 'SYSTEM' | 'ADMIN';
         occurredAt: string;
         countAtDecision: number;
@@ -60,6 +60,11 @@ type PendingLift = Readonly<{
     clientId: string;
     restrictionId: string;
     body: Readonly<{ expectedVersion: number; reason: string }>;
+    key: string;
+}>;
+type PendingReconciliation = Readonly<{
+    clientId: string;
+    body: Readonly<{ expectedPolicyVersion: number }>;
     key: string;
 }>;
 
@@ -99,10 +104,14 @@ export function ClientNoShowFactsPanel({
     const [liftSaving, setLiftSaving] = useState(false);
     const [liftUncertain, setLiftUncertain] = useState(false);
     const [liftIntentLocked, setLiftIntentLocked] = useState(false);
+    const [reconcileSaving, setReconcileSaving] = useState(false);
+    const [reconcileUncertain, setReconcileUncertain] = useState(false);
     const pending = useRef<Pending | null>(null);
     const pendingLift = useRef<PendingLift | null>(null);
+    const pendingReconciliation = useRef<PendingReconciliation | null>(null);
     const selectedClient = useRef<Client | null>(null);
     const liftRequestInFlight = useRef(false);
+    const reconciliationRequestInFlight = useRef(false);
     const keys = useRef(new Map<string, string>());
     const searchGeneration = useRef(0);
     const factsGeneration = useRef(0);
@@ -113,6 +122,7 @@ export function ClientNoShowFactsPanel({
             factsGeneration.current += 1;
             pending.current = null;
             pendingLift.current = null;
+            pendingReconciliation.current = null;
             selectedClient.current = null;
         },
         [],
@@ -123,6 +133,7 @@ export function ClientNoShowFactsPanel({
             !enabled ||
             pending.current ||
             pendingLift.current ||
+            pendingReconciliation.current ||
             query.trim().length < 2
         )
             return;
@@ -159,7 +170,12 @@ export function ClientNoShowFactsPanel({
     }
 
     async function loadFacts(client: Client, cursor?: string | null) {
-        if (pending.current || pendingLift.current) return;
+        if (
+            pending.current ||
+            pendingLift.current ||
+            pendingReconciliation.current
+        )
+            return;
         const generation = ++factsGeneration.current;
         setLoadingFacts(true);
         setError('');
@@ -216,7 +232,12 @@ export function ClientNoShowFactsPanel({
     }
 
     function chooseClient(client: Client) {
-        if (pending.current || pendingLift.current) return;
+        if (
+            pending.current ||
+            pendingLift.current ||
+            pendingReconciliation.current
+        )
+            return;
         searchGeneration.current += 1;
         setLoadingClients(false);
         factsGeneration.current += 1;
@@ -229,7 +250,13 @@ export function ClientNoShowFactsPanel({
     }
 
     async function correct(fact: Fact) {
-        if (!selected || !csrf || pendingLift.current) return;
+        if (
+            !selected ||
+            !csrf ||
+            pendingLift.current ||
+            pendingReconciliation.current
+        )
+            return;
         const existing = pending.current;
         if (
             existing &&
@@ -332,6 +359,7 @@ export function ClientNoShowFactsPanel({
         if (
             locked ||
             pending.current ||
+            pendingReconciliation.current ||
             (!existing && (!selected || !facts?.activeRestriction))
         )
             return;
@@ -441,8 +469,124 @@ export function ClientNoShowFactsPanel({
         }
     }
 
+    async function reconcileRestriction() {
+        if (reconciliationRequestInFlight.current || !csrf) return;
+        const existing = pendingReconciliation.current;
+        if (
+            locked ||
+            pending.current ||
+            pendingLift.current ||
+            (!existing &&
+                (!selected || !facts || facts.policyStatus !== 'CONFIGURED'))
+        )
+            return;
+        const clientId = existing?.clientId ?? selected!.clientId;
+        const body =
+            existing?.body ??
+            Object.freeze({ expectedPolicyVersion: facts!.policyVersion });
+        const key =
+            existing?.key ??
+            commandKey(
+                keys.current,
+                `reconcile-client-restriction:${clientId}`,
+                body,
+            );
+        const intention = existing ?? Object.freeze({ clientId, body, key });
+        pendingReconciliation.current = intention;
+        reconciliationRequestInFlight.current = true;
+        setReconcileSaving(true);
+        setError('');
+        setNotice('');
+        try {
+            const response = await fetch(
+                `${apiBaseUrl}/v1/admin/clients/${encodeURIComponent(intention.clientId)}/restrictions/reconcile`,
+                {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        [csrf.headerName]: csrf.token,
+                        'Idempotency-Key': intention.key,
+                    },
+                    body: JSON.stringify(intention.body),
+                },
+            );
+            if (response.status === 401 || response.status === 403) {
+                pendingReconciliation.current = null;
+                setReconcileUncertain(false);
+                onSessionInvalid(response.status);
+                return;
+            }
+            if (response.status === 408 || response.status >= 500) {
+                setReconcileUncertain(true);
+                setError(
+                    'Resultado incerto. Recupere a mesma reconciliação sem alterar cliente ou versão da política.',
+                );
+                return;
+            }
+            if (!response.ok) {
+                const message = await responseMessage(response);
+                pendingReconciliation.current = null;
+                setReconcileUncertain(false);
+                setError(message);
+                if (
+                    response.status === 409 &&
+                    selectedClient.current?.clientId === intention.clientId
+                )
+                    void loadFacts(selectedClient.current);
+                return;
+            }
+            const receipt = (await response.json()) as {
+                clientId: string;
+                decision: string;
+                policyVersion: number;
+                count: number;
+            };
+            if (
+                receipt.clientId !== intention.clientId ||
+                receipt.policyVersion !==
+                    intention.body.expectedPolicyVersion ||
+                ![
+                    'ACTIVATED',
+                    'ALREADY_RESTRICTED',
+                    'BELOW_THRESHOLD',
+                    'NO_UNUSED_CAUSAL_FACT',
+                ].includes(receipt.decision) ||
+                !Number.isInteger(receipt.count) ||
+                receipt.count < 0
+            ) {
+                setReconcileUncertain(true);
+                setError(
+                    'Resposta inválida; recupere a mesma reconciliação para conferir o resultado original.',
+                );
+                return;
+            }
+            pendingReconciliation.current = null;
+            setReconcileUncertain(false);
+            setNotice(
+                `Reconciliação da política v${receipt.policyVersion}: ${receipt.decision}; ${receipt.count} falta(s) na janela.`,
+            );
+            const originalClient = selectedClient.current;
+            if (originalClient?.clientId === intention.clientId)
+                await loadFacts(originalClient);
+        } catch {
+            setReconcileUncertain(true);
+            setError(
+                'Resultado incerto. Repita a mesma reconciliação para recuperar o receipt original.',
+            );
+        } finally {
+            reconciliationRequestInFlight.current = false;
+            setReconcileSaving(false);
+        }
+    }
+
     const interactionsLocked =
-        locked || liftSaving || liftUncertain || liftIntentLocked;
+        locked ||
+        liftSaving ||
+        liftUncertain ||
+        liftIntentLocked ||
+        reconcileSaving ||
+        reconcileUncertain;
 
     if (!enabled) return null;
     return (
@@ -574,13 +718,32 @@ export function ClientNoShowFactsPanel({
                             </button>
                         </section>
                     )}
+                    {facts.policyStatus === 'CONFIGURED' && (
+                        <button
+                            type="button"
+                            disabled={
+                                reconcileUncertain
+                                    ? reconcileSaving
+                                    : interactionsLocked
+                            }
+                            onClick={() => void reconcileRestriction()}
+                        >
+                            {reconcileSaving
+                                ? 'Reconciliando…'
+                                : reconcileUncertain
+                                  ? 'Recuperar mesma reconciliação'
+                                  : 'Reavaliar política para este cliente'}
+                        </button>
+                    )}
                     {facts.restrictionHistory.length > 0 && (
                         <ul aria-label="Histórico da restrição">
                             {facts.restrictionHistory.map((item) => (
                                 <li key={item.historyId}>
                                     {item.eventType === 'ACTIVATED'
                                         ? 'Bloqueio ativado'
-                                        : 'Bloqueio removido'}{' '}
+                                        : item.eventType === 'LIFTED'
+                                          ? 'Bloqueio removido'
+                                          : 'Bloqueio ativado por reconciliação'}{' '}
                                     em{' '}
                                     {new Date(item.occurredAt).toLocaleString(
                                         'pt-BR',
