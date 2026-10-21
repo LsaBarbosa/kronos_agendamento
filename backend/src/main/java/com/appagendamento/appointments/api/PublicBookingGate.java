@@ -9,4 +9,6 @@ public interface PublicBookingGate {
   void requireVisibleTenant(String slug, UUID expectedTenantId);
 
   void protectPublicationUntilCommit(String slug, UUID expectedTenantId);
+
+  boolean allowsNewPublicAppointments(UUID tenantId);
 }

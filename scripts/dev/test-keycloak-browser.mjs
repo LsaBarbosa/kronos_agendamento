@@ -96,6 +96,72 @@ try {
         `Array.from(document.querySelectorAll('p')).some(paragraph => paragraph.textContent.includes('Tenant autorizado:') && paragraph.querySelector('code')?.textContent === ${JSON.stringify(authenticatedSession.tenantId)})`,
     );
     if (!tenantDisplayed) throw new Error('Tenant autorizado não apareceu na UI.');
+    await waitForText('Plano e período de avaliação', evaluate);
+    await waitForText('Cobrança anual equivalente a 10 mensalidades', evaluate);
+    const subscriptionOverview = await evaluate(
+        "fetch('/api/v1/admin/subscription', {credentials:'same-origin', cache:'no-store'}).then(async response => ({status:response.status, cache:response.headers.get('Cache-Control'), body:await response.json()}))",
+    );
+    if (
+        subscriptionOverview.status !== 200 ||
+        !subscriptionOverview.cache?.includes('no-store') ||
+        subscriptionOverview.body.subscription?.status !== 'TRIALING' ||
+        subscriptionOverview.body.subscription?.version !== 1 ||
+        !subscriptionOverview.body.subscription?.trialStartedAt ||
+        !subscriptionOverview.body.subscription?.trialEndsAt ||
+        subscriptionOverview.body.trialEligibilityPending !== false ||
+        subscriptionOverview.body.commercialEligibility !== 'VERIFIED' ||
+        subscriptionOverview.body.plans.length !== 2 ||
+        subscriptionOverview.body.plans.find((plan) => plan.code === 'ANNUAL')?.annualEquivalentMonthlyPayments !== 10
+    ) {
+        throw new Error('Visão administrativa não exibiu o trial sintético persistido e o catálogo esperado.');
+    }
+    const subscriptionHoldScript = await command('Page.addScriptToEvaluateOnNewDocument', {
+        source: `(() => {
+          const originalFetch = window.fetch.bind(window);
+          window.fetch = async (input, init) => {
+            const response = await originalFetch(input, init);
+            const requestUrl = typeof input === 'string' ? input : input.url;
+            if (new URL(requestUrl, location.href).pathname === '/api/v1/admin/subscription' && !window.__subscriptionHoldUsed) {
+              window.__subscriptionHoldUsed = true;
+              const originalJson = response.json.bind(response);
+              response.json = async (...args) => {
+                const body = await originalJson(...args);
+                window.__subscriptionBodyParsed = true;
+                await new Promise(resolve => { window.__releaseSubscriptionBody = resolve; });
+                return body;
+              };
+            }
+            return response;
+          };
+        })();`,
+    });
+    await command('Page.reload', { ignoreCache: true });
+    await waitForText('Sessão administrativa ativa.', evaluate);
+    await waitUntil(() => evaluate('window.__subscriptionBodyParsed === true'));
+    await command('Page.removeScriptToEvaluateOnNewDocument', {
+        identifier: subscriptionHoldScript.identifier,
+    });
+    await clickButtonByText('Sair', evaluate);
+    await waitForText('Sessão local encerrada.', evaluate);
+    await evaluate('window.__releaseSubscriptionBody?.()');
+    await waitUntil(() => evaluate(`({
+      loggedOut: document.body.innerText.includes('Sessão local encerrada.'),
+      subscriptionPanel: Boolean(document.querySelector('#subscription-heading')),
+      trialRestored: document.body.innerText.includes('Trial ativo'),
+    })`).then((state) => state.loggedOut && !state.subscriptionPanel && !state.trialRestored));
+    const staleSubscriptionAfterLogout = await evaluate(`({
+      loggedOut: document.body.innerText.includes('Sessão local encerrada.'),
+      subscriptionPanel: Boolean(document.querySelector('#subscription-heading')),
+      trialRestored: document.body.innerText.includes('Trial ativo'),
+    })`);
+    if (!staleSubscriptionAfterLogout.loggedOut || staleSubscriptionAfterLogout.subscriptionPanel || staleSubscriptionAfterLogout.trialRestored) {
+        throw new Error(`GET comercial atrasado restaurou estado após logout: ${JSON.stringify(staleSubscriptionAfterLogout)}`);
+    }
+    console.log('Browser: GET administrativo de assinatura liberado após logout não restaura dados comerciais privados no DOM.');
+    await evaluate("document.querySelector('a[href*=oauth2]').click()");
+    await waitForText('Sessão administrativa ativa.', evaluate);
+    await waitForText('Plano e período de avaliação', evaluate);
+    await waitForText('Trial ativo', evaluate);
     await waitForText('Catálogo de serviços', evaluate);
     await waitForText('Nenhum serviço cadastrado.', evaluate);
     await waitForText('Grade semanal e políticas', evaluate);
@@ -479,6 +545,12 @@ try {
     );
     if (slotsAfterConfirmation.some((slot) => slot.startsAt === selectedStart)) {
         throw new Error('Disponibilidade continuou oferecendo o horário já confirmado.');
+    }
+    const postTrialBookingCandidate = slotsAfterConfirmation.find(
+        (slot) => slot.startsAt !== selectedStart,
+    );
+    if (!postTrialBookingCandidate) {
+        throw new Error('A fixture não preservou um segundo horário elegível para o teste do gate comercial.');
     }
     console.log(
         'Browser: visitante perdeu a resposta após commit, recarregou e recuperou a reserva persistida; storage não contém PII e permaneceu uma única reserva.',
@@ -1091,6 +1163,14 @@ try {
       const label = [...form.querySelectorAll('label')].find(item => item.innerText.includes('Novo cliente'));
       label?.querySelector('input')?.click();
     })()`);
+    await waitUntil(() =>
+        evaluate(`Boolean((() => {
+          const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
+          return [...(form?.querySelectorAll('label') ?? [])].some(item =>
+            item.innerText.trim().startsWith('Nome') && item.querySelector('input'),
+          );
+        })())`),
+    );
     await setAdminAppointmentField('Nome', 'Reserva administrativa E2E', evaluate);
     await setAdminAppointmentField('Telefone para cadastro', '+5511999998310', evaluate);
     await setAdminAppointmentField('Data local', publicDate, evaluate);
@@ -2771,6 +2851,89 @@ try {
     const loggedOutClient = await evaluate("fetch('/api/v1/client/session', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())");
     if (loggedOutClient.authenticated) throw new Error('Logout não revogou a sessão do cliente.');
     console.log('Browser: área consultou/cancelou a reserva própria, recuperou resposta perdida, limpou sessão no logout mesmo com lista atrasada; emissor privado também comprovou limites, expiração e isolamento.');
+
+    await navigate('http://localhost:5173/admin', command, evaluate);
+    await waitForText('Entrar como administrador', evaluate);
+    await evaluate("document.querySelector('a[href*=oauth2]').click()");
+    await waitForText('username', evaluate, true);
+    await submitLogin(credentials.KEYCLOAK_DEMO_USERNAME, credentials.KEYCLOAK_DEMO_PASSWORD, evaluate);
+    await waitForText('Sessão administrativa ativa.', evaluate);
+    await waitForText('Plano e período de avaliação', evaluate);
+    await waitForText('Trial ativo', evaluate);
+    const activeTrial = await evaluate(
+        "fetch('/api/v1/admin/subscription', {credentials:'same-origin', cache:'no-store'}).then(response => response.json()).then(body => body.subscription)",
+    );
+    if (activeTrial?.status !== 'TRIALING' || activeTrial.version !== 1) {
+        throw new Error('Trial não persistiu como TRIALING após novo login.');
+    }
+    queryPostgres(
+        `WITH expiry AS (SELECT clock_timestamp() - INTERVAL '1 second' AS trial_ends_at) UPDATE agendamento.subscription AS subscription SET trial_ends_at = expiry.trial_ends_at, trial_started_at = expiry.trial_ends_at - INTERVAL '336 hours' FROM expiry WHERE subscription.subscription_id = '${activeTrial.subscriptionId}'`,
+        appEnvironment,
+    );
+    await command('Page.reload');
+    await waitForText('Trial encerrado', evaluate);
+    const expiredTrial = await evaluate(
+        "fetch('/api/v1/admin/subscription', {credentials:'same-origin', cache:'no-store'}).then(async response => ({status:response.status, body:await response.json()}))",
+    );
+    if (
+        expiredTrial.status !== 200 ||
+        expiredTrial.body.subscription?.status !== 'SUSPENDED' ||
+        expiredTrial.body.subscription?.version !== 2
+    ) {
+        throw new Error('Expiração não materializou SUSPENDED/v2 após now >= trialEndsAt.');
+    }
+    const expiredAvailability = await evaluate(
+        `fetch('/api/v1/public/${encodeURIComponent(publication.slug)}/availability?serviceId=${encodeURIComponent(publicService.serviceId)}&from=${publicDate}&to=${publicDate}', {cache:'no-store'}).then(response => response.status)`,
+    );
+    if (expiredAvailability !== 404) {
+        throw new Error(`Trial encerrado ainda anunciou disponibilidade pública (HTTP ${expiredAvailability}).`);
+    }
+    const gatedBookingCountBefore = Number(
+        queryPostgres(
+            `SELECT count(*) FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}'`,
+            appEnvironment,
+        ),
+    );
+    const deniedNewBooking = await evaluate(`(async () => {
+      const csrfResponse = await fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'});
+      const csrf = await csrfResponse.json();
+      const bytes = crypto.getRandomValues(new Uint8Array(32));
+      const recovery = btoa(String.fromCharCode(...bytes)).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');
+      const key = 'trial-expired-booking-' + crypto.randomUUID();
+      const headers = {'Content-Type':'application/json', [csrf.headerName]:csrf.token, 'Idempotency-Key':key, 'X-Booking-Recovery':recovery};
+      const body = ${JSON.stringify({
+          serviceId: publicService.serviceId,
+          startsAt: postTrialBookingCandidate.startsAt,
+          client: {name: 'Visitante de demonstração', phone: '+5511999995555'},
+      })};
+      const intent = await fetch('/api/v1/public/${encodeURIComponent(publication.slug)}/booking-intents/current', {method:'POST', credentials:'same-origin', headers, body:JSON.stringify(body)});
+      if (intent.status !== 204) return {stage:'intent', status:intent.status};
+      const response = await fetch('/api/v1/public/${encodeURIComponent(publication.slug)}/appointments', {method:'POST', credentials:'same-origin', headers, body:JSON.stringify(body)});
+      return {stage:'appointment', status:response.status};
+    })()`);
+    const gatedBookingCountAfter = Number(
+        queryPostgres(
+            `SELECT count(*) FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}'`,
+            appEnvironment,
+        ),
+    );
+    if (
+        deniedNewBooking.stage !== 'appointment' ||
+        deniedNewBooking.status !== 404 ||
+        gatedBookingCountAfter !== gatedBookingCountBefore
+    ) {
+        throw new Error(`Gate comercial não bloqueou atomicamente uma nova reserva após expiração: ${JSON.stringify({deniedNewBooking, gatedBookingCountBefore, gatedBookingCountAfter})}`);
+    }
+    const existingAppointmentResponse = await evaluate(
+        `fetch('/api/v1/admin/appointments/${ownedBookingId}', {credentials:'same-origin', cache:'no-store'}).then(async response => ({status:response.status, body:await response.json()}))`,
+    );
+    if (
+        existingAppointmentResponse.status !== 200 ||
+        existingAppointmentResponse.body.appointmentId !== ownedBookingId
+    ) {
+        throw new Error('Expiração do trial impediu a consulta administrativa da reserva existente.');
+    }
+    console.log('Browser: trial persistido atravessou reload; vencimento foi materializado em SUSPENDED/v2, bloqueou disponibilidade nova e preservou consulta da reserva existente.');
 
     await command('Network.clearBrowserCookies');
     await navigate('http://localhost:5173/admin', command, evaluate);

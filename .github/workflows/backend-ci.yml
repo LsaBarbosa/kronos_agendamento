@@ -153,6 +153,8 @@ jobs:
             -f compose.yaml -f compose.keycloak.yaml -f compose.identity.yaml -f compose.e2e.yaml \
             --profile app up --build --wait --wait-timeout 240 -d
       - name: Provision linked and unlinked OIDC users
+        env:
+          AGD_E2E_TRIAL_FIXTURE: 'true'
         run: bash scripts/dev/provision-demo-admin.sh demo-clinica "Clínica Demonstração"
       - name: Install frontend and start Vite proxy
         working-directory: frontend

@@ -1,0 +1,68 @@
+openapi: 3.1.0
+info:
+  title: App Agendamento — assinatura administrativa (AGD-040)
+  version: 1.0.0
+  description: >-
+    Leitura tenant-scoped de estado comercial e apresentação de planos. Não inicia
+    checkout, não confirma pagamento e não concede trial sem identidade elegível verificada por fonte confiável do servidor.
+servers:
+  - url: /
+paths:
+  /api/v1/admin/subscription:
+    get:
+      operationId: getAdminSubscriptionOverview
+      summary: Consultar trial, assinatura e ofertas do tenant autenticado
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: Estado atual ou ausência de assinatura e ofertas sem preços inventados
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [subscription, plans, trialEligibilityPending, commercialEligibility]
+                properties:
+                  subscription:
+                    oneOf:
+                      - $ref: '#/components/schemas/Subscription'
+                      - type: 'null'
+                  plans:
+                    type: array
+                    items: { $ref: '#/components/schemas/Plan' }
+                  trialEligibilityPending: { type: boolean }
+                  commercialEligibility:
+                    type: string
+                    enum: [VERIFICATION_UNAVAILABLE, VERIFIED]
+        '401': { description: Sessão ausente/expirada }
+        '403': { description: Associação administrativa inválida ou revogada }
+components:
+  securitySchemes:
+    adminSession:
+      type: apiKey
+      in: cookie
+      name: AGDSESSION
+  schemas:
+    Subscription:
+      type: object
+      required: [subscriptionId, status, trialStartedAt, trialEndsAt, version]
+      properties:
+        subscriptionId: { type: string, format: uuid }
+        status: { type: string, enum: [TRIALING, SUSPENDED] }
+        trialStartedAt: { type: string, format: date-time }
+        trialEndsAt: { type: string, format: date-time }
+        version: { type: integer, minimum: 1 }
+    Plan:
+      type: object
+      required: [code, billingFrequency, recurring, annualEquivalentMonthlyPayments]
+      properties:
+        code: { type: string, enum: [MONTHLY, ANNUAL] }
+        billingFrequency: { type: string, enum: [MONTHLY, ANNUAL] }
+        recurring: { type: boolean }
+        annualEquivalentMonthlyPayments:
+          anyOf:
+            - { type: integer, const: 10 }
+            - { type: 'null' }

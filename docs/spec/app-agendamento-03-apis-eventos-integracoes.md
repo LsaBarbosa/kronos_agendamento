@@ -435,6 +435,8 @@ Ativação por reconciliação seleciona uma falta contribuinte na janela ainda 
 
 Não aceitar `paymentConfirmed=true` do frontend. Confirmação vem do webhook autenticado ou consulta direta ao provedor.
 
+AGD-040 expõe em `GET /api/v1/admin/subscription` o trial/assinatura do tenant da associação autenticada e as ofertas `MONTHLY`/`ANNUAL`, com `Cache-Control: no-store`. A oferta anual informa equivalência a dez mensalidades, sem introduzir preço ou moeda. A concessão é iniciada somente por provisionamento server-side que receba identidade opaca de fonte confiável. Sem fonte configurada ou com resultado inconclusivo, `subscription` é `null`, a elegibilidade é `VERIFICATION_UNAVAILABLE` e não se concede trial. O trial válido dura 14 dias; considera-se expirado em `now >= trialEndsAt`, quando passa a `SUSPENDED`, sem tolerância de `PAST_DUE`. Não há comando de escolha/checkout nesta história. Selecionar uma oferta não altera o estado nem comprova pagamento. O endpoint não recebe tenantId nem identidade comercial.
+
 ### Exportações
 
 | Método | Endpoint | Uso |

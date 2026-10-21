@@ -37,11 +37,12 @@ public record AuditEvent(
                 && (actorRef.equals("CONTROLLED_TENANT_PROVISIONER")
                     || actorRef.equals("CONTROLLED_DEMO_PROVISIONER")
                     || actorRef.equals("PUBLIC_BOOKING")
-                    || actorRef.equals("NO_SHOW_POLICY"))
+                    || actorRef.equals("NO_SHOW_POLICY")
+                    || actorRef.equals("SUBSCRIPTION_LIFECYCLE"))
             || actorType.equals("CLIENT") && actorRef.equals("VERIFIED_CLIENT"))
         || !result.equals("COMMITTED")
         || !action.matches(
-            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|CLIENT_NO_SHOW_POLICY_UPDATED|CLIENT_SELF_BOOKING_(BLOCKED|UNBLOCKED|RECONCILED)|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)|PUBLICATION_(PUBLISHED|UNPUBLISHED)|PUBLIC_PROFILE_UPDATED|APPOINTMENT_CONFIRMED|APPOINTMENT_RESCHEDULED|APPOINTMENT_CANCELLED_BY_PROVIDER|APPOINTMENT_CANCELLED_BY_CLIENT|APPOINTMENT_COMPLETED|APPOINTMENT_NO_SHOW_RECORDED|APPOINTMENT_NO_SHOW_CORRECTED")) {
+            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|CLIENT_NO_SHOW_POLICY_UPDATED|CLIENT_SELF_BOOKING_(BLOCKED|UNBLOCKED|RECONCILED)|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)|PUBLICATION_(PUBLISHED|UNPUBLISHED)|PUBLIC_PROFILE_UPDATED|APPOINTMENT_CONFIRMED|APPOINTMENT_RESCHEDULED|APPOINTMENT_CANCELLED_BY_PROVIDER|APPOINTMENT_CANCELLED_BY_CLIENT|APPOINTMENT_COMPLETED|APPOINTMENT_NO_SHOW_RECORDED|APPOINTMENT_NO_SHOW_CORRECTED|SUBSCRIPTION_TRIAL_GRANTED|SUBSCRIPTION_TRIAL_EXPIRED")) {
       throw new IllegalArgumentException("Ator ou resultado de auditoria inválido");
     }
     if (((actorType.equals("ADMIN") || actorType.equals("CLIENT")) && actorId == null)
@@ -125,6 +126,16 @@ public record AuditEvent(
                   && detailsJson.matches(
                       "\\{\\\"changed_fields\\\":\\[\\\"status\\\"\\],\\\"version_before\\\":[1-9][0-9]*,\\\"version_after\\\":[1-9][0-9]*,\\\"reason_provided\\\":true\\}")
                   && validOutcomeDetails(detailsJson);
+          case "SUBSCRIPTION_TRIAL_GRANTED" ->
+              actorType.equals("SYSTEM")
+                  && actorRef.equals("SUBSCRIPTION_LIFECYCLE")
+                  && detailsJson.equals(
+                      "{\"changed_fields\":[\"subscription\"],\"version_before\":0,\"version_after\":1}");
+          case "SUBSCRIPTION_TRIAL_EXPIRED" ->
+              actorType.equals("SYSTEM")
+                  && actorRef.equals("SUBSCRIPTION_LIFECYCLE")
+                  && detailsJson.equals(
+                      "{\"changed_fields\":[\"subscription\"],\"version_before\":1,\"version_after\":2}");
           case "APPOINTMENT_CANCELLED_BY_CLIENT" ->
               actorType.equals("CLIENT")
                   && actorRef.equals("VERIFIED_CLIENT")

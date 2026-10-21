@@ -361,6 +361,8 @@ Política ausente é `NOT_CONFIGURED`, sem limite padrão. Contagem e fatos cont
 - O tenant pode configurar e publicar durante o trial.
 - Antes do fim, comunicar prazo e ação necessária.
 
+**Pendência de elegibilidade:** a especificação ainda não define a fonte, o identificador nem a verificação da “identidade comercial” usada para evitar trial repetido após recriação do tenant. Não inferir esse identificador de slug, e-mail, subject OIDC ou dado autodeclarado. O núcleo aceita apenas identidade opaca retornada por porta server-side confiável; enquanto a fonte real não for escolhida e configurada, concessões em produção permanecem desabilitadas. A concessão persistida é única por identidade e a validade termina exatamente quando `now >= trialEndsAt`, com transição `TRIALING → SUSPENDED`; os sete dias de `PAST_DUE` não são tolerância de trial.
+
 ### 12.3 Pagamento e inadimplência
 
 - Tentativas de cobrança em D0, D+3 e D+6.

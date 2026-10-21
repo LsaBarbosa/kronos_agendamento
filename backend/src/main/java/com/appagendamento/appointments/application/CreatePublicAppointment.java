@@ -157,6 +157,9 @@ public class CreatePublicAppointment {
     agendaLock.acquire(tenantId);
     gate.protectPublicationUntilCommit(slug, tenantId);
     gate.requireVisibleTenant(slug, tenantId);
+    if (!gate.allowsNewPublicAppointments(tenantId)) {
+      throw new PublicAppointmentUnavailableException();
+    }
     ServiceAvailabilityView service = requireActiveService(tenantId, serviceId);
     Optional<ValidatedAppointmentSlot> currentSlot =
         slots.findCurrentSlot(tenantId, serviceId, requestedStart);
