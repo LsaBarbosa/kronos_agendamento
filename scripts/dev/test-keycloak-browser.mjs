@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 
 const chromePath = process.env.CHROME_BIN || '/usr/bin/google-chrome';
@@ -2934,6 +2934,107 @@ try {
         throw new Error('Expiração do trial impediu a consulta administrativa da reserva existente.');
     }
     console.log('Browser: trial persistido atravessou reload; vencimento foi materializado em SUSPENDED/v2, bloqueou disponibilidade nova e preservou consulta da reserva existente.');
+
+    await waitForText('Selecionar plano', evaluate);
+    await clickButtonByText('Selecionar plano', evaluate);
+    const checkoutRetryScript = await command('Page.addScriptToEvaluateOnNewDocument', {
+        source: `(() => {
+          const originalFetch = window.fetch.bind(window);
+          window.__checkoutRequests = [];
+          window.fetch = async (input, init) => {
+            const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+            if (url.pathname !== '/api/v1/admin/subscription/checkout') return originalFetch(input, init);
+            const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+            window.__checkoutRequests.push({key:headers.get('Idempotency-Key'), body:init?.body || ''});
+            const response = await originalFetch(input, init);
+            if (window.__checkoutRequests.length === 1 && response.ok) throw new TypeError('Simulated checkout response lost after commit');
+            return response;
+          };
+        })();`,
+    });
+    await command('Page.reload', { ignoreCache: true });
+    await waitForText('Trial encerrado', evaluate);
+    await waitForText('Operação preparada: MONTHLY', evaluate);
+    await clickButtonByText('Iniciar ou recuperar a mesma operação', evaluate);
+    await waitForText('Não foi possível confirmar o resultado.', evaluate);
+    const pendingCheckoutIntent = await evaluate(`({
+      requests: window.__checkoutRequests,
+      intent: document.querySelector('[aria-label="Operação de checkout pendente"]')?.innerText,
+      stored: sessionStorage.getItem('agd041.checkout-intent.v1'),
+    })`);
+    if (pendingCheckoutIntent.requests?.length !== 1 || !pendingCheckoutIntent.intent || !pendingCheckoutIntent.stored) {
+        throw new Error(`Intenção de checkout não foi preservada após perda de resposta: ${JSON.stringify(pendingCheckoutIntent)}`);
+    }
+    await clickButtonByText('Iniciar ou recuperar a mesma operação', evaluate);
+    await waitForText('Sessão de checkout hospedado criada.', evaluate);
+    const checkoutReplay = await evaluate(`({
+      requests: window.__checkoutRequests,
+      result: document.querySelector('[aria-label="Resultado do checkout"]')?.innerText,
+      intent: sessionStorage.getItem('agd041.checkout-intent.v1'),
+    })`);
+    if (
+        checkoutReplay.requests?.length !== 2 ||
+        checkoutReplay.requests[0].key !== checkoutReplay.requests[1].key ||
+        checkoutReplay.requests[0].body !== checkoutReplay.requests[1].body ||
+        checkoutReplay.intent !== null ||
+        !checkoutReplay.result?.includes('CHECKOUT_READY')
+    ) {
+        throw new Error(`Retry não recuperou a mesma operação de checkout: ${JSON.stringify(checkoutReplay)}`);
+    }
+    await command('Page.removeScriptToEvaluateOnNewDocument', { identifier: checkoutRetryScript.identifier });
+    const checkoutOperationId = checkoutReplay.result.match(/Operação ([0-9a-f-]{36})/i)?.[1];
+    if (!checkoutOperationId) throw new Error('ID lógico do checkout não apareceu no DOM.');
+    await command('Page.reload');
+    await waitForText('Operações existentes', evaluate);
+    await clickButtonByText(`Recuperar operação ${checkoutOperationId}`, evaluate);
+    await waitForText('Operação recuperada.', evaluate);
+    const recoveredAfterReload = await evaluate(`({
+      result: document.querySelector('[aria-label="Resultado do checkout"]')?.innerText,
+      link: document.querySelector('[aria-label="Resultado do checkout"] a')?.href,
+    })`);
+    if (!recoveredAfterReload.result?.includes(checkoutOperationId) || !recoveredAfterReload.link?.startsWith('https://')) {
+        throw new Error(`Checkout hospedado não foi recuperado após reload: ${JSON.stringify(recoveredAfterReload)}`);
+    }
+    const invalidEventBody = JSON.stringify({eventId: `invalid-${checkoutOperationId}`, reference: `e2e-${checkoutOperationId}`, sequence: 1, outcome: 'CONFIRMED', amountMinorUnits: 1, currency: 'XTS', occurredAt: new Date().toISOString(), paidThroughAt: new Date(Date.now() + 30 * 86400000).toISOString()});
+    const invalidEventResponse = await fetch(`http://localhost:${appEnvironment.APP_PORT || 8080}/api/v1/webhooks/payments/e2e`, {
+        method: 'POST', headers: {'Content-Type': 'application/json', 'X-Payment-Signature': 'sha256=invalid'}, body: invalidEventBody,
+    });
+    if (invalidEventResponse.status !== 401) throw new Error(`Webhook inválido não foi rejeitado: HTTP ${invalidEventResponse.status}`);
+    const invalidEventRows = Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_event_inbox WHERE provider_event_id = 'invalid-${checkoutOperationId}'`, appEnvironment));
+    const preConfirmationStatus = queryPostgres(`SELECT status FROM agendamento.subscription WHERE subscription_id = '${activeTrial.subscriptionId}'`, appEnvironment);
+    if (invalidEventRows !== 0 || preConfirmationStatus !== 'SUSPENDED') {
+        throw new Error(`Webhook inválido alterou o estado comercial: ${JSON.stringify({invalidEventRows, preConfirmationStatus})}`);
+    }
+    const eventSecret = 'e2e-only-synthetic-payment-webhook-secret-000000000000';
+    async function sendSyntheticPaymentEvent(event) {
+        const body = JSON.stringify(event);
+        const signature = createHmac('sha256', eventSecret).update(body).digest('hex');
+        return fetch(`http://localhost:${appEnvironment.APP_PORT || 8080}/api/v1/webhooks/payments/e2e`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-Payment-Signature': `sha256=${signature}`},
+            body,
+        });
+    }
+    const providerReference = `e2e-${checkoutOperationId}`;
+    const paidThroughAt = new Date(Date.now() + 30 * 86400000).toISOString();
+    const confirmation = {eventId: `confirmation-${checkoutOperationId}`, reference: providerReference, sequence: 2, outcome: 'CONFIRMED', amountMinorUnits: 1, currency: 'XTS', occurredAt: new Date().toISOString(), paidThroughAt};
+    const confirmationResponse = await sendSyntheticPaymentEvent(confirmation);
+    if (confirmationResponse.status !== 202) throw new Error(`Evidência E2E válida não foi admitida: HTTP ${confirmationResponse.status}`);
+    const duplicateResponse = await sendSyntheticPaymentEvent(confirmation);
+    if (duplicateResponse.status !== 200) throw new Error(`Webhook repetido não foi reconhecido: HTTP ${duplicateResponse.status}`);
+    const olderResponse = await sendSyntheticPaymentEvent({...confirmation, eventId: `older-${checkoutOperationId}`, sequence: 1, outcome: 'DECLINED', paidThroughAt: undefined});
+    if (olderResponse.status !== 202) throw new Error(`Evento fora de ordem não foi admitido para dedupe: HTTP ${olderResponse.status}`);
+    await command('Page.reload');
+    await waitForText('Assinatura ativa', evaluate);
+    const checkoutRows = Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_checkout_operation WHERE operation_id = '${checkoutOperationId}' AND state = 'CONFIRMED'`, appEnvironment));
+    const paymentHistoryRows = Number(queryPostgres(`SELECT count(*) FROM agendamento.subscription_history WHERE operation_id = '${checkoutOperationId}' AND event_type = 'PAYMENT_CONFIRMED'`, appEnvironment));
+    const paymentAuditRows = Number(queryPostgres(`SELECT count(*) FROM agendamento.audit_event WHERE correlation_id = '${checkoutOperationId}' AND action = 'SUBSCRIPTION_PAYMENT_CONFIRMED'`, appEnvironment));
+    const paymentOutboxRows = Number(queryPostgres(`SELECT count(*) FROM agendamento.outbox_event WHERE operation_id = '${checkoutOperationId}' AND event_type = 'SubscriptionReactivated'`, appEnvironment));
+    const currentSubscription = await evaluate("fetch('/api/v1/admin/subscription', {credentials:'same-origin', cache:'no-store'}).then(response => response.json()).then(body => body.subscription)");
+    if (checkoutRows !== 1 || paymentHistoryRows !== 1 || paymentAuditRows !== 1 || paymentOutboxRows !== 1 || currentSubscription?.status !== 'ACTIVE' || currentSubscription?.planCode !== 'MONTHLY') {
+        throw new Error(`Confirmação de pagamento sintética não foi aplicada uma única vez: ${JSON.stringify({checkoutRows, paymentHistoryRows, paymentAuditRows, paymentOutboxRows, currentSubscription})}`);
+    }
+    console.log('Browser E2E: checkout sintético com resposta perdida recuperou a mesma chave/operação após reload; webhook inválido não alterou assinatura/inbox, evento autenticado duplicado/out-of-order manteve estado, histórico, auditoria e outbox únicos. Sem fornecedor ou cobrança real.');
 
     await command('Network.clearBrowserCookies');
     await navigate('http://localhost:5173/admin', command, evaluate);

@@ -47,7 +47,8 @@ public class SecurityConfiguration {
         .csrf(
             csrf ->
                 csrf.ignoringRequestMatchers(
-                    SecurityConfiguration::isAnonymousPublicTelemetryRequest))
+                    SecurityConfiguration::isAnonymousPublicTelemetryRequest,
+                    SecurityConfiguration::isPaymentWebhookRequest))
         .formLogin(AbstractHttpConfigurer::disable)
         .httpBasic(AbstractHttpConfigurer::disable)
         .requestCache(AbstractHttpConfigurer::disable)
@@ -74,6 +75,8 @@ public class SecurityConfiguration {
                     .requestMatchers(HttpMethod.POST, "/api/v1/public/*/telemetry")
                     .permitAll()
                     .requestMatchers(HttpMethod.POST, "/api/v1/public/*/appointments")
+                    .permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/v1/webhooks/payments/*")
                     .permitAll()
                     .requestMatchers(HttpMethod.POST, "/api/v1/public/*/access-challenges")
                     .permitAll()
@@ -163,6 +166,12 @@ public class SecurityConfiguration {
     String requestPath = request.getRequestURI().substring(request.getContextPath().length());
     return servletPath.matches("/api/v1/public/[^/]+/telemetry")
         || requestPath.matches("/api/v1/public/[^/]+/telemetry");
+  }
+
+  private static boolean isPaymentWebhookRequest(jakarta.servlet.http.HttpServletRequest request) {
+    if (!"POST".equals(request.getMethod())) return false;
+    String path = request.getRequestURI().substring(request.getContextPath().length());
+    return path.matches("/api/v1/webhooks/payments/[a-z0-9][a-z0-9._-]{0,47}");
   }
 
   private static AuthenticationFailureHandler authenticationFailureHandler() {

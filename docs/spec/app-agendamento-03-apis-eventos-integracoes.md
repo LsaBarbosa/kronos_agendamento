@@ -437,6 +437,14 @@ Não aceitar `paymentConfirmed=true` do frontend. Confirmação vem do webhook a
 
 AGD-040 expõe em `GET /api/v1/admin/subscription` o trial/assinatura do tenant da associação autenticada e as ofertas `MONTHLY`/`ANNUAL`, com `Cache-Control: no-store`. A oferta anual informa equivalência a dez mensalidades, sem introduzir preço ou moeda. A concessão é iniciada somente por provisionamento server-side que receba identidade opaca de fonte confiável. Sem fonte configurada ou com resultado inconclusivo, `subscription` é `null`, a elegibilidade é `VERIFICATION_UNAVAILABLE` e não se concede trial. O trial válido dura 14 dias; considera-se expirado em `now >= trialEndsAt`, quando passa a `SUSPENDED`, sem tolerância de `PAST_DUE`. Não há comando de escolha/checkout nesta história. Selecionar uma oferta não altera o estado nem comprova pagamento. O endpoint não recebe tenantId nem identidade comercial.
 
+#### AGD-041 — checkout hospedado e evidência de pagamento
+
+`POST /api/v1/admin/subscription/checkout` recebe somente `planCode` (`MONTHLY`/`ANNUAL`) e `expectedVersion`, além de `Idempotency-Key`. Tenant/ator vêm da sessão e associação atual. O servidor resolve preço, moeda, versão da oferta e termos; sem oferta completa e provider configurado retorna indisponibilidade sem chamar serviço externo nem criar operação. O checkout deve ser hospedado/tokenizado pelo provider; nenhum dado completo de cartão é aceito pela API. A operação persistida mantém snapshot mínimo dos termos e identidade estável; resposta perdida/retry recupera a mesma operação. Uma chamada externa incerta não autoriza novo checkout lógico ou reenvio cego.
+
+`GET /api/v1/admin/subscription/payment-attempts` e `GET /api/v1/admin/subscription/payment-attempts/{operationId}` são tenant-scoped, minimizados e `no-store`; consulta/reconciliação usa a identidade original e não cria outra cobrança. `CHECKOUT_READY` e redirect são apenas sessão hospedada criada, não pagamento confirmado. Somente evidência autoritativa autenticada e correlacionada pode promover a assinatura para `ACTIVE`; preço/moeda da evidência devem coincidir com o snapshot do servidor. O frontend não envia estado de pagamento.
+
+`POST /api/v1/webhooks/payments/{provider}` é estruturalmente reservado a adapters específicos. Body bruto, cabeçalhos, timestamp, autenticidade e proteção de replay seguem o contrato oficial do provider aprovado. Não existe protocolo genérico aceito em produção: sem adapter autenticador configurado, a rota falha fechada e não persiste eventos. Corpo admitido é limitado a 65536 bytes; inválido não altera assinatura. Eventos autenticados são deduplicados por provider/conta/evento, correlacionados exclusivamente a operação/referência persistida e processados sob ordenação autoritativa. Evento duplicado não repete efeito; evento antigo não reverte fato mais novo. Adapters sintéticos e seus headers são exclusivos de E2E.
+
 ### Exportações
 
 | Método | Endpoint | Uso |

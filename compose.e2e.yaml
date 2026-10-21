@@ -17,3 +17,4 @@ services:
       CLIENT_ACCESS_COOKIE_SECURE: "false"
       CLIENT_ACCESS_E2E_EMITTER_ENABLED: "true"
       CLIENT_ACCESS_E2E_EMITTER_SECRET: e2e-only-synthetic-emitter-secret-000000000000
+      APP_BILLING_E2E_WEBHOOK_SECRET: e2e-only-synthetic-payment-webhook-secret-000000000000

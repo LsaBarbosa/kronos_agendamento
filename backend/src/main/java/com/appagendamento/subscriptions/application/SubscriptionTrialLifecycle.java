@@ -43,8 +43,13 @@ public class SubscriptionTrialLifecycle implements PublicSubscriptionEligibility
       current = subscriptions.findCurrent(tenantId);
     }
     return current
-        .filter(value -> value.status().equals("TRIALING"))
-        .filter(value -> asOf.isBefore(value.trialEndsAt()))
+        .filter(
+            value ->
+                value.status().equals("TRIALING")
+                    ? asOf.isBefore(value.trialEndsAt())
+                    : value.status().equals("ACTIVE")
+                        && value.paidThroughAt() != null
+                        && asOf.isBefore(value.paidThroughAt()))
         .isPresent();
   }
 

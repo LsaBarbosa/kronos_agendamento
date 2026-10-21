@@ -1,5 +1,14 @@
 # Evidências de validação — AGD-001
 
+## AGD-041 — checkout e webhook financeiro (21/10/2026)
+
+- Base integrada: AGD-040 merge commit `d5bac636310780b699a2c471acbb0c3d50a2a580`; App CI [39634803499](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39634803499) e CodeQL [39634803343](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39634803343) success pós-merge.
+- Implementação: V32 preserva V1–V31 e cria operações/inbox financeiros; PostgreSQL/Testcontainers cobre instalação e upgrade, Flyway validate/rerun e grants. Provider/oferta normais falham fechados. Webhook autentica/configuração específica antes de persistir; corpo acima de 65.536 bytes recebe 413 sem persistência. Confirmação faz CAS da assinatura, histórico, auditoria minimizada, correlação/receipt e `SubscriptionReactivated` na mesma transação.
+- Comando final dirigido: `cd backend && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check -Dtest=SecurityBoundaryTest -Dit.test=BillingWebhookIT,TenantPersistenceIT verify` — `BUILD SUCCESS`; 7 unitários/segurança e 36 integrações PostgreSQL 16.13/Testcontainers (TenantPersistenceIT 30 + BillingWebhookIT 6), sem falhas. Inclui instalação/upgrade V32, Flyway validate/rerun/grants, rollback e concorrência de checkout.
+- Frontend: `PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH npm run format:check && npm run lint && npm test -- --run && npm run check` — passou; 23 Vitest, TypeScript e build Vite. `/home/kronos/.nvm/versions/node/v24.14.1/bin/node --check scripts/dev/test-keycloak-browser.mjs` e `git diff --check` passaram. O E2E usa fixtures de provider/webhook sintéticas, sem sandbox ou operação financeira real.
+- E2E Chrome local: não executado; `docker compose ps` mostrou somente Keycloak, Keycloak PostgreSQL e PostgreSQL da aplicação, sem backend/frontend. A composição compartilhada não foi reiniciada; o browser E2E do App CI deverá comprovar o fluxo sintético.
+- Fornecedor, sandbox, oferta/preço/moeda, credenciais gerenciadas, retenção, prontidão legal/comercial e homologação permanecem pendentes.
+
 ## AGD-040 — constraint de histórico e regressões P2 (21/10/2026)
 
 - Base conferida antes da edição: branch `agd-040-trial-planos`, head `5d7b9849c6f937bdbb1af072ffa7bb4f12ada5e8`; sem alterações locais prévias.

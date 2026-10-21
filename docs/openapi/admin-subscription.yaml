@@ -1,10 +1,12 @@
 openapi: 3.1.0
 info:
-  title: App Agendamento — assinatura administrativa (AGD-040)
+  title: App Agendamento — assinatura administrativa (AGD-040/041)
   version: 1.0.0
   description: >-
-    Leitura tenant-scoped de estado comercial e apresentação de planos. Não inicia
-    checkout, não confirma pagamento e não concede trial sem identidade elegível verificada por fonte confiável do servidor.
+    Leitura tenant-scoped de estado comercial e ofertas fornecidas pelo servidor.
+    Checkout só começa com oferta e provider configurados. A seleção do plano e o
+    retorno do navegador nunca confirmam pagamento. A produção permanece fail-closed
+    sem integração financeira aprovada e configurada.
 servers:
   - url: /
 paths:
@@ -24,7 +26,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [subscription, plans, trialEligibilityPending, commercialEligibility]
+                required: [subscription, plans, checkoutOffers, checkoutAvailable, trialEligibilityPending, commercialEligibility]
                 properties:
                   subscription:
                     oneOf:
@@ -33,12 +35,94 @@ paths:
                   plans:
                     type: array
                     items: { $ref: '#/components/schemas/Plan' }
+                  checkoutOffers:
+                    type: array
+                    items: { $ref: '#/components/schemas/CheckoutOffer' }
+                  checkoutAvailable: { type: boolean }
                   trialEligibilityPending: { type: boolean }
                   commercialEligibility:
                     type: string
                     enum: [VERIFICATION_UNAVAILABLE, VERIFIED]
         '401': { description: Sessão ausente/expirada }
         '403': { description: Associação administrativa inválida ou revogada }
+  /api/v1/admin/subscription/checkout:
+    post:
+      operationId: startAdminSubscriptionCheckout
+      summary: Criar ou recuperar a intenção de checkout hospedado
+      description: >-
+        O servidor resolve preço, moeda, versão de oferta e termos. O corpo não
+        aceita valores financeiros nem dados de cartão. A mesma chave/body recupera
+        a operação; resultado incerto não autoriza uma nova cobrança lógica.
+      security:
+        - adminSession: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [planCode, expectedVersion]
+              properties:
+                planCode: { type: string, enum: [MONTHLY, ANNUAL] }
+                expectedVersion: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: Estado da operação; CHECKOUT_READY não significa pagamento confirmado
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CheckoutOperation' }
+        '401': { description: Sessão ausente/expirada }
+        '403': { description: Associação inválida ou revogada }
+        '409': { description: Versão incompatível, checkout concorrente ou chave reutilizada com conteúdo divergente }
+        '503': { description: Oferta, checkout hospedado ou integração não configurados }
+  /api/v1/admin/subscription/payment-attempts:
+    get:
+      operationId: listAdminCheckoutOperations
+      summary: Listar operações de checkout minimizadas do tenant autenticado
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: Operações sem dados de cartão nem payload bruto do provedor
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CheckoutAttempt' }
+        '401': { description: Sessão ausente/expirada }
+        '403': { description: Associação inválida ou revogada }
+  /api/v1/admin/subscription/payment-attempts/{operationId}:
+    get:
+      operationId: getAdminCheckoutOperation
+      summary: Consultar e reconciliar a mesma operação de checkout
+      security:
+        - adminSession: []
+      parameters:
+        - in: path
+          name: operationId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Estado atual minimizado; consulta não cria nova cobrança
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CheckoutOperation' }
+        '404': { description: Operação inexistente ou não pertencente ao tenant autenticado }
+        '401': { description: Sessão ausente/expirada }
+        '403': { description: Associação inválida ou revogada }
 components:
   securitySchemes:
     adminSession:
@@ -48,12 +132,14 @@ components:
   schemas:
     Subscription:
       type: object
-      required: [subscriptionId, status, trialStartedAt, trialEndsAt, version]
+      required: [subscriptionId, status, trialStartedAt, trialEndsAt, planCode, paidThroughAt, version]
       properties:
         subscriptionId: { type: string, format: uuid }
-        status: { type: string, enum: [TRIALING, SUSPENDED] }
-        trialStartedAt: { type: string, format: date-time }
-        trialEndsAt: { type: string, format: date-time }
+        status: { type: string, enum: [TRIALING, SUSPENDED, ACTIVE] }
+        trialStartedAt: { type: [string, 'null'], format: date-time }
+        trialEndsAt: { type: [string, 'null'], format: date-time }
+        planCode: { type: [string, 'null'], enum: [MONTHLY, ANNUAL, null] }
+        paidThroughAt: { type: [string, 'null'], format: date-time }
         version: { type: integer, minimum: 1 }
     Plan:
       type: object
@@ -66,3 +152,34 @@ components:
           anyOf:
             - { type: integer, const: 10 }
             - { type: 'null' }
+    CheckoutOffer:
+      type: object
+      required: [planCode, amountMinorUnits, currency, termsVersion, offerVersion]
+      properties:
+        planCode: { type: string, enum: [MONTHLY, ANNUAL] }
+        amountMinorUnits: { type: integer, minimum: 1 }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        termsVersion: { type: string }
+        offerVersion: { type: string }
+    CheckoutOperation:
+      type: object
+      required: [operationId, planCode, state, amountMinorUnits, currency, termsVersion, createdAt, redirectUrl, replayed]
+      properties:
+        operationId: { type: string, format: uuid }
+        planCode: { type: string, enum: [MONTHLY, ANNUAL] }
+        state: { type: string, enum: [REQUESTED, SUBMITTING, CHECKOUT_READY, OUTCOME_UNKNOWN, CONFIRMED, DECLINED] }
+        amountMinorUnits: { type: integer, minimum: 1 }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        termsVersion: { type: string }
+        createdAt: { type: string, format: date-time }
+        redirectUrl: { type: [string, 'null'], format: uri }
+        replayed: { type: boolean }
+    CheckoutAttempt:
+      type: object
+      required: [operationId, planCode, state, createdAt, expectedSubscriptionVersion]
+      properties:
+        operationId: { type: string, format: uuid }
+        planCode: { type: string, enum: [MONTHLY, ANNUAL] }
+        state: { type: string, enum: [REQUESTED, SUBMITTING, CHECKOUT_READY, OUTCOME_UNKNOWN, CONFIRMED, DECLINED] }
+        createdAt: { type: string, format: date-time }
+        expectedSubscriptionVersion: { type: integer, minimum: 0 }

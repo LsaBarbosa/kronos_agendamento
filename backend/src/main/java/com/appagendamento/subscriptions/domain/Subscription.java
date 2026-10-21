@@ -9,4 +9,6 @@ public record Subscription(
     String status,
     Instant trialStartedAt,
     Instant trialEndsAt,
+    String planCode,
+    Instant paidThroughAt,
     long version) {}
