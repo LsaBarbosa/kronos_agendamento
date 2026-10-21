@@ -6,6 +6,7 @@ import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.sql.SQLException;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,27 +51,34 @@ public class SecurityErrorWriter implements AuthenticationEntryPoint, AccessDeni
     Object errorUriAttribute = request.getAttribute(RequestDispatcher.ERROR_REQUEST_URI);
     String errorUri = errorUriAttribute instanceof String value ? value : "";
     Object errorExceptionAttribute = request.getAttribute(RequestDispatcher.ERROR_EXCEPTION);
-    String errorExceptionType = exceptionType(errorExceptionAttribute);
+    Throwable originalException = rootCause(errorExceptionAttribute);
+    String errorExceptionType =
+        originalException == null ? "unavailable" : originalException.getClass().getSimpleName();
+    String sqlState =
+        originalException instanceof SQLException sql ? sql.getSQLState() : "unavailable";
+    int sqlErrorCode = originalException instanceof SQLException sql ? sql.getErrorCode() : 0;
     boolean webhookRequest = isPaymentWebhookUri(requestUri);
     boolean webhookErrorDispatch = !webhookRequest && isPaymentWebhookUri(errorUri);
     if (webhookRequest || webhookErrorDispatch) {
       LOGGER.warn(
-          "payment_webhook_security_failure status={} dispatch={} error_target={} exception_type={} original_exception_type={}",
+          "payment_webhook_security_failure status={} dispatch={} error_target={} exception_type={} original_exception_type={} original_sql_state={} original_sql_error_code={}",
           status,
           request.getDispatcherType().name(),
           webhookErrorDispatch,
           exception.getClass().getSimpleName(),
-          errorExceptionType);
+          errorExceptionType,
+          sqlState == null ? "unavailable" : sqlState,
+          sqlErrorCode);
     }
   }
 
-  private String exceptionType(Object value) {
-    if (!(value instanceof Throwable failure)) return "unavailable";
+  private Throwable rootCause(Object value) {
+    if (!(value instanceof Throwable failure)) return null;
     Throwable root = failure;
     for (int depth = 0; depth < 8 && root.getCause() != null && root.getCause() != root; depth++) {
       root = root.getCause();
     }
-    return root.getClass().getSimpleName();
+    return root;
   }
 
   private boolean isPaymentWebhookUri(String uri) {
