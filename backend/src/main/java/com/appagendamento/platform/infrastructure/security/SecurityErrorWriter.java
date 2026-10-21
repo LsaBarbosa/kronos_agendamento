@@ -49,16 +49,28 @@ public class SecurityErrorWriter implements AuthenticationEntryPoint, AccessDeni
     String requestUri = request.getRequestURI();
     Object errorUriAttribute = request.getAttribute(RequestDispatcher.ERROR_REQUEST_URI);
     String errorUri = errorUriAttribute instanceof String value ? value : "";
+    Object errorExceptionAttribute = request.getAttribute(RequestDispatcher.ERROR_EXCEPTION);
+    String errorExceptionType = exceptionType(errorExceptionAttribute);
     boolean webhookRequest = isPaymentWebhookUri(requestUri);
     boolean webhookErrorDispatch = !webhookRequest && isPaymentWebhookUri(errorUri);
     if (webhookRequest || webhookErrorDispatch) {
       LOGGER.warn(
-          "payment_webhook_security_failure status={} dispatch={} error_target={} exception_type={}",
+          "payment_webhook_security_failure status={} dispatch={} error_target={} exception_type={} original_exception_type={}",
           status,
           request.getDispatcherType().name(),
           webhookErrorDispatch,
-          exception.getClass().getSimpleName());
+          exception.getClass().getSimpleName(),
+          errorExceptionType);
     }
+  }
+
+  private String exceptionType(Object value) {
+    if (!(value instanceof Throwable failure)) return "unavailable";
+    Throwable root = failure;
+    for (int depth = 0; depth < 8 && root.getCause() != null && root.getCause() != root; depth++) {
+      root = root.getCause();
+    }
+    return root.getClass().getSimpleName();
   }
 
   private boolean isPaymentWebhookUri(String uri) {
