@@ -77,6 +77,7 @@ public class E2ePaymentWebhookAuthenticator implements PaymentWebhookAuthenticat
               json.hasNonNull("paidThroughAt")
                   ? Instant.parse(json.path("paidThroughAt").asString())
                   : null);
+      LOGGER.info("payment_webhook_e2e authenticated_event");
       return Optional.of(event);
     } catch (RuntimeException invalid) {
       LOGGER.warn("payment_webhook_e2e rejected reason=authenticated_payload_invalid");

@@ -3027,7 +3027,9 @@ try {
         const responseError = await confirmationResponse.clone().json().catch(() => null);
         const errorCode = responseError?.error?.code;
         const safeErrorCode = typeof errorCode === 'string' && /^[A-Z0-9_]{1,64}$/.test(errorCode) ? errorCode : 'unavailable';
-        throw new Error(`Evidência E2E válida não foi admitida: HTTP ${confirmationResponse.status}, code=${safeErrorCode}`);
+        const errorTraceId = responseError?.error?.traceId;
+        const safeTraceId = typeof errorTraceId === 'string' && /^[0-9a-f-]{36}$/i.test(errorTraceId) ? errorTraceId : 'unavailable';
+        throw new Error(`Evidência E2E válida não foi admitida: HTTP ${confirmationResponse.status}, code=${safeErrorCode}, trace=${safeTraceId}`);
     }
     const duplicateResponse = await sendSyntheticPaymentEvent(confirmation);
     if (duplicateResponse.status !== 200) throw new Error(`Webhook repetido não foi reconhecido: HTTP ${duplicateResponse.status}`);
