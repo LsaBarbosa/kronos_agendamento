@@ -9,7 +9,6 @@ import java.util.HexFormat;
 import java.util.Optional;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
@@ -22,10 +21,10 @@ public class E2ePaymentWebhookAuthenticator implements PaymentWebhookAuthenticat
   private final ObjectMapper mapper;
   private final byte[] secret;
 
-  public E2ePaymentWebhookAuthenticator(
-      ObjectMapper mapper, @Value("${app.billing.e2e-webhook-secret:}") String secret) {
+  public E2ePaymentWebhookAuthenticator(ObjectMapper mapper) {
     this.mapper = mapper;
-    this.secret = secret.getBytes(StandardCharsets.UTF_8);
+    this.secret = System.getenv().getOrDefault("APP_BILLING_E2E_WEBHOOK_SECRET", "")
+        .getBytes(StandardCharsets.UTF_8);
   }
 
   @Override

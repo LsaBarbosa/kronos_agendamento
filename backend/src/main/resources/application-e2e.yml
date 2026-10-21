@@ -1,3 +1,0 @@
-app:
-  billing:
-    e2e-webhook-secret: ${APP_BILLING_E2E_WEBHOOK_SECRET:}
