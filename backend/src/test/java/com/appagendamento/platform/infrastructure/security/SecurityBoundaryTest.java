@@ -118,6 +118,9 @@ class SecurityBoundaryTest {
         .andExpect(jsonPath("$.error.code").value("AUTHENTICATION_REQUIRED"))
         .andExpect(jsonPath("$.error.traceId").value(traceId))
         .andExpect(header().string(CorrelationIdFilter.HEADER, traceId));
+    mvc.perform(get("/api/v1/admin/subscription"))
+        .andExpect(status().isUnauthorized())
+        .andExpect(jsonPath("$.error.code").value("AUTHENTICATION_REQUIRED"));
   }
 
   @Test

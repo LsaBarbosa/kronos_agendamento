@@ -361,6 +361,8 @@ Política ausente é `NOT_CONFIGURED`, sem limite padrão. Contagem e fatos cont
 - O tenant pode configurar e publicar durante o trial.
 - Antes do fim, comunicar prazo e ação necessária.
 
+**Pendência de elegibilidade:** a especificação ainda não define a fonte, o identificador nem a verificação da “identidade comercial” usada para evitar trial repetido após recriação do tenant. Não inferir esse identificador de slug, e-mail, subject OIDC ou dado autodeclarado. A concessão automática fica bloqueada até decisão de produto sobre uma fonte verificável; esta nota não altera a duração nem os estados aprovados.
+
 ### 12.3 Pagamento e inadimplência
 
 - Tentativas de cobrança em D0, D+3 e D+6.

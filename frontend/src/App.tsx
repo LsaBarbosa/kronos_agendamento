@@ -10,6 +10,7 @@ import { AdminAgendaPanel } from './AdminAgendaPanel';
 import { ClientAccessPage } from './ClientAccessPage';
 import { ClientNoShowPolicyPanel } from './ClientNoShowPolicyPanel';
 import { ClientNoShowFactsPanel } from './ClientNoShowFactsPanel';
+import { AdminSubscriptionPanel } from './AdminSubscriptionPanel';
 
 type Session = { authenticated: boolean; tenantId: string; role: string };
 type Csrf = { headerName: string; token: string };
@@ -550,6 +551,10 @@ function AdminApp() {
                         onSessionInvalid={handleNoShowPolicySessionInvalid}
                     />
                 )}
+                <AdminSubscriptionPanel
+                    enabled={Boolean(session)}
+                    onSessionInvalid={handleNoShowPolicySessionInvalid}
+                />
                 <AdminAgendaPanel
                     enabled={Boolean(session)}
                     csrf={csrf}

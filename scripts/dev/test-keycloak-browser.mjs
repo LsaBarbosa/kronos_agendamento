@@ -96,6 +96,21 @@ try {
         `Array.from(document.querySelectorAll('p')).some(paragraph => paragraph.textContent.includes('Tenant autorizado:') && paragraph.querySelector('code')?.textContent === ${JSON.stringify(authenticatedSession.tenantId)})`,
     );
     if (!tenantDisplayed) throw new Error('Tenant autorizado não apareceu na UI.');
+    await waitForText('Plano e período de avaliação', evaluate);
+    await waitForText('Cobrança anual equivalente a 10 mensalidades', evaluate);
+    const subscriptionOverview = await evaluate(
+        "fetch('/api/v1/admin/subscription', {credentials:'same-origin', cache:'no-store'}).then(async response => ({status:response.status, cache:response.headers.get('Cache-Control'), body:await response.json()}))",
+    );
+    if (
+        subscriptionOverview.status !== 200 ||
+        !subscriptionOverview.cache?.includes('no-store') ||
+        subscriptionOverview.body.subscription !== null ||
+        subscriptionOverview.body.trialEligibilityPending !== true ||
+        subscriptionOverview.body.plans.length !== 2 ||
+        subscriptionOverview.body.plans.find((plan) => plan.code === 'ANNUAL')?.annualEquivalentMonthlyPayments !== 10
+    ) {
+        throw new Error('Visão administrativa de planos/trial não corresponde ao estado sem elegibilidade verificada.');
+    }
     await waitForText('Catálogo de serviços', evaluate);
     await waitForText('Nenhum serviço cadastrado.', evaluate);
     await waitForText('Grade semanal e políticas', evaluate);
