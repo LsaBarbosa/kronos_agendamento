@@ -92,6 +92,15 @@
 - No SHA `89c48500dedda8b3ed1892d5892e7f5683e2c225`, CodeQL, verify, frontend, security e secrets passaram. Push e PR capturaram/validaram duas chamadas com mesma intenção e receipt; falharam após reload numa espera de B cujo predicado retornava HTMLElement sem booleano. Corrigido no head seguinte, CI pendente.
 - As quatro decisões foram aprovadas em 20/10/2026 e registradas acima; PR #21 continua draft durante esta continuação. Sem merge/deploy.
 
+## Follow-up P2 — identidade de nova reconciliação explícita
+
+- Referência recebida: `ab0efb24fb33f0cd40a0f7f79e602989f25d2e34`; head local/remoto e PR #21 foram confirmados nesse mesmo SHA antes da alteração, sem mudanças locais preexistentes.
+- Causa: `commandKey` mantinha em uma `Map` a chave pelo cliente e `expectedPolicyVersion`; após resultado conhecido, uma ação explícita futura com corpo igual reutilizava o receipt antigo, embora fatos/estado pudessem ter mudado.
+- Correção: reconciliação nova gera UUID criptograficamente aleatório por ação; `pendingReconciliation` continua sendo a única fonte para retry em envio/incerteza, preservando cliente, corpo e chave. O helper compartilhado não foi alterado e backend mantém o replay original.
+- E2E ampliado sem reload: confirmação de commit com resposta perdida e retry idêntico/replayed; consulta PostgreSQL de efeitos únicos; desbloqueio administrativo; segunda ação explícita com o mesmo cliente e versão da política, mas chave e `operationId` diferentes, sem replay; resultado `NO_UNUSED_CAUSAL_FACT` no DOM; estado `LIFTED`, sem segunda ativação nem duplicação de outbox.
+- Validação local: Node 24.14.1, format/lint, 23 Vitest, typecheck/build, `node --check scripts/dev/test-keycloak-browser.mjs` e `git diff --check` passaram. E2E local não foi iniciado: Docker contém somente PostgreSQL/Keycloak, sem backend/frontend; não alterei a stack persistente. E2E real passou no CI em Chrome/Keycloak/PostgreSQL no SHA `076847a7565304af3175a935fb6ef404d0d261d2` (links em `VALIDATION.md`).
+- Revisão independente não disponível: spawn de revisor em leitura foi recusado pelo limite de threads do ambiente; revisão final do coordenador é sequencial e não equivale a revisão independente ou aprovação humana. PR #21 permanece draft; sem merge, deploy ou envio real.
+
 ## Encerramento ou retomada
 - E2E do SHA `73a2ba3e934a864290a26ce644438a484105eba9` provou o P2 e detectou ainda que a correção pendente de falta permanecia bloqueada mesmo no botão de retry. A UI agora libera exclusivamente o retry correspondente a `uncertainId`; format/lint, 23 Vitest, TypeScript/build e sintaxe E2E passaram localmente. E2E não foi executado localmente porque backend/frontend do app não estavam ativos; repetir no CI do head corrigido.
 - App CI push/PR do head `37ebcf1d45174597fb18c7f211c78cbd8021cc32` passou pelos fluxos alvo, inclusive retry da correção e cancelamento após perda da resposta, mas expôs a contagem agregada de terminais desatualizada. A quinta transição era o `NO_SHOW` do cliente B; o cenário adicional de cancelamento é separado. O script agora espera cinco status/eventos, mantendo a asserção de unicidade.
