@@ -1,5 +1,15 @@
 # Evidências de validação — AGD-001
 
+## AGD-040 — constraint de histórico e regressões P2 (21/10/2026)
+
+- Base conferida antes da edição: branch `agd-040-trial-planos`, head `5d7b9849c6f937bdbb1af072ffa7bb4f12ada5e8`; sem alterações locais prévias.
+- V31 exige `CHECK (...) IS TRUE`, preserva V1–V30 e rejeita resultado SQL `UNKNOWN`; TRIAL_GRANTED inicial com origem nula permanece válido. A migration faz preflight antes de substituir a constraint e falha sem reparar/apagar/preencher legado incompatível. `scripts/db/preflight-subscription-history-v31.sql` é somente leitura.
+- `cd backend && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` — `BUILD SUCCESS`, 79 unitários/arquiteturais + 239 integrações PostgreSQL 16.13/Testcontainers. `TenantPersistenceIT` cobre fresh, V30→V31, validate/rerun/grants, transições válidas/inválidas e falha preservando legado. `PublicAppointmentIT` cobre receipt/replay após expiração e corrida reserva×expiração com Clock controlado, duas transações e lock wait PostgreSQL observado.
+- Frontend: `npm run format:check`, `npm run lint`, `npm test -- --run` (23), `npm run check` (TypeScript + Vite build) e `node --check scripts/dev/test-keycloak-browser.mjs` passaram. O roteiro pausa GET administrativo de assinatura, faz logout, libera resposta e verifica DOM sem dados privados restaurados.
+- Uma primeira verificação Spotless encontrou somente formatação nos testes novos; `spotless:apply` foi aplicado e a execução integral final passou. A primeira corrida dirigida encontrou precisão de nanossegundos incompatível com `timestamptz`; Clock/fixture foi alinhado à precisão do PostgreSQL e a prova passou sem sleeps de sincronização.
+- E2E Chrome/Keycloak local não executado: Compose compartilhado contém PostgreSQL/Keycloak, sem backend/frontend; não foi reiniciado. Sintaxe do roteiro não é execução E2E. CI do novo SHA ainda pendente.
+- Revisão independente indisponível pelo limite de threads; revisão sequencial somente, sem equivalência a aprovação humana. PR #22 permanece draft; sem merge/deploy/checkout/contratação/envio real. Fonte comercial, retenção, gates legais/termos e homologação seguem pendentes; intermitência histórica da remarcação permanece de causa desconhecida.
+
 ## AGD-032 — implementação de contagem e correção (follow-up do PR #20)
 
 - Continuação na branch `agd-032-faltas-janela-movel`, código funcional testado no commit `97bd2628232be453c989fab78c2170a9d4f2df02`, sobre o head revisado `d7ce49cc5c536a20d00d62ac935033be77258caa`. Decisões aprovadas nesta instrução e registradas em ADR-0023, requisitos e contrato: janela UTC de 12 meses de calendário `[windowStart,asOf)`, correção compensatória `NO_SHOW → COMPLETED`, política ausente `NOT_CONFIGURED` separada de `NOT_TRACKED`.

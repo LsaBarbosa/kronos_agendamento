@@ -115,6 +115,53 @@ try {
     ) {
         throw new Error('Visão administrativa não exibiu o trial sintético persistido e o catálogo esperado.');
     }
+    const subscriptionHoldScript = await command('Page.addScriptToEvaluateOnNewDocument', {
+        source: `(() => {
+          const originalFetch = window.fetch.bind(window);
+          window.fetch = async (input, init) => {
+            const response = await originalFetch(input, init);
+            const requestUrl = typeof input === 'string' ? input : input.url;
+            if (new URL(requestUrl, location.href).pathname === '/api/v1/admin/subscription' && !window.__subscriptionHoldUsed) {
+              window.__subscriptionHoldUsed = true;
+              const originalJson = response.json.bind(response);
+              response.json = async (...args) => {
+                const body = await originalJson(...args);
+                window.__subscriptionBodyParsed = true;
+                await new Promise(resolve => { window.__releaseSubscriptionBody = resolve; });
+                return body;
+              };
+            }
+            return response;
+          };
+        })();`,
+    });
+    await command('Page.reload', { ignoreCache: true });
+    await waitForText('Sessão administrativa ativa.', evaluate);
+    await waitUntil(() => evaluate('window.__subscriptionBodyParsed === true'));
+    await command('Page.removeScriptToEvaluateOnNewDocument', {
+        identifier: subscriptionHoldScript.identifier,
+    });
+    await clickButtonByText('Sair', evaluate);
+    await waitForText('Sessão local encerrada.', evaluate);
+    await evaluate('window.__releaseSubscriptionBody?.()');
+    await waitUntil(() => evaluate(`({
+      loggedOut: document.body.innerText.includes('Sessão local encerrada.'),
+      subscriptionPanel: Boolean(document.querySelector('#subscription-heading')),
+      trialRestored: document.body.innerText.includes('Trial ativo'),
+    })`).then((state) => state.loggedOut && !state.subscriptionPanel && !state.trialRestored));
+    const staleSubscriptionAfterLogout = await evaluate(`({
+      loggedOut: document.body.innerText.includes('Sessão local encerrada.'),
+      subscriptionPanel: Boolean(document.querySelector('#subscription-heading')),
+      trialRestored: document.body.innerText.includes('Trial ativo'),
+    })`);
+    if (!staleSubscriptionAfterLogout.loggedOut || staleSubscriptionAfterLogout.subscriptionPanel || staleSubscriptionAfterLogout.trialRestored) {
+        throw new Error(`GET comercial atrasado restaurou estado após logout: ${JSON.stringify(staleSubscriptionAfterLogout)}`);
+    }
+    console.log('Browser: GET administrativo de assinatura liberado após logout não restaura dados comerciais privados no DOM.');
+    await evaluate("document.querySelector('a[href*=oauth2]').click()");
+    await waitForText('Sessão administrativa ativa.', evaluate);
+    await waitForText('Plano e período de avaliação', evaluate);
+    await waitForText('Trial ativo', evaluate);
     await waitForText('Catálogo de serviços', evaluate);
     await waitForText('Nenhum serviço cadastrado.', evaluate);
     await waitForText('Grade semanal e políticas', evaluate);

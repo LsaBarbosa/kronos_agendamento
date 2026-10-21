@@ -377,6 +377,17 @@ Registro da entrega inicial AGD-033 no PR [#21](https://github.com/LsaBarbosa/kr
 - Head documental final observado `e56fc98791965385d29fa34ab499b808a1aedd2e`: App CI push [39521308153](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39521308153) e PR [39521312513](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39521312513), todos os jobs concluídos success (verify, frontend, security, secret scans e browser OIDC); CodeQL push [39521308194](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39521308194) e PR [39521312497](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39521312497), Java/Kotlin e JavaScript/TypeScript success.
 # Integração AGD-033 e AGD-040 — 21/10/2026
 
+### Correção P2 da constraint e provas complementares
+
+| Critério | Evidência | Resultado/limite |
+|---|---|---|
+| Constraint do histórico total | V31 exige `CHECK (...) IS TRUE`; `TenantPersistenceIT` aceita TRIAL_GRANTED inicial com from nulo e TRIAL_EXPIRED completo; rejeita TRIAL_EXPIRED sem origem, estados incompatíveis e versões inválidas. | PostgreSQL/Testcontainers passou; V1–V30 preservadas. |
+| Upgrade fail-closed | V30→V31 preflight detecta legado incompatível e falha sem alteração; `scripts/db/preflight-subscription-history-v31.sql` é somente leitura. | Fresh install, upgrade, validate/rerun e grants passaram; sem preflight hospedado. |
+| Replay após trial vencer | `PublicAppointmentIT.confirmedBookingReplayReturnsOriginalReceiptAfterTrialExpiry`: mesma intenção retorna recibo original sem duplicar reserva, história ou evento. | PostgreSQL real passou. |
+| Corrida reserva/expiração | `PublicAppointmentIT.publicBookingAndTrialExpirySerializeAtTheTenantLockAndUsePostLockClock`: Clock controlado, transações sincronizadas e lock wait observado; decisão pós-lock no limite. | PostgreSQL real passou sem sleeps de ordenação. |
+| GET privado obsoleto após logout | Roteiro `scripts/dev/test-keycloak-browser.mjs` pausa JSON, encerra sessão, libera resposta e verifica ausência dos dados no DOM. | Sintaxe validada; E2E local indisponível, CI no novo SHA pendente. |
+| Validação local | JDK 21 Maven/Spotless: 79 unitários/arquiteturais + 239 integrações; frontend format/lint/23 Vitest/TypeScript/build; sintaxe E2E. | Todos passaram; revisão independente indisponível por limite de threads. |
+
 | Evidência/requisito | Implementação/resultado |
 |---|---|
 | AGD-033 — integração PR #21 | Head `ce150ca1585c1b053e474789a944e490d5d47108` integrado na `main` pelo merge commit `5df1035d08a2cf2f39705b9fbc4f7ed2412da90d`. App CI pós-merge [39586871605](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39586871605) e CodeQL [39586871623](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39586871623), todos os jobs/check-runs concluídos success. Não equivale a homologação/deploy; AGD-033 permanece parcial. |

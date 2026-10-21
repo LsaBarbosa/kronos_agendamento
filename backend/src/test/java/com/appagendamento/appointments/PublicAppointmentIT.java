@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.appagendamento.appointments.api.TenantAgendaLock;
 import com.appagendamento.appointments.application.AppointmentRepository;
 import com.appagendamento.appointments.application.CorrectAdministrativeNoShow;
 import com.appagendamento.appointments.application.CreateAdministrativeAppointment;
@@ -40,6 +41,8 @@ import com.appagendamento.publicpage.application.ChangePublicationStatus;
 import com.appagendamento.publicpage.application.PublicationEvidence;
 import com.appagendamento.publicpage.application.UpdatePublicContact;
 import com.appagendamento.subscriptions.api.PublicSubscriptionEligibility;
+import com.appagendamento.subscriptions.application.SubscriptionRepository;
+import com.appagendamento.subscriptions.application.SubscriptionTrialLifecycle;
 import com.appagendamento.support.PostgresTestEnvironment;
 import java.security.SecureRandom;
 import java.time.DayOfWeek;
@@ -48,6 +51,7 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalAdjusters;
 import java.util.Base64;
 import java.util.List;
@@ -60,6 +64,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -76,6 +81,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 
 @SpringBootTest(
@@ -112,6 +119,9 @@ class PublicAppointmentIT {
   @Autowired private ReplaceClientNoShowPolicy replaceClientNoShowPolicy;
   @Autowired private ClientNoShowRestrictionActivation noShowRestrictionActivation;
   @Autowired private AppointmentRepository appointmentRepository;
+  @Autowired private SubscriptionRepository subscriptionRepository;
+  @Autowired private TenantAgendaLock tenantAgendaLock;
+  @Autowired private PlatformTransactionManager transactionManager;
   @Autowired private UpdateService updateService;
   @Autowired private SetServiceStatus setServiceStatus;
   @Autowired private MockMvc mvc;
@@ -309,6 +319,189 @@ class PublicAppointmentIT {
     submitBooking(key, body).andExpect(status().isNotFound());
     assertThat(count("appointment", tenantId)).isEqualTo(1);
     assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
+  }
+
+  @Test
+  void confirmedBookingReplayReturnsOriginalReceiptAfterTrialExpiry() throws Exception {
+    Instant bookingBeforeExpiry = Instant.now().truncatedTo(ChronoUnit.MICROS);
+    Instant trialEnd = bookingBeforeExpiry.plusSeconds(60);
+    UUID subscriptionId = UUID.randomUUID();
+    UUID grantOperationId = UUID.randomUUID();
+    org.mockito.Mockito.when(clock.instant()).thenReturn(bookingBeforeExpiry);
+    migrationJdbc.update(
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, trial_started_at, trial_ends_at, version) VALUES (?, ?, 'TRIALING', ?, ?, 1)",
+        subscriptionId,
+        tenantId,
+        java.sql.Timestamp.from(trialEnd.minusSeconds(14 * 24 * 60 * 60L)),
+        java.sql.Timestamp.from(trialEnd));
+    migrationJdbc.update(
+        "INSERT INTO agendamento.subscription_history (event_id, tenant_id, subscription_id, event_type, from_status, to_status, event_at, version, operation_id) VALUES (?, ?, ?, 'TRIAL_GRANTED', NULL, 'TRIALING', ?, 1, ?)",
+        UUID.randomUUID(),
+        tenantId,
+        subscriptionId,
+        java.sql.Timestamp.from(trialEnd.minusSeconds(14 * 24 * 60 * 60L)),
+        grantOperationId);
+
+    String key = "trial-expiry-replay-" + UUID.randomUUID();
+    String body =
+        requestBody(serviceId, requestedStart, "Reserva antes do vencimento", "+5511999991244");
+    MvcResult created = submitBooking(key, body).andExpect(status().isCreated()).andReturn();
+    UUID appointmentId =
+        UUID.fromString(
+            objectMapper
+                .readTree(created.getResponse().getContentAsString())
+                .get("appointmentId")
+                .asString());
+    org.mockito.Mockito.when(clock.instant()).thenReturn(trialEnd);
+    migrationJdbc.update(
+        "UPDATE agendamento.subscription SET status = 'SUSPENDED', version = 2 WHERE tenant_id = ? AND subscription_id = ?",
+        tenantId,
+        subscriptionId);
+    org.mockito.Mockito.when(subscriptionEligibility.allowsNewPublicAppointments(tenantId))
+        .thenReturn(false);
+
+    submitBooking(key, body)
+        .andExpect(status().isCreated())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.appointmentId").value(appointmentId.toString()));
+    assertThat(count("appointment", tenantId)).isEqualTo(1);
+    assertThat(count("appointment_history", tenantId)).isEqualTo(1);
+    assertThat(countByEvent("AppointmentConfirmed")).isEqualTo(1);
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status || ':' || version FROM agendamento.subscription WHERE subscription_id = ?",
+                String.class,
+                subscriptionId))
+        .isEqualTo("SUSPENDED:2");
+  }
+
+  @Test
+  void publicBookingAndTrialExpirySerializeAtTheTenantLockAndUsePostLockClock() throws Exception {
+    Instant bookingBeforeExpiry = Instant.now().truncatedTo(ChronoUnit.MICROS);
+    Instant trialEnd = bookingBeforeExpiry.plusSeconds(60);
+    AtomicReference<Instant> controlledNow = new AtomicReference<>(bookingBeforeExpiry);
+    org.mockito.Mockito.when(clock.instant()).thenAnswer(invocation -> controlledNow.get());
+    UUID subscriptionId = UUID.randomUUID();
+    migrationJdbc.update(
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, trial_started_at, trial_ends_at, version) VALUES (?, ?, 'TRIALING', ?, ?, 1)",
+        subscriptionId,
+        tenantId,
+        java.sql.Timestamp.from(trialEnd.minusSeconds(14 * 24 * 60 * 60L)),
+        java.sql.Timestamp.from(trialEnd));
+    migrationJdbc.update(
+        "INSERT INTO agendamento.subscription_history (event_id, tenant_id, subscription_id, event_type, from_status, to_status, event_at, version, operation_id) VALUES (?, ?, ?, 'TRIAL_GRANTED', NULL, 'TRIALING', ?, 1, ?)",
+        UUID.randomUUID(),
+        tenantId,
+        subscriptionId,
+        java.sql.Timestamp.from(trialEnd.minusSeconds(14 * 24 * 60 * 60L)),
+        UUID.randomUUID());
+
+    var bookingEnteredGate = new CountDownLatch(1);
+    var releaseBookingGate = new CountDownLatch(1);
+    var bookingEligibility = new AtomicReference<Boolean>();
+    var eligibilityNow = new AtomicReference<Instant>();
+    var eligibilityTrialEnd = new AtomicReference<Instant>();
+    var eligibilityStatus = new AtomicReference<String>();
+    SubscriptionTrialLifecycle lifecycle =
+        new SubscriptionTrialLifecycle(subscriptionRepository, tenantAgendaLock, clock);
+    org.mockito.Mockito.when(subscriptionEligibility.allowsNewPublicAppointments(tenantId))
+        .thenAnswer(
+            invocation -> {
+              bookingEnteredGate.countDown();
+              if (!releaseBookingGate.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Timed out waiting to release public gate");
+              }
+              eligibilityNow.set(clock.instant());
+              var current = subscriptionRepository.findCurrent(tenantId).orElseThrow();
+              eligibilityTrialEnd.set(current.trialEndsAt());
+              eligibilityStatus.set(current.status());
+              boolean allowed = lifecycle.allowsNewPublicAppointments(tenantId);
+              bookingEligibility.set(allowed);
+              return allowed;
+            });
+
+    String key = "trial-expiry-race-" + UUID.randomUUID();
+    String body = requestBody(serviceId, requestedStart, "Corrida do trial", "+5511999991245");
+    String capability = newCapability();
+    mvc.perform(
+            post("/api/v1/public/" + slug + "/booking-intents/current")
+                .with(csrf())
+                .header("Idempotency-Key", key)
+                .header("X-Booking-Recovery", capability)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isNoContent());
+    recoveryCapabilities.put(key, capability);
+
+    try (ExecutorService workers = Executors.newFixedThreadPool(2);
+        var lockConnection = PostgresTestEnvironment.migrationDataSource().getConnection()) {
+      Future<MvcResult> pendingBooking =
+          workers.submit(
+              () ->
+                  mvc.perform(
+                          post("/api/v1/public/" + slug + "/appointments")
+                              .with(csrf())
+                              .header("Idempotency-Key", key)
+                              .header("X-Booking-Recovery", capability)
+                              .contentType(MediaType.APPLICATION_JSON)
+                              .content(body))
+                      .andReturn());
+      assertThat(bookingEnteredGate.await(10, TimeUnit.SECONDS))
+          .as("public booking acquired the tenant lock before eligibility check")
+          .isTrue();
+      controlledNow.set(trialEnd);
+      var expiryAttempting = new CountDownLatch(1);
+      Future<Boolean> pendingExpiry =
+          workers.submit(
+              () -> {
+                expiryAttempting.countDown();
+                return new TransactionTemplate(transactionManager)
+                    .execute(status -> lifecycle.materializeExpired(tenantId));
+              });
+      assertThat(expiryAttempting.await(5, TimeUnit.SECONDS)).isTrue();
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+      boolean expiryWaitingOnTenant = false;
+      while (System.nanoTime() < deadline) {
+        Boolean waiting =
+            migrationJdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '%SELECT tenant_id FROM agendamento.tenant%' AND query ILIKE '%FOR UPDATE%')",
+                Boolean.class);
+        if (Boolean.TRUE.equals(waiting)) {
+          expiryWaitingOnTenant = true;
+          break;
+        }
+        Thread.yield();
+      }
+      assertThat(expiryWaitingOnTenant)
+          .as("expiry worker waits on the booking's tenant row lock")
+          .isTrue();
+
+      releaseBookingGate.countDown();
+      int bookingStatus = pendingBooking.get(10, TimeUnit.SECONDS).getResponse().getStatus();
+      assertThat(eligibilityNow.get()).isEqualTo(trialEnd);
+      assertThat(eligibilityTrialEnd.get()).isEqualTo(trialEnd);
+      assertThat(eligibilityStatus.get()).isEqualTo("TRIALING");
+      assertThat(bookingEligibility.get())
+          .as("eligibility is evaluated after the clock reaches trialEndsAt")
+          .isFalse();
+      assertThat(bookingStatus).isEqualTo(404);
+      assertThat(pendingExpiry.get(10, TimeUnit.SECONDS)).isTrue();
+    } finally {
+      releaseBookingGate.countDown();
+    }
+    assertThat(count("appointment", tenantId)).isZero();
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT status || ':' || version FROM agendamento.subscription WHERE subscription_id = ?",
+                String.class,
+                subscriptionId))
+        .isEqualTo("SUSPENDED:2");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.subscription_history WHERE subscription_id = ?",
+                Integer.class,
+                subscriptionId))
+        .isEqualTo(2);
   }
 
   @Test

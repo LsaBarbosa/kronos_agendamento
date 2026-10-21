@@ -9,7 +9,7 @@
 
 ## Estado e dependências
 
-- A fundação agora persiste assinatura/trial e aplica o gate de novas reservas (V30). `CreateTenant` continua sendo provisionamento controlado; não é fonte de identidade comercial confiável.
+- A fundação persiste assinatura/trial em V30 e endurece a constraint do histórico em V31. `CreateTenant` continua sendo provisionamento controlado; não é fonte de identidade comercial confiável.
 - O onboarding e a publicação continuam condicionados a termos/consentimentos e gates comerciais. Tenant/slug/administrador OIDC não serão usados como identidade comercial sem decisão explícita.
 - A fonte/fornecedor que verificará a identidade comercial continua pendente em `OPEN-QUESTIONS.md`. Nesta entrega, a porta só aceita identidade opaca vinda de fonte confiável server-side; a implementação de produção permanece inconclusiva/desabilitada. Não deduzir elegibilidade de tenantId, slug, e-mail, subject OIDC ou dado autodeclarado.
 - AGD-041 é dependência para cobrar/confirmar plano; uma escolha de plano não será registrada como assinatura paga.
@@ -28,9 +28,9 @@
 - `GET /api/v1/admin/subscription`: estado/datas do tenant autenticado, elegibilidade reportada sem PII e catálogo sem valores monetários. Resposta `no-store`; sem `tenantId` de entrada.
 - A concessão é acionada exclusivamente no provisionamento server-side consultando `CommercialEligibilityIdentitySource`; não existe endpoint para declarar identidade verificada. Sem fonte configurada ou com resultado inconclusivo, não há concessão. Adapters com identidade sintética são exclusivos de testes/E2E e não podem ser ativados no perfil normal.
 - A porta retorna token opaco estável da identidade verificada, nunca o identificador bruto. Ledger separado e unicidade no banco impedem reutilizar benefício entre tenants recriados; assinatura corrente é única por tenant. Tentativa repetida no mesmo tenant é idempotente; identidade previamente consumida não recebe outro trial.
-- Persistência/ledger usam V30, FK sem cascade e grants mínimos. A concessão grava histórico, auditoria e receipt idempotente transacionalmente. A expiração usa CAS/histórico/auditoria no mesmo commit e não cria receipt/outbox sem contrato para operação de worker. `TRIALING → SUSPENDED` em `now >= trialEndsAt`; o gate recusa novas reservas desde a igualdade, mesmo antes da materialização. O worker é desabilitado nos testes que substituem `Clock`/repositório, mantendo o relógio determinístico.
+- Persistência/ledger usam V30, FK sem cascade e grants mínimos. V31 torna a allowlist da transição de histórico total (`CHECK (...) IS TRUE`), conservando a concessão inicial legítima (`from_status=NULL`) e rejeitando transições cujo resultado SQL seja `UNKNOWN`. A migração faz preflight somente leitura e falha sem reparar ou apagar legado incompatível. A concessão grava histórico, auditoria e receipt idempotente transacionalmente. A expiração usa CAS/histórico/auditoria no mesmo commit e não cria receipt/outbox sem contrato para operação de worker. `TRIALING → SUSPENDED` em `now >= trialEndsAt`; o gate recusa novas reservas desde a igualdade, mesmo antes da materialização. O worker é desabilitado nos testes que substituem `Clock`/repositório, mantendo o relógio determinístico.
 - Gate de disponibilidade e nova reserva consulta a assinatura sob a proteção tenant-scoped existente; o commit revalida depois do lock. `TRIALING` só permite novas reservas em `now < trialEndsAt`; ausência, `SUSPENDED` e fonte inconclusiva fecham novas reservas sem afetar consulta/cancelamento de reservas existentes. Gates legais/publicação permanecem independentes.
-- Preservar V1–V29; próxima migration V30, com grants mínimos, installation/upgrade/Flyway validate/rerun.
+- Preservar V1–V30; V31 é a migration desta correção, cobrindo instalação limpa, upgrade V30→V31, preflight, validate/rerun e grants sem alterar checksums publicados.
 
 ## Estratégia e riscos
 
@@ -68,6 +68,17 @@ Trade-off: fail-closed pode impedir novas reservas enquanto trial não estiver p
 - [ ] Fonte/identificador comercial aprovado e configuração gerenciada seguem pendentes; nenhuma concessão real é habilitada pela implementação atual. Retenção/expurgo do ledger também requer decisão explícita.
 
 ## Validação
+
+### Correção da constraint V30 (continuação após revisão)
+
+- A revisão do PR apontou que `CHECK` considera `UNKNOWN` aceitável: `TRIAL_EXPIRED` com `from_status=NULL` pode passar porque a disjunção resulta em `NULL`. Preservar V1–V30 e introduzir V31 com preflight fail-closed e constraint completa terminando em `IS TRUE`; `TRIAL_GRANTED` continua aceitando `from_status=NULL`.
+- A migration executa consulta de compatibilidade sem modificar legado, falha com erro explícito caso encontre transição inválida, e só então substitui a constraint. Um SQL de preflight separado reporta somente IDs/tipos/versões incompatíveis.
+- Regressões adicionais: migration fresh e V30→V31, replay de booking confirmado após expiração do trial, UI descartando GET administrativo de assinatura após invalidar sessão/contexto, e corrida pública × expiração com relógio controlado e locks PostgreSQL sincronizados.
+- Restrições preservadas: sem alteração de regra temporal/comercial, sem habilitar fonte comercial de produção e sem relaxar gates; o PR permanece draft.
+- Validação local: `./mvnw -B -ntp spotless:check verify` passou com 79 unitários/arquiteturais e 239 integrações PostgreSQL 16.13/Testcontainers. Cobertos V30→V31, fresh, validate/rerun/grants, legado incompatível preservado após falha, replay após vencimento e corrida de reserva/expiração sob lock com Clock controlado. Frontend format/lint/23 Vitest/TypeScript/build e sintaxe E2E passaram; execução local do browser não ocorreu porque a composição compartilhada não contém a aplicação.
+- Revisão sequencial do diff; revisores independentes indisponíveis por limite de threads. CI remoto no novo SHA ainda pendente.
+- Validação local desta continuação: `TenantPersistenceIT` e `PublicAppointmentIT` passaram dentro de `./mvnw -B -ntp spotless:check verify` (79 unitários/arquiteturais + 239 integrações PostgreSQL 16.13/Testcontainers). A suíte cobre V30→V31, banco limpo, validate/rerun, grants, histórico legado incompatível preservado após falha, replay após vencimento e disputa de reserva/expiração sob lock com relógio controlado. Frontend format/lint/23 Vitest/TypeScript/build e `node --check scripts/dev/test-keycloak-browser.mjs` passaram. E2E local não executado; aguardando workflow remoto no SHA publicado.
+- Revisão desta correção foi sequencial: revisores independentes não puderam ser iniciados por limite de threads; sem alegação de aprovação humana.
 
 | Critério | Procedimento/comando | Resultado esperado | Resultado observado |
 |---|---|---|---|

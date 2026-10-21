@@ -16,7 +16,7 @@
 
 ## Consequências e limites
 
-- V30 adiciona concessão, assinatura e histórico com FKs restritivas, CAS, índice de expiração e grants runtime mínimos. As migrations V1–V29 permanecem imutáveis.
+- V30 adiciona concessão, assinatura e histórico com FKs restritivas, CAS, índice de expiração e grants runtime mínimos. V31 endurece `ck_subscription_history_transition`: a expressão da transição precisa resultar em `TRUE`, evitando que `UNKNOWN` por `from_status=NULL` seja aceita pelo PostgreSQL. `TRIAL_GRANTED` inicial permanece válido com origem nula; legado incompatível bloqueia a migration sem correção automática. V1–V30 permanecem imutáveis.
 - A garantia de não repetir trial depende da estabilidade e correção da fonte confiável ainda não aprovada. Até lá, nenhum trial é concedido no perfil normal; E2E/Testcontainers sintéticos demonstram somente o núcleo.
 - Retenção e expurgo do digest de elegibilidade exigem decisão de produto/jurídico/operação. Esta ADR não aprova retenção perpétua nem autoriza exclusão.
 - Checkout, cobrança, webhooks financeiros, reativação, preços, moeda, integração comercial real e homologação permanecem em AGD-041+ ou nos gates correspondentes.
