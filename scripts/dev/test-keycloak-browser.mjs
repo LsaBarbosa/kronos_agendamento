@@ -1116,6 +1116,14 @@ try {
       const label = [...form.querySelectorAll('label')].find(item => item.innerText.includes('Novo cliente'));
       label?.querySelector('input')?.click();
     })()`);
+    await waitUntil(() =>
+        evaluate(`Boolean((() => {
+          const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
+          return [...(form?.querySelectorAll('label') ?? [])].some(item =>
+            item.innerText.trim().startsWith('Nome') && item.querySelector('input'),
+          );
+        })())`),
+    );
     await setAdminAppointmentField('Nome', 'Reserva administrativa E2E', evaluate);
     await setAdminAppointmentField('Telefone para cadastro', '+5511999998310', evaluate);
     await setAdminAppointmentField('Data local', publicDate, evaluate);
