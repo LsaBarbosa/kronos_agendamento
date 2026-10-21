@@ -484,13 +484,7 @@ export function ClientNoShowFactsPanel({
         const body =
             existing?.body ??
             Object.freeze({ expectedPolicyVersion: facts!.policyVersion });
-        const key =
-            existing?.key ??
-            commandKey(
-                keys.current,
-                `reconcile-client-restriction:${clientId}`,
-                body,
-            );
+        const key = existing?.key ?? crypto.randomUUID();
         const intention = existing ?? Object.freeze({ clientId, body, key });
         pendingReconciliation.current = intention;
         reconciliationRequestInFlight.current = true;

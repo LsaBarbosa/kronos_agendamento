@@ -1853,7 +1853,59 @@ try {
         appEnvironment,
     ));
     if (reconciliationEffects !== 1) throw new Error('Retry da reconciliação duplicou ou omitiu efeitos transacionais.');
-    console.log('Browser: redução retroativa não executou no PUT; reconciliação explícita ativou uma restrição, e retry após resposta perdida preservou cliente/body/chave e efeitos únicos.');
+    const restrictionId = queryPostgres(
+        `SELECT restriction_id FROM agendamento.client_booking_restriction WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${reconciliationClientId}'`,
+        appEnvironment,
+    );
+    const activatedReceiptOperationId = reconciliationAttempts[1].operationId;
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${reconciliationClientId}' && document.querySelector('#restriction-lift-reason') && [...document.querySelectorAll('button')].some(button => button.innerText === 'Desbloquear autoagendamento'))`));
+    await setTextareaById('restriction-lift-reason', 'Desbloqueio para provar nova intenção E2E', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__restrictionLiftAttempts = [];
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const url = String(args[0]);
+        if (url.endsWith('/restrictions/${restrictionId}/lift') && args[1]?.method === 'POST') {
+          window.__restrictionLiftAttempts.push({url, body:args[1].body, key:args[1].headers['Idempotency-Key'], status:response.status, operationId:response.headers.get('X-Operation-Id'), receipt:response.ok ? await response.clone().json() : null});
+          window.fetch = originalFetch;
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Desbloquear autoagendamento', evaluate);
+    await waitForText('Autoagendamento desbloqueado.', evaluate);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${reconciliationClientId}' && !document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]') && [...document.querySelectorAll('button')].some(button => button.innerText === 'Reavaliar política para este cliente'))`));
+    const reconciliationLiftAttempts = await evaluate('window.__restrictionLiftAttempts');
+    if (reconciliationLiftAttempts.length !== 1 || reconciliationLiftAttempts[0].status !== 200 || reconciliationLiftAttempts[0].receipt?.status !== 'LIFTED' || reconciliationLiftAttempts[0].receipt?.version !== 2 || !/^[0-9a-f-]{36}$/i.test(reconciliationLiftAttempts[0].operationId ?? '')) {
+        throw new Error(`Desbloqueio administrativo não foi confirmado como uma única operação: ${JSON.stringify(reconciliationLiftAttempts)}`);
+    }
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__restrictionReconciliationAfterLift = [];
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const url = String(args[0]);
+        if (url.endsWith('/restrictions/reconcile') && args[1]?.method === 'POST') {
+          window.__restrictionReconciliationAfterLift.push({url, body:args[1].body, key:args[1].headers['Idempotency-Key'], status:response.status, replayed:response.headers.get('Idempotency-Replayed'), operationId:response.headers.get('X-Operation-Id'), receipt:response.ok ? await response.clone().json() : null});
+          window.fetch = originalFetch;
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Reavaliar política para este cliente', evaluate);
+    await waitForText('NO_UNUSED_CAUSAL_FACT', evaluate);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${reconciliationClientId}' && !document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]'))`));
+    const reconciliationAfterLift = await evaluate('window.__restrictionReconciliationAfterLift');
+    if (reconciliationAfterLift.length !== 1 || reconciliationAfterLift[0].status !== 200 || reconciliationAfterLift[0].url !== reconciliationAttempts[1].url || reconciliationAfterLift[0].body !== reconciliationAttempts[1].body || reconciliationAfterLift[0].key === reconciliationAttempts[1].key || reconciliationAfterLift[0].replayed !== 'false' || !/^[0-9a-f-]{36}$/i.test(reconciliationAfterLift[0].operationId ?? '') || reconciliationAfterLift[0].operationId === activatedReceiptOperationId || reconciliationAfterLift[0].operationId === reconciliationLiftAttempts[0].operationId || reconciliationAfterLift[0].receipt?.decision !== 'NO_UNUSED_CAUSAL_FACT' || reconciliationAfterLift[0].receipt?.clientId !== reconciliationClientId || reconciliationAfterLift[0].receipt?.policyVersion !== 1) {
+        throw new Error(`Nova reconciliação explícita não recebeu identidade própria ou retornou resultado inesperado: ${JSON.stringify({first: reconciliationAttempts, afterLift: reconciliationAfterLift})}`);
+    }
+    const postLiftReconciliationEffects = Number(queryPostgres(
+        `SELECT CASE WHEN (SELECT status = 'LIFTED' AND version = 2 AND source_history_id = '${reconciliationNoShowHistoryId}' FROM agendamento.client_booking_restriction WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${reconciliationClientId}' AND restriction_id = '${restrictionId}') AND (SELECT count(*) = 2 FROM agendamento.client_booking_restriction_history WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND restriction_id = '${restrictionId}' AND event_type IN ('RECONCILED','LIFTED')) AND (SELECT count(*) = 1 FROM agendamento.audit_event WHERE action = 'CLIENT_SELF_BOOKING_UNBLOCKED' AND target_id = '${restrictionId}') AND (SELECT count(*) = 2 FROM agendamento.audit_event WHERE action = 'CLIENT_SELF_BOOKING_RECONCILED' AND target_id = '${reconciliationClientId}') AND (SELECT count(*) = 1 FROM agendamento.outbox_event WHERE event_type = 'ClientSelfBookingBlocked' AND aggregate_id = '${restrictionId}') AND (SELECT count(*) = 1 FROM agendamento.outbox_event WHERE event_type = 'ClientSelfBookingUnblocked' AND aggregate_id = '${restrictionId}') AND (SELECT count(*) = 3 FROM agendamento.idempotency_record WHERE state = 'COMPLETED' AND operation_id IN ('${activatedReceiptOperationId}','${reconciliationAfterLift[0].operationId}','${reconciliationLiftAttempts[0].operationId}')) THEN 1 ELSE 0 END`,
+        appEnvironment,
+    ));
+    if (postLiftReconciliationEffects !== 1) throw new Error('Nova reconciliação duplicou ativação/outbox ou alterou indevidamente o desbloqueio.');
+    console.log('Browser: reconciliação com resposta perdida foi recuperada com mesma intenção; desbloqueio seguido de nova ação no mesmo cliente/política usou chave/operação distintas, retornou NO_UNUSED_CAUSAL_FACT e preservou o estado LIFTED sem duplicar ativação/outbox.');
 
     const cancelRetryAppointmentId = queryPostgres(
         `SELECT a.appointment_id FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.client_name_snapshot = 'Encaixe administrativo E2E' AND a.status = 'CONFIRMED'`,
