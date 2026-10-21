@@ -75,6 +75,8 @@
 - [x] Núcleo checkout/webhook, adapters de produção fail-closed, painel de recuperação e fixtures restritas ao E2E implementados; sem oferta/provider real, a produção não inicia checkout nem admite evento.
 - [x] V32 aplicada em instalação limpa e upgrade; `TenantPersistenceIT` (30) e `BillingWebhookIT` (6) passaram em PostgreSQL 16.13/Testcontainers, incluindo concorrência de checkouts; Flyway validate/rerun e grants verificados.
 - [x] A primeira execução App CI push no SHA `798570b8a88718d4dbd38e8ec8e2cded174f6ae1` encontrou falha de compilação exclusiva da fixture E2E (`IOException` não lançada). Catch corrigido e compilação Docker `INCLUDE_E2E_FIXTURES=true` passou; aguardando novo CI no SHA corrigido.
+- [x] App CI no SHA `c6e029525e92e2e6ae0160fee6e0e97899aaa134` revelou que o GET pós-reload reconciliava estado, mas descartava o URL hospedado retornado pelo provider. `GetAdminCheckoutOperation` agora inclui o URL recuperado somente para operação autorizada e `CHECKOUT_READY`; testes backend dirigidos passaram. Aguardar E2E no próximo head.
+- [x] O App CI PR do mesmo SHA também encontrou corrida no próprio roteiro: aguardava somente o cabeçalho da lista antes de clicar no botão da operação. O E2E agora aguarda o botão exato aparecer; a espera é por estado do DOM, sem atraso arbitrário.
 - [ ] Browser E2E em CI do head final — o ambiente local compartilhado tem PostgreSQL/Keycloak, mas não backend/frontend da aplicação.
 - [ ] Preço/moeda/oferta, fornecedor, sandbox, credenciais gerenciadas, homologação HTTPS, prontidão legal/comercial e retenção continuam pendentes.
 

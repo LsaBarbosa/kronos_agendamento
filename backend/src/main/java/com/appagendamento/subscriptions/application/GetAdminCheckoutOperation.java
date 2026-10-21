@@ -5,6 +5,7 @@ import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import com.appagendamento.subscriptions.api.HostedCheckoutProvider;
 import com.appagendamento.subscriptions.domain.CheckoutOperation;
 import com.appagendamento.subscriptions.domain.CheckoutView;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 
@@ -30,21 +31,20 @@ public class GetAdminCheckoutOperation {
         billing
             .findCheckout(admin.tenantId(), operationId)
             .orElseThrow(() -> new SubscriptionCheckoutConflictException("CHECKOUT_NOT_FOUND"));
+    Optional<HostedCheckoutProvider.CheckoutSession> recoveredSession = Optional.empty();
     if (provider.isConfigured()
         && java.util.Set.of("SUBMITTING", "OUTCOME_UNKNOWN", "CHECKOUT_READY")
             .contains(operation.state())) {
       try {
-        provider
-            .findByOperationId(operation.operationId())
-            .ifPresent(
-                session -> {
-                  billing.reconcileAcceptedCheckout(
-                      admin.tenantId(),
-                      operation.operationId(),
-                      operation.providerCode(),
-                      operation.providerAccountId(),
-                      session);
-                });
+        recoveredSession = provider.findByOperationId(operation.operationId());
+        if (recoveredSession.isPresent()) {
+          billing.reconcileAcceptedCheckout(
+              admin.tenantId(),
+              operation.operationId(),
+              operation.providerCode(),
+              operation.providerAccountId(),
+              recoveredSession.get());
+        }
       } catch (RuntimeException ignored) {
       }
     }
@@ -58,7 +58,9 @@ public class GetAdminCheckoutOperation {
         current.currency(),
         current.termsVersion(),
         current.createdAt(),
-        null,
+        current.state().equals("CHECKOUT_READY")
+            ? recoveredSession.map(HostedCheckoutProvider.CheckoutSession::redirectUrl).orElse(null)
+            : null,
         true);
   }
 }

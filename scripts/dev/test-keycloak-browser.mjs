@@ -2986,7 +2986,9 @@ try {
     if (!checkoutOperationId) throw new Error('ID lógico do checkout não apareceu no DOM.');
     await command('Page.reload');
     await waitForText('Operações existentes', evaluate);
-    await clickButtonByText(`Recuperar operação ${checkoutOperationId}`, evaluate);
+    const recoverCheckoutButton = `Recuperar operação ${checkoutOperationId}`;
+    await waitForButtonByText(recoverCheckoutButton, evaluate);
+    await clickButtonByText(recoverCheckoutButton, evaluate);
     await waitForText('Operação recuperada.', evaluate);
     const recoveredAfterReload = await evaluate(`({
       result: document.querySelector('[aria-label="Resultado do checkout"]')?.innerText,
@@ -3260,6 +3262,12 @@ async function clickButtonByText(text, evaluate) {
       if (!button) throw new Error('Button not found: ' + ${JSON.stringify(text)});
       button.click();
     })()`);
+}
+
+async function waitForButtonByText(text, evaluate) {
+    await waitUntil(() =>
+        evaluate(` [...document.querySelectorAll('button')].some(item => item.innerText.trim() === ${JSON.stringify(text)}) `),
+    );
 }
 
 async function cookies(command) {
