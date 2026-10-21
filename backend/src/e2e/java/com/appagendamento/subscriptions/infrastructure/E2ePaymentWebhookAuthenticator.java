@@ -33,6 +33,11 @@ public class E2ePaymentWebhookAuthenticator implements PaymentWebhookAuthenticat
   }
 
   @Override
+  public boolean isConfigured() {
+    return secret.length >= 32;
+  }
+
+  @Override
   public Optional<AuthenticatedPaymentEvent> authenticate(byte[] rawBody, String signatureHeader) {
     if (secret.length < 32 || signatureHeader == null) return Optional.empty();
     try {
