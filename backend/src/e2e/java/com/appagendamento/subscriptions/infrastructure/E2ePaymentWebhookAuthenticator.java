@@ -9,6 +9,8 @@ import java.util.HexFormat;
 import java.util.Optional;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
@@ -17,6 +19,8 @@ import tools.jackson.databind.ObjectMapper;
 @Component
 @Profile("e2e")
 public class E2ePaymentWebhookAuthenticator implements PaymentWebhookAuthenticator {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(E2ePaymentWebhookAuthenticator.class);
 
   private final ObjectMapper mapper;
   private final byte[] secret;
@@ -39,12 +43,17 @@ public class E2ePaymentWebhookAuthenticator implements PaymentWebhookAuthenticat
 
   @Override
   public Optional<AuthenticatedPaymentEvent> authenticate(byte[] rawBody, String signatureHeader) {
-    if (secret.length < 32 || signatureHeader == null) return Optional.empty();
+    if (secret.length < 32) return Optional.empty();
+    if (signatureHeader == null) {
+      LOGGER.warn("payment_webhook_e2e rejected reason=signature_missing");
+      return Optional.empty();
+    }
     try {
       String expected = "sha256=" + HexFormat.of().formatHex(hmac(rawBody));
       if (!MessageDigest.isEqual(
           expected.getBytes(StandardCharsets.US_ASCII),
           signatureHeader.getBytes(StandardCharsets.US_ASCII))) {
+        LOGGER.warn("payment_webhook_e2e rejected reason=signature_mismatch");
         return Optional.empty();
       }
       JsonNode json = mapper.readTree(rawBody);
@@ -64,6 +73,7 @@ public class E2ePaymentWebhookAuthenticator implements PaymentWebhookAuthenticat
                   : null);
       return Optional.of(event);
     } catch (RuntimeException invalid) {
+      LOGGER.warn("payment_webhook_e2e rejected reason=authenticated_payload_invalid");
       return Optional.empty();
     }
   }

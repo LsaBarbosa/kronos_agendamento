@@ -26,3 +26,9 @@ if ! grep -q '^PUBLIC_BOOKING_HMAC_KEYS=.' .env; then
 fi
 chmod 600 .env
 echo "Configuração local de HMAC estável preparada em .env (ignorado pelo Git)."
+
+if [[ ! -e .env.e2e ]]; then
+  printf 'APP_BILLING_E2E_WEBHOOK_SECRET=%s\n' "$(openssl rand -hex 32)" > .env.e2e
+fi
+chmod 600 .env.e2e
+echo "Segredo descartável do webhook E2E preparado em .env.e2e (ignorado pelo Git)."

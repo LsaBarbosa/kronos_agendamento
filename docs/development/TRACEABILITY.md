@@ -414,6 +414,8 @@ Registro da entrega inicial AGD-033 no PR [#21](https://github.com/LsaBarbosa/kr
 
 ## AGD-041 — checkout e webhook financeiro (21/10/2026)
 
+Follow-up E2E no head `c4bf7111c5af936b3e3c1a721e3a9b297b9e711c`: App CI push/PR [39650076539](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39650076539)/[39650089619](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39650089619) falharam em HTTP 401 no webhook válido; demais jobs e CodeQL push/PR [39650076263](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39650076263)/[39650089950](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39650089950) passaram. Causa ainda desconhecida. O delta atual compartilha segredo E2E descartável/ignorado entre Compose e Node e expõe apenas categorias safe de rejeição. Localmente passaram Spotless, `SecurityBoundaryTest` 7, `BillingWebhookIT` 6 PostgreSQL, sintaxe, Compose config e `git diff --check`; build Docker/E2E local não executados pelo acesso negado ao socket. Novos checks necessários; nenhuma operação financeira real.
+
 | Critério/evidência | Implementação e resultado |
 |---|---|
 | Integração AGD-040 | Merge `d5bac636310780b699a2c471acbb0c3d50a2a580`; App CI [39634803499](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39634803499) e CodeQL [39634803343](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39634803343) success pós-merge. AGD-040 permanece parcial por fonte comercial, retenção, gates legais e homologação. |

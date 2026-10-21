@@ -149,7 +149,7 @@ jobs:
           bash scripts/dev/prepare-keycloak.sh
       - name: Start PostgreSQL, Keycloak and backend
         run: |
-          docker compose -p agendamento --env-file .env --env-file .env.keycloak \
+          docker compose -p agendamento --env-file .env --env-file .env.keycloak --env-file .env.e2e \
             -f compose.yaml -f compose.keycloak.yaml -f compose.identity.yaml -f compose.e2e.yaml \
             --profile app up --build --wait --wait-timeout 240 -d
       - name: Provision linked and unlinked OIDC users
@@ -170,7 +170,17 @@ jobs:
       - name: Exercise OIDC in headless Chrome
         env:
           CHROME_BIN: /usr/bin/google-chrome
-        run: node scripts/dev/test-keycloak-browser.mjs
+        run: |
+          set -a
+          source .env.e2e
+          set +a
+          node scripts/dev/test-keycloak-browser.mjs
+      - name: Report safe E2E payment webhook rejection categories
+        if: failure()
+        run: |
+          docker compose -p agendamento --env-file .env --env-file .env.keycloak --env-file .env.e2e \
+            -f compose.yaml -f compose.keycloak.yaml -f compose.identity.yaml -f compose.e2e.yaml \
+            --profile app logs --no-color backend 2>&1 | grep 'payment_webhook_e2e' || true
       - name: Upload diagnostic logs on failure
         if: failure()
         uses: actions/upload-artifact@v4

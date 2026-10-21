@@ -3007,7 +3007,8 @@ try {
     if (invalidEventRows !== 0 || preConfirmationStatus !== 'SUSPENDED') {
         throw new Error(`Webhook inválido alterou o estado comercial: ${JSON.stringify({invalidEventRows, preConfirmationStatus})}`);
     }
-    const eventSecret = 'e2e-only-synthetic-payment-webhook-secret-000000000000';
+    const eventSecret = process.env.APP_BILLING_E2E_WEBHOOK_SECRET;
+    if (!eventSecret || eventSecret.length < 32) throw new Error('Segredo sintético do webhook E2E indisponível.');
     async function sendSyntheticPaymentEvent(event) {
         const body = JSON.stringify(event);
         const signature = createHmac('sha256', eventSecret).update(body).digest('hex');
