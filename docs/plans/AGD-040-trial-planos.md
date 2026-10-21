@@ -59,7 +59,9 @@ Trade-off: fail-closed pode impedir novas reservas enquanto trial não estiver p
 - [ ] Revisão independente indisponível pelo limite de threads; revisão sequencial do coordenador concluída, sem equivalência a aprovação humana.
 - [x] 2026-10-21 — PR draft [#22](https://github.com/LsaBarbosa/kronos_agendamento/pull/22) aberto para `main`, commit funcional `2c972dd17b46466bc2d08b950ce35a0396cd527f`; sem merge/deploy.
 - [x] 2026-10-21 — App CI/CodeQL push e PR concluídos em `33a4cb0c3788257a85ecdc3e54c6c81747b6813f`; todos os jobs/check-runs passaram, incluindo E2E browser. E2E local não executado.
-- [ ] CI remoto do conteúdo atual e E2E browser aguardam o SHA final publicado. Homologação e gates comerciais/legais continuam fora da evidência local/CI.
+- [x] 2026-10-21 — SHA funcional publicado `74d3536e881a70fbde2fa448e1ba50aa858ac75d`; App CI PR [39598299143](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39598299143) e CodeQL push/PR [39598293006](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39598293006)/[39598299258](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39598299258) concluíram success, incluindo E2E browser no PR e todos os analisadores. App CI push [39598292893](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39598292893) falhou somente no `oidc-browser-e2e` legado de remarcação; o mesmo job passou no evento PR. A divergência permanece sem causa conclusiva e está preservada como tal em VALIDATION.
+- [ ] E2E local Chrome/Keycloak/PostgreSQL não executado porque a composição ativa não contém backend/frontend e não foi reiniciada. Homologação e gates comerciais/legais continuam fora da evidência local/CI.
+- [ ] Fonte/identificador comercial aprovado e configuração gerenciada seguem pendentes; nenhuma concessão real é habilitada pela implementação atual. Retenção/expurgo do ledger também requer decisão explícita.
 
 ## Validação
 
