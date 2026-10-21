@@ -2979,7 +2979,15 @@ try {
     ) {
         throw new Error(`A troca de contexto durante CSRF enviou checkout ou perdeu a intenção original: ${JSON.stringify(checkoutAfterContextChange)}`);
     }
-    await submitLogin(credentials.KEYCLOAK_DEMO_USERNAME, credentials.KEYCLOAK_DEMO_PASSWORD, evaluate);
+    await evaluate("document.querySelector('a[href*=oauth2]').click()");
+    await waitUntil(async () =>
+        evaluate(
+            "Boolean(document.querySelector('input[name=\"username\"]')) || document.body.innerText.includes('Sessão administrativa ativa.')",
+        ),
+    );
+    if (await evaluate("Boolean(document.querySelector('input[name=\"username\"]'))")) {
+        await submitLogin(credentials.KEYCLOAK_DEMO_USERNAME, credentials.KEYCLOAK_DEMO_PASSWORD, evaluate);
+    }
     await waitForText('Sessão administrativa ativa.', evaluate);
     await waitForText('Operação preparada: MONTHLY', evaluate);
     const checkoutRetryScript = await command('Page.addScriptToEvaluateOnNewDocument', {
