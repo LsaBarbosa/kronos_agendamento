@@ -73,10 +73,10 @@ Trade-off: fail-closed pode impedir novas reservas enquanto trial não estiver p
 |---|---|---|---|
 | Integração AGD-033 | App CI run `39586871605`; CodeQL run `39586871623` | todos jobs/check-runs success no merge SHA | App CI completo success; CodeQL ambos analisadores completos success; SHA `5df1035d08a2cf2f39705b9fbc4f7ed2412da90d` |
 | Regressões existentes/backend | `cd backend && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` | testes unitários e integração PostgreSQL passam | `BUILD SUCCESS`: 79 unitários/arquiteturais e 235 integrações PostgreSQL 16.13/Testcontainers, sem falhas |
-| Catálogo de planos/API segura | teste `PlanCatalogTest`, `SecurityBoundaryTest`; browser E2E no CI | dois planos, anual = 10, sem preço, sessão obrigatória e no-store | teste backend dirigido passou (8 testes); browser E2E local não executado, aguardando CI |
+| Catálogo de planos/API segura | teste `PlanCatalogTest`, `SecurityBoundaryTest`; browser E2E no CI | dois planos, anual = 10, sem preço, sessão obrigatória e no-store | teste backend dirigido passou (8 testes); browser E2E local não executado; CI Chrome/Keycloak/PostgreSQL passou no head final |
 | Trial elegível/único | `SubscriptionTrialIT`, identidade sintética explícita | 14 dias, uma concessão mesmo com tenant recriado/concorrência | Testado em PostgreSQL com adapter controlado; fonte aprovada real continua pendente |
 | Gate de novas reservas | `SubscriptionTrialIT`, `PublicAppointmentIT`, `PublicPageIT` | igualdade no fim fecha; gate no commit e disponibilidade; reservas existentes preservadas | Integrações PostgreSQL passam na suíte completa; E2E browser segue no CI do head final |
-| Interface/admin | `AdminSubscriptionPanel`, roteiro Keycloak | estado/datas após reload, logout não restaura resposta privada, vencimento bloqueia nova reserva | Format/lint/23 Vitest/TypeScript/build locais passaram; CI browser pendente para o novo head |
+| Interface/admin | `AdminSubscriptionPanel`, roteiro Keycloak | estado/datas após reload, logout não restaura resposta privada, vencimento bloqueia nova reserva | Format/lint/23 Vitest/TypeScript/build locais passaram; CI browser Chrome/Keycloak/PostgreSQL passou no head final |
 
 ### Complemento desta continuação
 
