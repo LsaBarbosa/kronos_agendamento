@@ -6,6 +6,8 @@
 - Implementar a fundação persistida de checkout e admissão autenticada de fatos financeiros sem expor cartão, confiar no navegador ou habilitar um fornecedor/preço não aprovado.
 - Base: merge de AGD-040 em `d5bac636310780b699a2c471acbb0c3d50a2a580`; schema anterior V1–V31.
 
+**Atualização do schema:** V32 implementa checkout/inbox; V33 acrescenta o grant mínimo requerido pela ativação financeira de uma assinatura trial existente.
+
 ## Escopo
 
 - Porta server-side para catálogo de ofertas aprovado, criação/consulta de checkout e autenticador de eventos do fornecedor.
@@ -51,7 +53,7 @@
 
 ## Migração e compatibilidade
 
-- Próxima versão livre foi V32; V1–V31 permanecem imutáveis. V32 amplia `subscription_history` para o evento financeiro e cria operações de checkout e inbox de eventos.
+- V32 ampliou `subscription_history` para o evento financeiro e criou operações de checkout/inbox; V33 concede UPDATE somente em `subscription.plan_code`/`paid_through_at` ao runtime para confirmar uma assinatura trial. V1–V32 permanecem imutáveis.
 - Constraints/FKs incluem tenant e impedem referência cruzada. Operação e inbox têm grants runtime de SELECT/INSERT/UPDATE necessários; histórico mantém SELECT/INSERT sem UPDATE/DELETE/TRUNCATE.
 - Cobrir instalação limpa, upgrade V31→nova, Flyway validate/rerun, unicidade/dedupe, CAS e rollback com PostgreSQL real.
 
@@ -74,6 +76,7 @@
 - [x] PR #22 AGD-040 integrado por merge commit `d5bac636310780b699a2c471acbb0c3d50a2a580`; App CI/CodeQL pós-merge completos, incluindo E2E e todos os check-runs (evidência em STATUS/VALIDATION).
 - [x] Núcleo checkout/webhook, adapters de produção fail-closed, painel de recuperação e fixtures restritas ao E2E implementados; sem oferta/provider real, a produção não inicia checkout nem admite evento.
 - [x] V32 aplicada em instalação limpa e upgrade; `TenantPersistenceIT` (30) e `BillingWebhookIT` (6) passaram em PostgreSQL 16.13/Testcontainers, incluindo concorrência de checkouts; Flyway validate/rerun e grants verificados.
+- [x] V33 validada em instalação limpa e upgrade V32→V33; `TenantPersistenceIT` (31) e `BillingWebhookIT` (7) passaram localmente, incluindo confirmação de assinatura TRIALING sob usuário runtime e grants por coluna, Flyway validate/rerun.
 - [x] A primeira execução App CI push no SHA `798570b8a88718d4dbd38e8ec8e2cded174f6ae1` encontrou falha de compilação exclusiva da fixture E2E (`IOException` não lançada). Catch corrigido e compilação Docker `INCLUDE_E2E_FIXTURES=true` passou; aguardando novo CI no SHA corrigido.
 - [x] App CI no SHA `c6e029525e92e2e6ae0160fee6e0e97899aaa134` revelou que o GET pós-reload reconciliava estado, mas descartava o URL hospedado retornado pelo provider. `GetAdminCheckoutOperation` agora inclui o URL recuperado somente para operação autorizada e `CHECKOUT_READY`; testes backend dirigidos passaram. Aguardar E2E no próximo head.
 - [x] O App CI PR do mesmo SHA também encontrou corrida no próprio roteiro: aguardava somente o cabeçalho da lista antes de clicar no botão da operação. O E2E agora aguarda o botão exato aparecer; a espera é por estado do DOM, sem atraso arbitrário.
@@ -103,6 +106,8 @@ O App CI PR no head `45c08280e0a6a561b2f1548f4c0dd0bfe185a51a` alcançou o webho
 **Novo passo diagnóstico:** o E2E no head `24682a1` mediu zero linhas na inbox para o evento válido, com 401 no path original e sem redirect. A autenticação E2E havia concluído, então a falha ocorre antes do commit. O logger identificou `dispatch=ERROR`, `error_target=true`, `InsufficientAuthenticationException`: o erro de autorização de dispatch mascara uma exceção anterior, cuja classe ainda será registrada em segurança no próximo CI. Localmente Spotless, `SecurityBoundaryTest` e `BillingWebhookIT` com PostgreSQL/Testcontainers passaram. Nenhum gate ou resposta financeira foi relaxado.
 
 **Resultado do diagnóstico no head `24682a100e3550e525177b8e8ef00b52293b2139`:** App CI push [39658832634](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39658832634) e PR [39658841754](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39658841754) falharam somente no browser E2E. CodeQL push/PR [39658832318](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39658832318)/[39658841691](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39658841691) e demais jobs passaram. O request válido foi autenticado, mas retornou 401 no endpoint original sem redirect e a inbox permaneceu vazia (`0`); o fluxo falha antes do commit. Causa ainda desconhecida. Novo log de segurança distingue dispatcher e classe da exceção, sem dados do request.
+
+**Correção do privilégio ausente no head `eb825710187b1102d62258d6b8ee509c791b01e4`:** App CI push/PR [39663873646](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39663873646)/[39663886158](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39663886158) falhou no browser; log sanitizado revelou SQLState `42501`, após autenticação e antes da inbox. `activateSubscription` atualiza `plan_code` e `paid_through_at` junto a `status/version`, mas o grant V30 não cobria as duas colunas financeiras. V33 adiciona UPDATE somente nelas, mantendo datas de trial protegidas. Teste PostgreSQL `paymentConfirmationUpdatesTrialSubscriptionUsingRuntimeRole` confirmou a transição trial→ACTIVE com `agendamento_app`; `TenantPersistenceIT` cobre banco limpo, V32→V33, validate/rerun e privilégios por coluna. Local: Spotless/Maven JDK 21 `BUILD SUCCESS`, 79 unitários/arquiteturais e 38 integrações PostgreSQL 16.13/Testcontainers. A execução CI do SHA de diagnóstico não contém V33; novos checks são necessários. Sem checkout/pagamento real.
 
 **Atualização diagnóstica do head `dada554b45cb524ecd1a54d124251dd620ecf031`:** App CI push [39657662007](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39657662007) e PR [39657671131](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39657671131) falharam no browser, enquanto os demais jobs e CodeQL push/PR [39657662029](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39657662029)/[39657671486](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39657671486) passaram. O evento válido foi autenticado no adapter E2E; o HTTP 401 `AUTHENTICATION_REQUIRED` compartilha seu trace. Para distinguir erro antes/depois da persistência e eventual dispatch, o roteiro agora consulta somente a contagem de inbox para o event ID sintético e registra apenas o path final e flag de redirect. Nada identifica a causa antes do CI seguinte.
 

@@ -116,6 +116,48 @@ class BillingWebhookIT {
   }
 
   @Test
+  void paymentConfirmationUpdatesTrialSubscriptionUsingRuntimeRole() {
+    Tenant tenant = tenant("billing-confirm-existing-trial");
+    UUID subscriptionId = UUID.randomUUID();
+    jdbc.update(
+        """
+        INSERT INTO agendamento.subscription
+          (subscription_id, tenant_id, status, trial_started_at, trial_ends_at, version)
+        VALUES (?, ?, 'TRIALING', ?, ?, 1)
+        """,
+        subscriptionId,
+        tenant.tenantId(),
+        java.sql.Timestamp.from(NOW.minusSeconds(7 * 24 * 60 * 60L)),
+        java.sql.Timestamp.from(NOW.plusSeconds(7 * 24 * 60 * 60L)));
+    CheckoutOperation operation = operation(tenant.tenantId());
+    billing.createCheckout(operation);
+    UUID claim =
+        billing.claimProviderCall(tenant.tenantId(), operation.operationId()).orElseThrow();
+    String reference = "provider-ref-" + operation.operationId();
+    billing.markCheckoutReady(
+        tenant.tenantId(),
+        operation.operationId(),
+        claim,
+        PROVIDER,
+        ACCOUNT,
+        new CheckoutSession(reference, "https://checkout.example.invalid/session"));
+
+    assertThat(billing.recordAuthenticatedEvent(confirmed("existing-trial-paid", reference, 1, 1)))
+        .isTrue();
+
+    assertThat(status(tenant.tenantId())).isEqualTo("ACTIVE:2");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT plan_code || ':' || (paid_through_at IS NOT NULL)::text FROM agendamento.subscription WHERE tenant_id = ?",
+                String.class,
+                tenant.tenantId()))
+        .isEqualTo("MONTHLY:true");
+    assertThat(historyCount(tenant.tenantId())).isEqualTo(1);
+    assertThat(paymentAuditCount(tenant.tenantId())).isEqualTo(1);
+    assertThat(outboxCount(tenant.tenantId())).isEqualTo(1);
+  }
+
+  @Test
   void invalidWebhookEvidenceDoesNotPersistAnything() {
     int before =
         jdbc.queryForObject("SELECT count(*) FROM agendamento.billing_event_inbox", Integer.class);
