@@ -17,6 +17,14 @@ public class PostgresClientNoShowPolicyRepository implements ClientNoShowPolicyR
   }
 
   @Override
+  public void lockTenant(UUID tenantId) {
+    jdbc.query(
+        "SELECT tenant_id FROM agendamento.tenant WHERE tenant_id = ? FOR UPDATE",
+        (row, index) -> row.getObject("tenant_id", UUID.class),
+        tenantId);
+  }
+
+  @Override
   public Optional<ClientNoShowPolicy> findPolicy(UUID tenantId) {
     return jdbc
         .query(

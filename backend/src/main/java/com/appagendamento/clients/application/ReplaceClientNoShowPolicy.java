@@ -61,6 +61,7 @@ public class ReplaceClientNoShowPolicy {
 
   private ClientNoShowPolicy replace(
       AuthenticatedAdmin actor, long expectedVersion, int threshold) {
+    policies.lockTenant(actor.tenantId());
     Optional<ClientNoShowPolicy> updated =
         policies.replacePolicy(actor.tenantId(), threshold, expectedVersion);
     ClientNoShowPolicy policy =

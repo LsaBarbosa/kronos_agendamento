@@ -4,6 +4,7 @@ import com.appagendamento.clients.api.PublicClientRegistry;
 import com.appagendamento.clients.domain.ClientName;
 import com.appagendamento.clients.domain.E164Phone;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 
@@ -32,5 +33,10 @@ public class PublicClientRegistryService implements PublicClientRegistry {
     ClientName name = ClientName.of(displayName);
     E164Phone phone = E164Phone.fromNormalized(normalizedPhone);
     return clients.findOrCreate(tenantId, name, phone);
+  }
+
+  @Override
+  public Optional<UUID> findExisting(UUID tenantId, String normalizedPhone) {
+    return clients.findExisting(tenantId, E164Phone.fromNormalized(normalizedPhone));
   }
 }

@@ -951,9 +951,16 @@ function PublicPageContent({
                             'A página deixou de estar disponível e o resultado da intenção original não pôde ser verificado. Não inicie outra reserva.',
                         );
                     } else {
+                        const otherIntent = discardResolvedIntent();
+                        if (otherIntent) {
+                            adoptSharedIntent(otherIntent);
+                            return;
+                        }
                         const outcome = unavailableBookingOutcome(false);
                         setBookingState(outcome.state);
-                        setBookingMessage(outcome.message);
+                        setBookingMessage(
+                            'Não foi possível concluir a reserva. Verifique se a página e as condições do horário continuam disponíveis.',
+                        );
                     }
                 } else if (error.status === 503) {
                     setBookingState('unavailable');

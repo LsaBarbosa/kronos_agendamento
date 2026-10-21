@@ -311,7 +311,7 @@ Critérios de aceite:
 - Correção de falta reavalia a restrição.
 - Eventos usados na contagem são explicáveis na área administrativa.
 
-**Decisões aprovadas pelo usuário em 19/10/2026 (ADR-0023):** a avaliação captura `asOf` uma vez; usa 12 meses de calendário UTC e intervalo `[windowStart, asOf)`, com ajuste de data impossível ao último dia válido; conta pelo instante original do evento de `NO_SHOW`, timezone do tenant somente para exibição. Correção administrativa é exclusivamente `NO_SHOW → COMPLETED`, com motivo, autorização, CAS/idempotência e história compensatória referenciada; não apaga o fato nem retorna a `CONFIRMED`. Política ausente é `NOT_CONFIGURED`, sem default, contagem/fatos consultáveis e sem inferir `CLEAR`/bloqueio; `NOT_TRACKED` é estado separado até AGD-033.
+**Decisões aprovadas pelo usuário em 19/10/2026 (ADR-0023):** a avaliação captura `asOf` uma vez; usa 12 meses de calendário UTC e intervalo `[windowStart, asOf)`, com ajuste de data impossível ao último dia válido; conta pelo instante original do evento de `NO_SHOW`, timezone do tenant somente para exibição. Correção administrativa é exclusivamente `NO_SHOW → COMPLETED`, com motivo, autorização, CAS/idempotência e história compensatória referenciada; não apaga o fato nem retorna a `CONFIRMED`. Política ausente é `NOT_CONFIGURED`, sem default, contagem/fatos consultáveis e sem inferir `CLEAR`/bloqueio. O status legado `NOT_TRACKED` não é emitido após AGD-033 e é preservado apenas em detalhes históricos de auditoria.
 
 ### AGD-033 — Bloqueio e desbloqueio de autoagendamento
 
@@ -324,6 +324,10 @@ Critérios de aceite:
 - Administrador consegue reservar e desbloquear com motivo.
 - Desbloqueio não apaga faltas.
 - Nova falta pode reativar bloqueio conforme política atual.
+
+O fluxo público consulta a restrição tenant-scoped no servidor sob o mesmo lock por tenant usado na confirmação, antes de gravar cliente/reserva. A rejeição é neutra e não revela contagem/fatos. Reserva administrativa continua permitida; consulta e cancelamento do cliente não são bloqueados. Política ausente é `NOT_CONFIGURED`, não `CLEAR`. Decisões aprovadas pelo usuário em 20/10/2026 (ADR-0024): correção/envelhecimento não liberam restrição ativa; política ausente preserva bloqueios e não cria novos; sem política e sem restrição, novas reservas públicas são permitidas sob os demais gates; redução de limite exige reconciliação administrativa explícita, após o PUT, tenant-scoped, versionada e idempotente. A reconciliação não reutiliza falta já consumida como causa.
+
+AGD-033 materializa uma restrição quando uma nova transição de `NO_SHOW` atinge a política configurada, consulta-a na confirmação pública sob lock tenant-scoped, oferece desbloqueio explícito e reconciliação administrativa versionada por cliente. Correção/envelhecimento atualizam a contagem sem remover restrição. Política ausente não libera uma restrição existente nem ativa outra; sem política e sem restrição, a reserva pública segue permitida sem inferir `CLEAR`, mantendo os gates gerais. Reconciliação avalia fatos numa única janela/asOf, usa somente causa ainda não consumida, possui CAS da política e idempotência, e não é executada implicitamente no PUT. A consulta/cancelamento do cliente e reserva administrativa permanecem permitidos.
 
 ## 7. Incremento E — Monetização e exportação
 

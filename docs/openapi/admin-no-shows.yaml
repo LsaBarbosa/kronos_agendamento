@@ -1,11 +1,14 @@
 openapi: 3.1.0
 info:
-  title: App Agendamento — consulta e correção administrativa de faltas
+  title: App Agendamento — faltas e restrições de autoagendamento
   version: 1.0.0
   description: >-
     Consulta tenant-scoped explicável e correção compensatória específica.
-    A ausência de política não cria limite nem representa CLEAR; restrições
-    efetivas permanecem fora do contrato até AGD-033.
+    Política e restrição são estados separados. Política ausente é
+    NOT_CONFIGURED e não implica CLEAR nem criação automática de restrição.
+    Restrição ativa pode ser desbloqueada explicitamente pelo administrador.
+    Redução de política não reconcilia clientes implicitamente; o administrador
+    pode reconciliar um cliente por vez, informando a versão esperada.
 servers:
   - url: /
 paths:
@@ -48,7 +51,7 @@ paths:
         Somente NO_SHOW→COMPLETED. Exige motivo e versão; preserva o fato
         original e grava correção referenciada, auditoria, receipt e outbox
         na mesma transação. Replay exige autorização atual.
-      security: [{ adminSession: [] }]
+      security: [{ adminSession: [], csrfToken: [] }]
       parameters:
         - name: id
           in: path
@@ -91,13 +94,125 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/admin/clients/{id}/restrictions/{restrictionId}/lift:
+    post:
+      operationId: liftClientBookingRestriction
+      summary: Desbloquear explicitamente o autoagendamento do cliente
+      description: >-
+        Exige associação administrativa atual, motivo, expectedVersion e
+        Idempotency-Key. Não apaga faltas. Status, histórico, auditoria,
+        receipt e evento compartilham a transação. Replays devolvem o receipt
+        original após revalidar autorização.
+      security: [{ adminSession: [], csrfToken: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: restrictionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedVersion, reason]
+              additionalProperties: false
+              properties:
+                expectedVersion: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        '200':
+          description: Restrição marcada LIFTED; replay preserva o receipt original
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+            Idempotency-Replayed: { schema: { type: boolean } }
+            X-Operation-Id: { schema: { type: string, format: uuid } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [restrictionId, status, version]
+                properties:
+                  restrictionId: { type: string, format: uuid }
+                  status: { type: string, const: LIFTED }
+                  version: { type: integer, minimum: 2 }
+        '400': { $ref: '#/components/responses/InvalidCommand' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/admin/clients/{id}/restrictions/reconcile:
+    post:
+      operationId: reconcileClientBookingRestriction
+      summary: Reavaliar explicitamente a política para um cliente
+      description: >-
+        Usa a política configurada e sua versão esperada depois do lock
+        tenant-scoped. Não desbloqueia restrição, não reutiliza falta causal
+        já consumida e não executa varredura global. Replay revalida autorização
+        e devolve a decisão original.
+      security: [{ adminSession: [], csrfToken: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedPolicyVersion]
+              additionalProperties: false
+              properties:
+                expectedPolicyVersion: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Decisão explicável persistida; receipt original em replay
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+            Idempotency-Replayed: { schema: { type: boolean } }
+            X-Operation-Id: { schema: { type: string, format: uuid } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [clientId, decision, asOf, windowStart, count, threshold, policyVersion, restrictionId, restrictionVersion]
+                properties:
+                  clientId: { type: string, format: uuid }
+                  decision: { type: string, enum: [ACTIVATED, ALREADY_RESTRICTED, BELOW_THRESHOLD, NO_UNUSED_CAUSAL_FACT] }
+                  asOf: { type: string, format: date-time }
+                  windowStart: { type: string, format: date-time }
+                  count: { type: integer, minimum: 0 }
+                  threshold: { type: integer, minimum: 1, maximum: 5 }
+                  policyVersion: { type: integer, minimum: 1 }
+                  restrictionId: { type: string, format: uuid, nullable: true }
+                  restrictionVersion: { type: integer, minimum: 1, nullable: true }
+        '400': { $ref: '#/components/responses/InvalidCommand' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 components:
   securitySchemes:
     adminSession: { type: apiKey, in: cookie, name: AGDSESSION }
+    csrfToken: { type: apiKey, in: header, name: X-CSRF-TOKEN }
   schemas:
     NoShowFactsPage:
       type: object
-      required: [clientId, windowStart, asOf, timeZone, count, totalFacts, policyStatus, policyVersion, restrictionStatus, facts, hasMore]
+      required: [clientId, windowStart, asOf, timeZone, count, totalFacts, policyStatus, policyVersion, restrictionStatus, activeRestriction, restrictionHistory, facts, hasMore]
       properties:
         clientId: { type: string, format: uuid }
         windowStart: { type: string, format: date-time }
@@ -108,7 +223,36 @@ components:
         policyStatus: { type: string, enum: [CONFIGURED, NOT_CONFIGURED] }
         threshold: { type: integer, minimum: 1, maximum: 5, nullable: true }
         policyVersion: { type: integer, minimum: 0 }
-        restrictionStatus: { type: string, const: NOT_TRACKED }
+        restrictionStatus: { type: string, enum: [NOT_CONFIGURED, CLEAR, RESTRICTED] }
+        activeRestriction:
+          oneOf:
+            - { type: 'null' }
+            - type: object
+              required: [restrictionId, status, evaluatedAt, countAtActivation, thresholdAtActivation, policyVersion, version]
+              properties:
+                restrictionId: { type: string, format: uuid }
+                status: { type: string, const: RESTRICTED }
+                evaluatedAt: { type: string, format: date-time }
+                countAtActivation: { type: integer, minimum: 1 }
+                thresholdAtActivation: { type: integer, minimum: 1, maximum: 5 }
+                policyVersion: { type: integer, minimum: 1 }
+                version: { type: integer, minimum: 1 }
+        restrictionHistory:
+          type: array
+          items:
+            type: object
+            required: [historyId, restrictionId, eventType, actorType, occurredAt, countAtDecision, thresholdAtDecision, policyVersion, restrictionVersion]
+            properties:
+              historyId: { type: string, format: uuid }
+              restrictionId: { type: string, format: uuid }
+              eventType: { type: string, enum: [ACTIVATED, RECONCILED, LIFTED] }
+              actorType: { type: string, enum: [SYSTEM, ADMIN] }
+              occurredAt: { type: string, format: date-time }
+              countAtDecision: { type: integer, minimum: 0 }
+              thresholdAtDecision: { type: integer, minimum: 1, maximum: 5 }
+              policyVersion: { type: integer, minimum: 1 }
+              restrictionVersion: { type: integer, minimum: 1 }
+              reason: { type: string, nullable: true }
         facts:
           type: array
           items:

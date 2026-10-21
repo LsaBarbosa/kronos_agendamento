@@ -573,6 +573,74 @@ class ClientAccessIT {
   }
 
   @Test
+  void activeBookingRestrictionDoesNotBlockClientAppointmentAccessOrAllowedCancellation()
+      throws Exception {
+    UUID noShowAppointment = insertClientAppointment(PHONE, now.minusSeconds(86_400));
+    UUID cancellableAppointment = insertClientAppointment(PHONE, now.plusSeconds(7_200));
+    UUID clientId =
+        ownerJdbc.queryForObject(
+            "SELECT client_id FROM agendamento.client WHERE tenant_id = ? AND normalized_phone = ?",
+            UUID.class,
+            tenantId,
+            PHONE);
+    UUID noShowHistoryId = UUID.randomUUID();
+    ownerJdbc.update(
+        "UPDATE agendamento.appointment SET status = 'NO_SHOW', version = 2 WHERE tenant_id = ? AND appointment_id = ?",
+        tenantId,
+        noShowAppointment);
+    ownerJdbc.update(
+        "INSERT INTO agendamento.appointment_history(history_id, tenant_id, appointment_id, from_status, to_status, actor_type, actor_ref, reason_code, occurred_at, version_before, version_after) VALUES (?, ?, ?, 'CONFIRMED', 'NO_SHOW', 'ADMIN', 'TENANT_ADMIN', 'APPOINTMENT_NO_SHOW', ?, 1, 2)",
+        noShowHistoryId,
+        tenantId,
+        noShowAppointment,
+        java.sql.Timestamp.from(now.minusSeconds(86_000)));
+    UUID restrictionId = UUID.randomUUID();
+    ownerJdbc.update(
+        "INSERT INTO agendamento.client_booking_restriction(restriction_id, tenant_id, client_id, source_appointment_id, source_history_id, status, evaluated_at, count_at_activation, threshold_at_activation, policy_version, version, created_at) VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, 1, 1, 1, 1, ?)",
+        restrictionId,
+        tenantId,
+        clientId,
+        noShowAppointment,
+        noShowHistoryId,
+        java.sql.Timestamp.from(now),
+        java.sql.Timestamp.from(now));
+    ownerJdbc.update(
+        "INSERT INTO agendamento.client_booking_restriction_history(history_id, tenant_id, restriction_id, event_type, actor_type, occurred_at, count_at_decision, threshold_at_decision, policy_version, restriction_version) VALUES (?, ?, ?, 'ACTIVATED', 'SYSTEM', ?, 1, 1, 1, 1)",
+        UUID.randomUUID(),
+        tenantId,
+        restrictionId,
+        java.sql.Timestamp.from(now));
+    String cookie = verifiedClientCookie(slug, PHONE);
+
+    mvc.perform(get("/api/v1/client/appointments").header("Cookie", cookie))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.items.length()").value(2));
+    mvc.perform(
+            get("/api/v1/client/appointments/{id}", cancellableAppointment)
+                .header("Cookie", cookie))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CONFIRMED"));
+    mvc.perform(
+            post("/api/v1/client/appointments/{id}/cancel", cancellableAppointment)
+                .with(csrf())
+                .header("Cookie", cookie)
+                .header("Idempotency-Key", "restricted-client-cancel-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedVersion\":1}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("CANCELLED_BY_CLIENT"));
+
+    assertThat(statusOf(cancellableAppointment)).isEqualTo("CANCELLED_BY_CLIENT");
+    assertThat(
+            ownerJdbc.queryForObject(
+                "SELECT status FROM agendamento.client_booking_restriction WHERE tenant_id = ? AND restriction_id = ?",
+                String.class,
+                tenantId,
+                restrictionId))
+        .isEqualTo("ACTIVE");
+  }
+
+  @Test
   void clientCancellationAtInclusiveCutoffWorksForInactiveServiceAndReplayHasNoEffects()
       throws Exception {
     UUID appointmentId = insertClientAppointment(PHONE, now.plusSeconds(7_200));

@@ -314,9 +314,9 @@ Regras:
 - Administrador vê contagem, eventos que a compõem e status do bloqueio.
 - Desbloqueio manual exige motivo e não apaga eventos de falta.
 - Uma nova falta posterior pode voltar a bloquear conforme a política vigente.
-- Mudança do limite não deve reescrever história; pode recalcular restrições atuais por job versionado e auditado.
+- Alteração do limite não reescreve história nem executa reconciliação implicitamente no `PUT`. A redução pode ser aplicada retroativamente por comando administrativo explícito e versionado, posterior ao salvamento; a avaliação identifica a versão da política e é recuperável/idempotente.
 
-Política ausente é `NOT_CONFIGURED`, sem limite padrão. Contagem e fatos continuam consultáveis, mas a ausência não permite inferir `CLEAR` nem bloqueio. `restrictionStatus=NOT_TRACKED` é separado e permanece até integração efetiva de AGD-033; configurar limite não materializa restrição.
+Política ausente é `NOT_CONFIGURED`, sem limite padrão. Contagem e fatos continuam consultáveis, mas a ausência não permite inferir `CLEAR` nem bloqueio. O status da política é independente do status da restrição (`NOT_CONFIGURED`, `CLEAR` ou `RESTRICTED`). Uma restrição ativa é tenant-scoped e verificada no servidor antes do commit do autoagendamento público, mesmo se a política for removida; não impede consulta/cancelamento do cliente nem reserva administrativa. Sem política e sem restrição ativa, o autoagendamento pode prosseguir como `NOT_CONFIGURED`, ainda condicionado à publicação, requisitos legais/comerciais, serviço ativo e disponibilidade. Correção de falta e envelhecimento atualizam a contagem, mas não removem restrição ativa. Desbloqueio exige ação administrativa explícita com motivo e não apaga faltas. Redução do limite pode ser aplicada por reconciliação administrativa explícita posterior ao PUT. Estas decisões foram aprovadas pelo usuário em 20/10/2026 e estão detalhadas na ADR-0024.
 
 ## 11. Notificações
 

@@ -446,7 +446,8 @@ public class PostgresAppointmentRepository
       Appointment current,
       long expectedVersion,
       com.appagendamento.appointments.domain.AppointmentOutcome outcome,
-      String reason) {
+      String reason,
+      java.time.Instant occurredAt) {
     try {
       int updated =
           jdbc.update(
@@ -467,7 +468,7 @@ public class PostgresAppointmentRepository
             actor_type, actor_ref, reason_code, reason, occurred_at,
             previous_starts_at, previous_occupied_until, new_starts_at, new_occupied_until,
             version_before, version_after
-          ) VALUES (?, ?, ?, 'CONFIRMED', ?, 'ADMIN', 'TENANT_ADMIN', ?, ?, clock_timestamp(),
+          ) VALUES (?, ?, ?, 'CONFIRMED', ?, 'ADMIN', 'TENANT_ADMIN', ?, ?, ?,
                     NULL, NULL, NULL, NULL, ?, ?)
           """,
           UUID.randomUUID(),
@@ -476,6 +477,7 @@ public class PostgresAppointmentRepository
           outcome.status().name(),
           outcome.historyReason(),
           reason,
+          Timestamp.from(occurredAt),
           expectedVersion,
           expectedVersion + 1);
       return true;

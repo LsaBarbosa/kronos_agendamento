@@ -190,7 +190,7 @@ try {
         const method = args[1]?.method ?? 'GET';
         if (url.endsWith('/v1/admin/no-show-policy') && method === 'GET' && window.__holdNoShowReads) {
           return new Promise(resolve => window.__noShowRequests.push({
-            release: () => resolve(new Response(JSON.stringify({configured:false, version:0, threshold:null, restrictionStatus:'NOT_TRACKED'}), {status:200, headers:{'Content-Type':'application/json'}}))
+            release: () => resolve(new Response(JSON.stringify({configured:false, policyStatus:'NOT_CONFIGURED', version:0, threshold:null, restrictionIntegrationStatus:'TRACKED'}), {status:200, headers:{'Content-Type':'application/json'}}))
           }));
         }
         if (url.endsWith('/v1/admin/no-show-policy') && method === 'PUT') {
@@ -215,7 +215,7 @@ try {
     await evaluate('window.__noShowRequests[0].release()');
     await setSelectById('no-show-threshold', '3', evaluate);
     await clickButtonByText('Salvar limite', evaluate);
-    await waitForText('Limite salvo. A aplicação efetiva de restrições depende de AGD-033.', evaluate);
+    await waitForText('Limite de faltas salvo para este tenant.', evaluate);
     await evaluate(`(() => {
       window.__holdNoShowReads = false;
       window.__noShowRequests[1].release();
@@ -254,7 +254,7 @@ try {
         throw new Error(`UI não preservou o comando após 503: ${JSON.stringify(uncertainNoShow)}`);
     }
     await clickButtonByText('Recuperar operação', evaluate);
-    await waitForText('Limite salvo. A aplicação efetiva de restrições depende de AGD-033.', evaluate);
+    await waitForText('Limite de faltas salvo para este tenant.', evaluate);
     const recoveredNoShow = await evaluate(`(() => ({
       text: document.querySelector('#no-show-policy-title')?.parentElement?.innerText ?? '',
       threshold: document.getElementById('no-show-threshold')?.value,
@@ -303,7 +303,8 @@ try {
         !persistedNoShowPolicy.configured ||
         persistedNoShowPolicy.threshold !== 4 ||
         persistedNoShowPolicy.version !== 2 ||
-        persistedNoShowPolicy.restrictionStatus !== 'NOT_TRACKED'
+        persistedNoShowPolicy.policyStatus !== 'CONFIGURED' ||
+        persistedNoShowPolicy.restrictionIntegrationStatus !== 'TRACKED'
     ) {
         throw new Error('Grade/políticas não persistiram ou divergiram após recarregar.');
     }
@@ -528,6 +529,8 @@ try {
     if (!(await evaluate('document.documentElement.scrollWidth <= window.innerWidth'))) {
         throw new Error('A página pública excedeu a largura do viewport desktop.');
     }
+    await clickButtonByText('Fazer outra reserva', evaluate);
+    await waitUntil(() => evaluate(`localStorage.getItem('kronos.public-booking.intent.' + ${JSON.stringify(publication.slug)}) === null`));
     console.log(
         `Browser: visitante consultou ${publicDate}, confirmou duas intenções sem duplicação entre ${publicSlotsBeforeSelection} horários; layout móvel/desktop sem overflow.`,
     );
@@ -1371,6 +1374,22 @@ try {
     await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-appointment-id="${administrativeAppointmentId}"]'))`));
     await evaluate(`document.querySelector('[data-appointment-id="${administrativeAppointmentId}"] button')?.click()`);
     await waitUntil(() => evaluate(`document.querySelector('.admin-agenda__details')?.innerText.includes('Reserva administrativa E2E')`));
+    const restrictionPolicyUpdate = await evaluate(`(async () => {
+      const [policyResponse, csrfResponse] = await Promise.all([
+        fetch('/api/v1/admin/no-show-policy', {credentials:'same-origin', cache:'no-store'}),
+        fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'})
+      ]);
+      const [policy, csrf] = await Promise.all([policyResponse.json(), csrfResponse.json()]);
+      const response = await fetch('/api/v1/admin/no-show-policy', {
+        method:'PUT', credentials:'same-origin',
+        headers:{'Content-Type':'application/json', [csrf.headerName]:csrf.token, 'Idempotency-Key':crypto.randomUUID()},
+        body:JSON.stringify({expectedVersion:policy.version, threshold:1})
+      });
+      return {status:response.status, body:response.ok ? await response.json() : await response.text()};
+    })()`);
+    if (restrictionPolicyUpdate.status !== 200 || restrictionPolicyUpdate.body.threshold !== 1) {
+        throw new Error(`Fixture da política de falta não foi configurada: ${JSON.stringify(restrictionPolicyUpdate)}`);
+    }
     await clickButtonByText('Marcar falta', evaluate);
     await clickButtonByText('Confirmar ação', evaluate);
     await waitForText('Estado atualizado e persistido.', evaluate);
@@ -1383,12 +1402,307 @@ try {
         `SELECT client_id FROM agendamento.appointment WHERE appointment_id = '${administrativeAppointmentId}'`,
         appEnvironment,
     );
+    const activeRestrictionId = queryPostgres(
+        `SELECT restriction_id FROM agendamento.client_booking_restriction WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${noShowClientId}' AND status = 'ACTIVE'`,
+        appEnvironment,
+    );
+    const restrictedPhone = queryPostgres(
+        `SELECT normalized_phone FROM agendamento.client WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${noShowClientId}'`,
+        appEnvironment,
+    );
+    if (!activeRestrictionId) throw new Error('NO_SHOW no fluxo do navegador não materializou restrição ativa.');
+    await clickButtonByText('Publicar página', evaluate);
+    await waitForText('Estado: Publicado', evaluate);
+    const restrictionPagePublication = await evaluate(
+        "fetch('/api/v1/admin/publication', {credentials:'same-origin', cache:'no-store'}).then(response => response.json())",
+    );
+    if (restrictionPagePublication.published !== true) {
+        throw new Error('Fixture pública não estava publicada para testar a rejeição neutra por restrição.');
+    }
+    const restrictionLiftSearchPrefix = 'Cliente P2 desbloqueio E2E';
+    const restrictionLiftClientAName = `${restrictionLiftSearchPrefix} A`;
+    const secondRestrictedClientName = `${restrictionLiftSearchPrefix} B`;
+    const secondRestrictedClientPhone = '+5511999991237';
+    const secondRestrictionAppointment = await evaluate(`(async () => {
+      const [scheduleResponse, csrfResponse] = await Promise.all([
+        fetch('/api/v1/admin/schedule/weekly-periods', {credentials:'same-origin', cache:'no-store'}),
+        fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'})
+      ]);
+      const [schedule, csrf] = await Promise.all([scheduleResponse.json(), csrfResponse.json()]);
+      let slot = null;
+      for (let offset = 0; offset <= 25 && !slot; offset++) {
+        const date = new Date(${JSON.stringify(publicDate)} + 'T12:00:00Z');
+        date.setUTCDate(date.getUTCDate() + offset);
+        const localDate = date.toISOString().slice(0, 10);
+        const query = new URLSearchParams({serviceId:${JSON.stringify(publicService.serviceId)}, from:localDate, to:localDate});
+        const response = await fetch('/api/v1/public/' + encodeURIComponent(${JSON.stringify(publication.slug)}) + '/availability?' + query);
+        if (!response.ok) continue;
+        const page = await response.json();
+        slot = page.days?.flatMap(day => day.slots ?? [])[0] ?? null;
+      }
+      if (!slot) return {status:0, error:'No slot found for second restricted fixture'};
+      const response = await fetch('/api/v1/admin/appointments', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json', [csrf.headerName]:csrf.token, 'Idempotency-Key':crypto.randomUUID()},
+        body:JSON.stringify({serviceId:${JSON.stringify(publicService.serviceId)}, startsAt:slot.startsAt, client:{name:${JSON.stringify(secondRestrictedClientName)}, phone:${JSON.stringify(secondRestrictedClientPhone)}}, overridePolicies:[], expectedScheduleVersion:schedule.scheduleRevision})
+      });
+      return {status:response.status, body:await response.json()};
+    })()`);
+    if (secondRestrictionAppointment.status !== 201) {
+        throw new Error(`Não foi possível criar a segunda fixture de cliente restrito: ${JSON.stringify(secondRestrictionAppointment)}`);
+    }
+    const secondRestrictionAppointmentId = secondRestrictionAppointment.body.appointmentId;
+    queryPostgres(
+        `WITH moment AS (SELECT clock_timestamp() AS now) UPDATE agendamento.appointment a SET starts_at = moment.now - interval '2 days', service_ends_at = moment.now - interval '2 days' + make_interval(mins => a.service_duration_minutes), occupied_until = moment.now - interval '2 days' + make_interval(mins => a.service_duration_minutes + a.service_buffer_after_minutes) FROM moment WHERE a.appointment_id = '${secondRestrictionAppointmentId}'::uuid`,
+        appEnvironment,
+    );
+    const secondNoShow = await evaluate(`(async () => {
+      const csrfResponse = await fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'});
+      const csrf = await csrfResponse.json();
+      const response = await fetch('/api/v1/admin/appointments/${secondRestrictionAppointmentId}/mark-no-show', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json', [csrf.headerName]:csrf.token, 'Idempotency-Key':crypto.randomUUID()},
+        body:JSON.stringify({expectedVersion:1, reason:'Fixture restrita de segundo cliente'})
+      });
+      return {status:response.status, body:await response.json()};
+    })()`);
+    if (secondNoShow.status !== 200 || secondNoShow.body.status !== 'NO_SHOW') {
+        throw new Error(`Não foi possível restringir o segundo cliente de teste: ${JSON.stringify(secondNoShow)}`);
+    }
+    const secondRestrictedClientId = queryPostgres(
+        `SELECT client_id FROM agendamento.appointment WHERE appointment_id = '${secondRestrictionAppointmentId}'`,
+        appEnvironment,
+    );
+    const secondActiveRestrictionId = queryPostgres(
+        `SELECT restriction_id FROM agendamento.client_booking_restriction WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${secondRestrictedClientId}' AND status = 'ACTIVE'`,
+        appEnvironment,
+    );
+    if (!secondActiveRestrictionId) throw new Error('Segundo NO_SHOW não materializou a restrição da fixture.');
+    queryPostgres(
+        `UPDATE agendamento.client SET display_name = '${restrictionLiftClientAName}' WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${noShowClientId}'`,
+        appEnvironment,
+    );
+    const restrictionLiftFixtureNames = queryPostgres(
+        `SELECT string_agg(client_id::text || ':' || display_name, ' | ' ORDER BY display_name) FROM agendamento.client WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id IN ('${noShowClientId}', '${secondRestrictedClientId}')`,
+        appEnvironment,
+    );
+    const restrictionLiftSearchProbe = await evaluate(
+        `fetch('/api/v1/admin/clients?query=' + encodeURIComponent(${JSON.stringify(restrictionLiftSearchPrefix)}), {credentials:'same-origin', cache:'no-store'}).then(response => response.json())`,
+    );
+    if (
+        !restrictionLiftSearchProbe.some(
+            (client) =>
+                client.clientId === noShowClientId &&
+                client.displayName === restrictionLiftClientAName,
+        ) ||
+        !restrictionLiftSearchProbe.some(
+            (client) =>
+                client.clientId === secondRestrictedClientId &&
+                client.displayName === secondRestrictedClientName,
+        )
+    ) {
+        throw new Error(
+            `Fixtures A/B não estão disponíveis pela busca tenant-scoped: banco=${restrictionLiftFixtureNames}; API=${JSON.stringify(restrictionLiftSearchProbe)}`,
+        );
+    }
+    console.log('Browser: busca administrativa encontrou ambos os clientes restritos de fixture.');
+    await navigate(`http://localhost:5173/public/${encodeURIComponent(publication.slug)}`, secondTab.command, secondTab.evaluate);
+    await waitForText(catalogName + ' Editado', secondTab.evaluate);
+    await waitUntil(() => secondTab.evaluate("Boolean(document.getElementById('public-service') && !document.getElementById('public-service').disabled)"));
+    await setSelectById('public-service', publicService.serviceId, secondTab.evaluate);
+    const blockedBookingDate = await secondTab.evaluate(`(async () => {
+      const base = new Date(${JSON.stringify(publicDate)} + 'T12:00:00Z');
+      for (let offset = 1; offset <= 30; offset++) {
+        const candidate = new Date(base);
+        candidate.setUTCDate(candidate.getUTCDate() + offset);
+        const date = candidate.toISOString().slice(0, 10);
+        const query = new URLSearchParams({serviceId:${JSON.stringify(publicService.serviceId)}, from:date, to:date});
+        const response = await fetch('/api/v1/public/' + encodeURIComponent(${JSON.stringify(publication.slug)}) + '/availability?' + query);
+        if (!response.ok) continue;
+        const page = await response.json();
+        if (page.days?.[0]?.slots?.length) return date;
+      }
+      return null;
+    })()`);
+    if (!blockedBookingDate) throw new Error('Não há slot de teste futuro para provar rejeição pública neutra.');
+    await setFieldById('public-date', blockedBookingDate, secondTab.evaluate);
+    await waitUntil(() => secondTab.evaluate("document.querySelectorAll('.public-page__slot').length > 0"));
+    await secondTab.evaluate("document.querySelector('.public-page__slot')?.click()");
+    await waitUntil(() => secondTab.evaluate("Boolean(document.getElementById('public-client-name'))"));
+    await setFieldById('public-client-name', 'Reserva administrativa E2E', secondTab.evaluate);
+    await setFieldById('public-client-phone', restrictedPhone, secondTab.evaluate);
+    const appointmentsBeforeRestrictedAttempt = Number(queryPostgres(
+        `SELECT count(*) FROM agendamento.appointment WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
+        appEnvironment,
+    ));
+    await clickButtonByText('Confirmar reserva', secondTab.evaluate);
+    await waitForText('Não foi possível concluir a reserva.', secondTab.evaluate);
+    const restrictedPublicText = await secondTab.evaluate("document.body.innerText");
+    if (restrictedPublicText.includes('NO_SHOW') || restrictedPublicText.includes('falta') || restrictedPublicText.includes(activeRestrictionId)) {
+        throw new Error('A página pública revelou o motivo/identificador da restrição.');
+    }
+    const restrictedIntentWasCleared = await secondTab.evaluate(
+        `localStorage.getItem('kronos.public-booking.intent.' + ${JSON.stringify(publication.slug)}) === null`,
+    );
+    if (!restrictedIntentWasCleared) {
+        throw new Error('A rejeição definitiva da reserva restrita deixou uma intenção recuperável sem receipt.');
+    }
+    const appointmentsAfterRestrictedAttempt = Number(queryPostgres(
+        `SELECT count(*) FROM agendamento.appointment WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
+        appEnvironment,
+    ));
+    if (appointmentsAfterRestrictedAttempt !== appointmentsBeforeRestrictedAttempt) {
+        throw new Error('Tentativa pública bloqueada deixou reserva persistida.');
+    }
+    await clickButtonByText('Despublicar página', evaluate);
+    await waitForText('Página pública despublicada.', evaluate);
+    const restrictionPageUnpublished = await evaluate(
+        `fetch('/api/v1/public/${encodeURIComponent(publication.slug)}').then(response => response.status)`,
+    );
+    if (restrictionPageUnpublished !== 404) {
+        throw new Error('Fixture da rejeição por restrição não restaurou o estado público despublicado.');
+    }
+    await navigate(`http://localhost:5173/admin`, secondTab.command, secondTab.evaluate);
     await waitForText('Faltas de clientes', evaluate);
-    await setFieldById('no-show-client-search', 'Reserva administrativa E2E', evaluate);
+    await setFieldById('no-show-client-search', restrictionLiftSearchPrefix, evaluate);
     await clickButtonByText('Buscar', evaluate);
-    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === 'Reserva administrativa E2E')`));
-    await clickButtonByText('Reserva administrativa E2E', evaluate);
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === '${restrictionLiftClientAName}')`));
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === '${secondRestrictedClientName}')`));
+    await clickButtonByText(restrictionLiftClientAName, evaluate);
     await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('conta na janela')`));
+    if ((await evaluate(`document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId`)) !== noShowClientId) {
+        throw new Error('A seleção inicial dos fatos não corresponde ao cliente A.');
+    }
+    await waitForText('Restrição ativa desde', evaluate);
+    const activeRestrictionDom = await evaluate(`document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')?.innerText ?? ''`);
+    if (!activeRestrictionDom.includes('1 de 1 faltas') || !activeRestrictionDom.includes(`política v${restrictionPolicyUpdate.body.version}`)) {
+        throw new Error(`Decisão ativa não explicou contagem/limite/versão: ${activeRestrictionDom}`);
+    }
+    await setTextareaById('restriction-lift-reason', 'Revisão administrativa E2E', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__restrictionLiftAttempts = [];
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const url = String(args[0]);
+        if (url.endsWith('/restrictions/${activeRestrictionId}/lift') && args[1]?.method === 'POST') {
+          const attempt = {url, body:args[1].body, key:args[1].headers['Idempotency-Key'], operationId:response.headers.get('X-Operation-Id'), status:response.status, replayed:response.headers.get('Idempotency-Replayed'), receipt:response.ok ? await response.clone().json() : null};
+          window.__restrictionLiftAttempts.push(attempt);
+          if (response.ok && window.__restrictionLiftAttempts.length === 1) {
+            window.__restrictionLiftResponseReady = true;
+            await new Promise(resolve => { window.__releaseRestrictionLiftResponse = resolve; });
+            throw new TypeError('Simulated lost restriction lift response after commit');
+          }
+          if (window.__restrictionLiftAttempts.length === 2) window.fetch = originalFetch;
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Desbloquear autoagendamento', evaluate);
+    await waitUntil(() => evaluate('window.__restrictionLiftResponseReady === true'));
+    const selectionGuard = await evaluate(`(() => {
+      const buttons = [...document.querySelectorAll('[aria-label="Resultados de clientes"] button')];
+      const clientB = buttons.find(button => button.innerText.trim() === '${secondRestrictedClientName}');
+      const wasDisabled = clientB?.disabled;
+      if (clientB) { clientB.disabled = false; clientB.click(); clientB.disabled = wasDisabled; }
+      return {
+        selectedClientId: document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId,
+        clientBDisabled: wasDisabled,
+        factsClientId: document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId,
+      };
+    })()`);
+    if (selectionGuard.selectedClientId !== noShowClientId || selectionGuard.factsClientId !== noShowClientId || selectionGuard.clientBDisabled !== true) {
+        throw new Error(`A seleção mudou durante o desbloqueio pendente: ${JSON.stringify(selectionGuard)}`);
+    }
+    const pendingLiftRequest = await evaluate('window.__restrictionLiftAttempts[0]');
+    if (!pendingLiftRequest?.url.includes(`/clients/${noShowClientId}/restrictions/${activeRestrictionId}/lift`)) {
+        throw new Error(`A intenção pendente não permaneceu associada ao cliente A: ${JSON.stringify(pendingLiftRequest)}`);
+    }
+    await evaluate('window.__releaseRestrictionLiftResponse?.()');
+    await waitForText('Resultado incerto. Repita o mesmo desbloqueio para recuperar a operação original.', evaluate);
+    await clickButtonByText('Recuperar mesmo desbloqueio', evaluate);
+    await waitForText('Autoagendamento desbloqueado.', evaluate);
+    await waitUntil(() => evaluate(`(() => {
+      const summary = document.querySelector('section[aria-labelledby="client-no-shows-title"]')?.innerText ?? '';
+      const facts = document.querySelector('[data-testid="client-no-show-facts"]');
+      return summary.includes('Situação do autoagendamento: CLEAR') && summary.includes('Bloqueio removido') && facts?.dataset.clientId === '${noShowClientId}';
+    })()`));
+    const recoveredLiftDom = await evaluate(`(() => {
+      const summary = document.querySelector('section[aria-labelledby="client-no-shows-title"]')?.innerText ?? '';
+      return {
+        clientId: document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId,
+        factsClientId: document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId,
+        active: Boolean(document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')),
+        history: summary.includes('Bloqueio removido'),
+        liftedVersion: summary.includes('versão v2'),
+        alertText: document.querySelector('[role="alert"]')?.innerText ?? '',
+        retryVisible: [...document.querySelectorAll('button')].some(button => button.innerText.includes('Recuperar mesmo desbloqueio')),
+        reasonDisabled: document.getElementById('restriction-lift-reason')?.disabled,
+        clientB: (() => { const button = [...document.querySelectorAll('[aria-label="Resultados de clientes"] button')].find(item => item.innerText.trim() === '${secondRestrictedClientName}'); return {visible:Boolean(button), disabled:button?.disabled}; })(),
+      };
+    })()`);
+    if (recoveredLiftDom.clientId !== noShowClientId || recoveredLiftDom.factsClientId !== noShowClientId || recoveredLiftDom.active || !recoveredLiftDom.history || !recoveredLiftDom.liftedVersion || recoveredLiftDom.alertText.includes('incerto') || recoveredLiftDom.retryVisible || recoveredLiftDom.reasonDisabled || !recoveredLiftDom.clientB.visible || recoveredLiftDom.clientB.disabled) {
+        throw new Error(`DOM após replay não reconciliou cliente A/liberou navegação: ${JSON.stringify(recoveredLiftDom)}`);
+    }
+    await evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).find(button => button.innerText.trim() === '${secondRestrictedClientName}')?.click()`);
+    try {
+        await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId === '${secondRestrictedClientId}' && document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${secondRestrictedClientId}' && document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]'))`));
+    } catch (selectionError) {
+        const selectionDom = await evaluate(`(() => ({selected:document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId, facts:document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId, active:Boolean(document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')), button:[...document.querySelectorAll('[aria-label="Resultados de clientes"] button')].find(item => item.innerText.trim() === '${secondRestrictedClientName}')?.disabled, alert:document.querySelector('[role="alert"]')?.innerText ?? '', loading:document.querySelector('output[aria-live="polite"]')?.innerText ?? ''}))()`);
+        throw new Error(`Seleção pós-recovery de B não atualizou os fatos: ${JSON.stringify(selectionDom)}; ${selectionError.message}`);
+    }
+    const liftAttempts = await evaluate('window.__restrictionLiftAttempts');
+    if (liftAttempts.length !== 2 || liftAttempts[0].url !== liftAttempts[1].url || liftAttempts[0].body !== liftAttempts[1].body || liftAttempts[0].key !== liftAttempts[1].key || !liftAttempts[0].operationId || liftAttempts[0].operationId !== liftAttempts[1].operationId || liftAttempts[1].replayed !== 'true' || liftAttempts[1].receipt?.status !== 'LIFTED') {
+        throw new Error(`Retry do desbloqueio não recuperou a intenção original: ${JSON.stringify(liftAttempts)}`);
+    }
+    const liftEffects = Number(queryPostgres(
+        `SELECT CASE WHEN (SELECT status = 'LIFTED' AND version = 2 FROM agendamento.client_booking_restriction WHERE restriction_id = '${activeRestrictionId}') AND (SELECT count(*) = 2 FROM agendamento.client_booking_restriction_history WHERE restriction_id = '${activeRestrictionId}') AND (SELECT count(*) = 1 FROM agendamento.audit_event WHERE target_id = '${activeRestrictionId}' AND action = 'CLIENT_SELF_BOOKING_UNBLOCKED') AND (SELECT count(*) = 1 FROM agendamento.outbox_event WHERE aggregate_id = '${activeRestrictionId}' AND event_type = 'ClientSelfBookingUnblocked') AND (SELECT count(*) = 1 FROM agendamento.idempotency_record WHERE command_scope = 'clients.booking-restriction.lift.v1' AND state = 'COMPLETED' AND operation_id = '${liftAttempts[1].operationId}') THEN 1 ELSE 0 END`,
+        appEnvironment,
+    ));
+    if (liftEffects !== 1) throw new Error('Retry do desbloqueio duplicou ou omitiu efeitos transacionais.');
+    await command('Page.reload');
+    await waitForText('Sessão administrativa ativa.', evaluate);
+    await waitForText('Faltas de clientes', evaluate);
+    await setFieldById('no-show-client-search', restrictionLiftSearchPrefix, evaluate);
+    await clickButtonByText('Buscar', evaluate);
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === '${restrictionLiftClientAName}')`));
+    await clickButtonByText(restrictionLiftClientAName, evaluate);
+    await waitUntil(() => evaluate(`document.querySelector('section[aria-labelledby="client-no-shows-title"]')?.innerText.includes('Bloqueio removido')`));
+    const restrictionAfterReload = await evaluate(`document.querySelector('section[aria-labelledby="client-no-shows-title"]')?.innerText ?? ''`);
+    if (restrictionAfterReload.includes('Restrição ativa desde') || !restrictionAfterReload.includes('Faltas que contam: 1') || !restrictionAfterReload.includes('Bloqueio removido')) {
+        throw new Error(`Desbloqueio/fatos não persistiram após reload: ${restrictionAfterReload}`);
+    }
+    await setFieldById('no-show-client-search', restrictionLiftSearchPrefix, evaluate);
+    await clickButtonByText('Buscar', evaluate);
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === '${secondRestrictedClientName}')`));
+    await clickButtonByText(secondRestrictedClientName, evaluate);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${secondRestrictedClientId}' && document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]'))`));
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__staleClientFactsReady = false;
+      window.fetch = async (...args) => {
+        const url = String(args[0]);
+        const response = await originalFetch(...args);
+        if (url.includes('/clients/${noShowClientId}/no-shows?') && !args[1]?.method && !window.__staleClientFactsReady) {
+          window.__staleClientFactsReady = true;
+          await new Promise(resolve => { window.__releaseStaleClientFacts = resolve; });
+          window.fetch = originalFetch;
+        }
+        return response;
+      };
+    })()`);
+    await evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).find(button => button.innerText.trim() === '${restrictionLiftClientAName}')?.click()`);
+    await waitUntil(() => evaluate('typeof window.__releaseStaleClientFacts === "function"'));
+    await evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).find(button => button.innerText.trim() === '${secondRestrictedClientName}')?.click()`);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${secondRestrictedClientId}' && document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]'))`));
+    await evaluate('(async () => { window.__releaseStaleClientFacts?.(); await new Promise(resolve => setTimeout(resolve, 0)); })()');
+    const staleFactsDom = await evaluate(`({selected:document.querySelector('[data-testid="selected-no-show-client"]')?.innerText, selectedId:document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId, factsId:document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId, restriction:document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]')?.innerText ?? ''})`);
+    if (staleFactsDom.selectedId !== secondRestrictedClientId || staleFactsDom.factsId !== secondRestrictedClientId || !staleFactsDom.selected?.includes(secondRestrictedClientName) || !staleFactsDom.restriction) {
+        throw new Error(`Resposta tardia dos fatos do cliente A contaminou o cliente B: ${JSON.stringify(staleFactsDom)}`);
+    }
+    console.log('Browser: desbloqueio incerto permaneceu ligado ao cliente/restrição originais; retry único atualizou A, bloqueou troca durante envio/incerteza e leitura tardia preservou os dados de B.');
+    await evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).find(button => button.innerText.trim() === '${restrictionLiftClientAName}')?.click()`);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${noShowClientId}' && document.getElementById('no-show-reason-${administrativeAppointmentId}'))`));
     await setTextareaById(`no-show-reason-${administrativeAppointmentId}`, 'Correção compensatória comprovada E2E', evaluate);
     await evaluate(`(() => {
       const originalFetch = window.fetch;
@@ -1411,7 +1725,12 @@ try {
     await clickButtonByText('Corrigir para concluída', evaluate);
     await waitForText('Resultado incerto. Repita a mesma correção para recuperar o receipt original.', evaluate);
     await clickButtonByText('Recuperar mesma correção', evaluate);
-    await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('corrigida; não conta')`));
+    try {
+        await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('corrigida; não conta')`));
+    } catch (correctionError) {
+        const correctionState = await evaluate(`(() => ({selected:document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId, facts:document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId, row:document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText ?? null, alert:document.querySelector('[role="alert"]')?.innerText ?? '', notice:[...document.querySelectorAll('output')].map(output => output.innerText), requests:window.__noShowCorrectionRequests}))()`);
+        throw new Error(`Correção de falta após retry não reconciliou a linha: ${JSON.stringify(correctionState)}; ${correctionError.message}`);
+    }
     const correctionDom = await evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText ?? ''`);
     if (!correctionDom.includes('COMPLETED, versão 3') || !correctionDom.includes('Correção compensatória comprovada E2E')) {
         throw new Error(`DOM não mostrou correção e motivo persistidos: ${correctionDom}`);
@@ -1434,11 +1753,17 @@ try {
     await command('Page.reload');
     await waitForText('Sessão administrativa ativa.', evaluate);
     await waitForText('Faltas de clientes', evaluate);
-    await setFieldById('no-show-client-search', 'Reserva administrativa E2E', evaluate);
+    await setFieldById('no-show-client-search', restrictionLiftSearchPrefix, evaluate);
     await clickButtonByText('Buscar', evaluate);
-    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === 'Reserva administrativa E2E')`));
-    await clickButtonByText('Reserva administrativa E2E', evaluate);
-    await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('corrigida; não conta')`));
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === '${restrictionLiftClientAName}')`));
+    await clickButtonByText(restrictionLiftClientAName, evaluate);
+    try {
+        await waitUntil(() => evaluate(`document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText.includes('corrigida; não conta')`));
+    } catch (correctionError) {
+        const correctionState = await evaluate(`(() => ({selected:document.querySelector('[data-testid="selected-no-show-client"]')?.dataset.clientId, facts:document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId, row:document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText ?? null, alert:document.querySelector('[role="alert"]')?.innerText ?? '', notice:[...document.querySelectorAll('output')].map(output => output.innerText), requests:window.__noShowCorrectionRequests}))()`);
+        const correctionDatabase = queryPostgres(`SELECT status || ':v' || version FROM agendamento.appointment WHERE appointment_id = '${administrativeAppointmentId}'`, appEnvironment);
+        throw new Error(`Correção após retry não reconciliou fatos no DOM: ${JSON.stringify(correctionState)}; db=${correctionDatabase}; ${correctionError.message}`);
+    }
     const correctedFactsAfterReload = await evaluate(`(() => ({
       text: document.querySelector('[data-testid="no-show-${administrativeAppointmentId}"]')?.innerText ?? '',
       summary: document.querySelector('section[aria-labelledby="client-no-shows-title"]')?.innerText ?? ''
@@ -1447,6 +1772,140 @@ try {
         throw new Error(`Correção/count não persistiram após reload: ${JSON.stringify(correctedFactsAfterReload)}`);
     }
     console.log(`Browser: falta consultada e corrigida com motivo, retry idempotente, história e reload (cliente ${noShowClientId}).`);
+
+    const reconciliationClientId = randomUUID();
+    const reconciliationAppointmentId = randomUUID();
+    const reconciliationInitialHistoryId = randomUUID();
+    const reconciliationNoShowHistoryId = randomUUID();
+    const reconciliationClientName = `Cliente reconciliação AGD033 ${Date.now()}`;
+    const reconciliationPhone = `+5511999${String(Date.now()).slice(-7)}`;
+    queryPostgres(
+        `INSERT INTO agendamento.client (client_id, tenant_id, display_name, normalized_phone) VALUES ('${reconciliationClientId}', '${credentials.DEMO_TENANT_ID}', '${reconciliationClientName}', '${reconciliationPhone}');
+         WITH moment AS (SELECT clock_timestamp() AS now), service AS (SELECT duration_minutes, buffer_after_minutes, name FROM agendamento.service WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND service_id = '${publicService.serviceId}'::uuid)
+         INSERT INTO agendamento.appointment (appointment_id, tenant_id, client_id, service_id, starts_at, service_ends_at, occupied_until, time_zone, client_name_snapshot, service_name_snapshot, service_duration_minutes, service_buffer_after_minutes, status, created_at, version)
+         SELECT '${reconciliationAppointmentId}', '${credentials.DEMO_TENANT_ID}', '${reconciliationClientId}', '${publicService.serviceId}', moment.now - interval '2 days', moment.now - interval '2 days' + make_interval(mins => service.duration_minutes), moment.now - interval '2 days' + make_interval(mins => service.duration_minutes + service.buffer_after_minutes), '${publication.timeZone}', '${reconciliationClientName}', service.name, service.duration_minutes, service.buffer_after_minutes, 'NO_SHOW', moment.now - interval '2 days', 2 FROM moment CROSS JOIN service;
+         INSERT INTO agendamento.appointment_history (history_id, tenant_id, appointment_id, from_status, to_status, actor_type, actor_ref, reason_code, occurred_at) VALUES ('${reconciliationInitialHistoryId}', '${credentials.DEMO_TENANT_ID}', '${reconciliationAppointmentId}', NULL, 'CONFIRMED', 'PUBLIC', 'PUBLIC_BOOKING', 'APPOINTMENT_CREATED', clock_timestamp() - interval '2 days');
+         INSERT INTO agendamento.appointment_history (history_id, tenant_id, appointment_id, from_status, to_status, actor_type, actor_ref, reason_code, occurred_at, version_before, version_after) VALUES ('${reconciliationNoShowHistoryId}', '${credentials.DEMO_TENANT_ID}', '${reconciliationAppointmentId}', 'CONFIRMED', 'NO_SHOW', 'ADMIN', 'TENANT_ADMIN', 'APPOINTMENT_NO_SHOW', clock_timestamp() - interval '1 day', 1, 2);
+         DELETE FROM agendamento.client_no_show_policy WHERE tenant_id = '${credentials.DEMO_TENANT_ID}';`,
+        appEnvironment,
+    );
+    const restoreNoShowPolicy = await evaluate(`(async () => {
+      const [policyResponse, csrfResponse] = await Promise.all([
+        fetch('/api/v1/admin/no-show-policy', {credentials:'same-origin', cache:'no-store'}),
+        fetch('/api/v1/csrf', {credentials:'same-origin', cache:'no-store'})
+      ]);
+      const [policy, csrf] = await Promise.all([policyResponse.json(), csrfResponse.json()]);
+      const response = await fetch('/api/v1/admin/no-show-policy', {
+        method:'PUT', credentials:'same-origin',
+        headers:{'Content-Type':'application/json', [csrf.headerName]:csrf.token, 'Idempotency-Key':crypto.randomUUID()},
+        body:JSON.stringify({expectedVersion:policy.version, threshold:1})
+      });
+      return {status:response.status, body:response.ok ? await response.json() : await response.text()};
+    })()`);
+    if (restoreNoShowPolicy.status !== 200 || restoreNoShowPolicy.body.version !== 1) {
+        throw new Error(`Não foi possível restaurar política para prova explícita de reconciliação: ${JSON.stringify(restoreNoShowPolicy)}`);
+    }
+    const restrictionBeforeExplicitReconciliation = queryPostgres(
+        `SELECT count(*) FROM agendamento.client_booking_restriction WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${reconciliationClientId}'`,
+        appEnvironment,
+    );
+    if (restrictionBeforeExplicitReconciliation !== '0') {
+        throw new Error('Salvar a política executou uma reconciliação implícita.');
+    }
+    await setFieldById('no-show-client-search', reconciliationClientName, evaluate);
+    await clickButtonByText('Buscar', evaluate);
+    await waitUntil(() => evaluate(`Array.from(document.querySelectorAll('[aria-label="Resultados de clientes"] button')).some(button => button.innerText === ${JSON.stringify(reconciliationClientName)})`));
+    await clickButtonByText(reconciliationClientName, evaluate);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${reconciliationClientId}' && [...document.querySelectorAll('button')].some(button => button.innerText === 'Reavaliar política para este cliente'))`));
+    const unreconciledFacts = await evaluate(`(() => ({text:document.querySelector('[data-testid="client-no-show-facts"]')?.innerText ?? '', active:Boolean(document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]'))}))()`);
+    if (!unreconciledFacts.text.includes('Faltas que contam: 1') || unreconciledFacts.active) {
+        throw new Error(`A política atualizou o cliente sem reconciliação explícita: ${JSON.stringify(unreconciledFacts)}`);
+    }
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__restrictionReconciliationAttempts = [];
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const url = String(args[0]);
+        if (url.endsWith('/restrictions/reconcile') && args[1]?.method === 'POST') {
+          const request = {url, body:args[1].body, key:args[1].headers['Idempotency-Key']};
+          if (response.ok && window.__restrictionReconciliationAttempts.length === 0) {
+            window.__restrictionReconciliationAttempts.push(request);
+            throw new TypeError('Simulated lost reconciliation response after commit');
+          }
+          window.__restrictionReconciliationAttempts.push({...request, status:response.status, replayed:response.headers.get('Idempotency-Replayed'), operationId:response.headers.get('X-Operation-Id'), receipt:response.ok ? await response.clone().json() : null});
+          window.fetch = originalFetch;
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Reavaliar política para este cliente', evaluate);
+    await waitForText('Resultado incerto. Repita a mesma reconciliação para recuperar o receipt original.', evaluate);
+    await clickButtonByText('Recuperar mesma reconciliação', evaluate);
+    await waitForText('ACTIVATED', evaluate);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]') && document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${reconciliationClientId}')`));
+    const reconciliationAttempts = await evaluate('window.__restrictionReconciliationAttempts');
+    if (reconciliationAttempts.length !== 2 || reconciliationAttempts[0].url !== reconciliationAttempts[1].url || reconciliationAttempts[0].body !== reconciliationAttempts[1].body || reconciliationAttempts[0].key !== reconciliationAttempts[1].key || reconciliationAttempts[1].replayed !== 'true' || !/^[0-9a-f-]{36}$/i.test(reconciliationAttempts[1].operationId ?? '') || reconciliationAttempts[1].receipt?.decision !== 'ACTIVATED') {
+        throw new Error(`Retry da reconciliação alterou a intenção ou não recuperou o receipt: ${JSON.stringify(reconciliationAttempts)}`);
+    }
+    const reconciliationEffects = Number(queryPostgres(
+        `SELECT CASE WHEN (SELECT status = 'ACTIVE' AND version = 1 AND source_history_id = '${reconciliationNoShowHistoryId}' FROM agendamento.client_booking_restriction WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${reconciliationClientId}') AND (SELECT count(*) = 1 FROM agendamento.client_booking_restriction_history WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND event_type = 'RECONCILED' AND actor_type = 'ADMIN' AND restriction_id = (SELECT restriction_id FROM agendamento.client_booking_restriction WHERE client_id = '${reconciliationClientId}')) AND (SELECT count(*) = 1 FROM agendamento.audit_event WHERE action = 'CLIENT_SELF_BOOKING_RECONCILED' AND target_id = '${reconciliationClientId}') AND (SELECT count(*) = 1 FROM agendamento.outbox_event WHERE event_type = 'ClientSelfBookingBlocked' AND aggregate_id = (SELECT restriction_id FROM agendamento.client_booking_restriction WHERE client_id = '${reconciliationClientId}')) AND (SELECT count(*) = 1 FROM agendamento.idempotency_record WHERE command_scope = 'clients.booking-restriction.reconcile.v1' AND state = 'COMPLETED' AND operation_id = '${reconciliationAttempts[1].operationId}') THEN 1 ELSE 0 END`,
+        appEnvironment,
+    ));
+    if (reconciliationEffects !== 1) throw new Error('Retry da reconciliação duplicou ou omitiu efeitos transacionais.');
+    const restrictionId = queryPostgres(
+        `SELECT restriction_id FROM agendamento.client_booking_restriction WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${reconciliationClientId}'`,
+        appEnvironment,
+    );
+    const activatedReceiptOperationId = reconciliationAttempts[1].operationId;
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${reconciliationClientId}' && document.querySelector('#restriction-lift-reason') && [...document.querySelectorAll('button')].some(button => button.innerText === 'Desbloquear autoagendamento'))`));
+    await setTextareaById('restriction-lift-reason', 'Desbloqueio para provar nova intenção E2E', evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__restrictionLiftAttempts = [];
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const url = String(args[0]);
+        if (url.endsWith('/restrictions/${restrictionId}/lift') && args[1]?.method === 'POST') {
+          window.__restrictionLiftAttempts.push({url, body:args[1].body, key:args[1].headers['Idempotency-Key'], status:response.status, operationId:response.headers.get('X-Operation-Id'), receipt:response.ok ? await response.clone().json() : null});
+          window.fetch = originalFetch;
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Desbloquear autoagendamento', evaluate);
+    await waitForText('Autoagendamento desbloqueado.', evaluate);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${reconciliationClientId}' && !document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]') && [...document.querySelectorAll('button')].some(button => button.innerText === 'Reavaliar política para este cliente'))`));
+    const reconciliationLiftAttempts = await evaluate('window.__restrictionLiftAttempts');
+    if (reconciliationLiftAttempts.length !== 1 || reconciliationLiftAttempts[0].status !== 200 || reconciliationLiftAttempts[0].receipt?.status !== 'LIFTED' || reconciliationLiftAttempts[0].receipt?.version !== 2 || !/^[0-9a-f-]{36}$/i.test(reconciliationLiftAttempts[0].operationId ?? '')) {
+        throw new Error(`Desbloqueio administrativo não foi confirmado como uma única operação: ${JSON.stringify(reconciliationLiftAttempts)}`);
+    }
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__restrictionReconciliationAfterLift = [];
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const url = String(args[0]);
+        if (url.endsWith('/restrictions/reconcile') && args[1]?.method === 'POST') {
+          window.__restrictionReconciliationAfterLift.push({url, body:args[1].body, key:args[1].headers['Idempotency-Key'], status:response.status, replayed:response.headers.get('Idempotency-Replayed'), operationId:response.headers.get('X-Operation-Id'), receipt:response.ok ? await response.clone().json() : null});
+          window.fetch = originalFetch;
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Reavaliar política para este cliente', evaluate);
+    await waitForText('NO_UNUSED_CAUSAL_FACT', evaluate);
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-testid="client-no-show-facts"]')?.dataset.clientId === '${reconciliationClientId}' && !document.querySelector('section[aria-label="Restrição ativa de autoagendamento"]'))`));
+    const reconciliationAfterLift = await evaluate('window.__restrictionReconciliationAfterLift');
+    if (reconciliationAfterLift.length !== 1 || reconciliationAfterLift[0].status !== 200 || reconciliationAfterLift[0].url !== reconciliationAttempts[1].url || reconciliationAfterLift[0].body !== reconciliationAttempts[1].body || reconciliationAfterLift[0].key === reconciliationAttempts[1].key || reconciliationAfterLift[0].replayed !== 'false' || !/^[0-9a-f-]{36}$/i.test(reconciliationAfterLift[0].operationId ?? '') || reconciliationAfterLift[0].operationId === activatedReceiptOperationId || reconciliationAfterLift[0].operationId === reconciliationLiftAttempts[0].operationId || reconciliationAfterLift[0].receipt?.decision !== 'NO_UNUSED_CAUSAL_FACT' || reconciliationAfterLift[0].receipt?.clientId !== reconciliationClientId || reconciliationAfterLift[0].receipt?.policyVersion !== 1) {
+        throw new Error(`Nova reconciliação explícita não recebeu identidade própria ou retornou resultado inesperado: ${JSON.stringify({first: reconciliationAttempts, afterLift: reconciliationAfterLift})}`);
+    }
+    const postLiftReconciliationEffects = Number(queryPostgres(
+        `SELECT CASE WHEN (SELECT status = 'LIFTED' AND version = 2 AND source_history_id = '${reconciliationNoShowHistoryId}' FROM agendamento.client_booking_restriction WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND client_id = '${reconciliationClientId}' AND restriction_id = '${restrictionId}') AND (SELECT count(*) = 2 FROM agendamento.client_booking_restriction_history WHERE tenant_id = '${credentials.DEMO_TENANT_ID}' AND restriction_id = '${restrictionId}' AND event_type IN ('RECONCILED','LIFTED')) AND (SELECT count(*) = 1 FROM agendamento.audit_event WHERE action = 'CLIENT_SELF_BOOKING_UNBLOCKED' AND target_id = '${restrictionId}') AND (SELECT count(*) = 2 FROM agendamento.audit_event WHERE action = 'CLIENT_SELF_BOOKING_RECONCILED' AND target_id = '${reconciliationClientId}') AND (SELECT count(*) = 1 FROM agendamento.outbox_event WHERE event_type = 'ClientSelfBookingBlocked' AND aggregate_id = '${restrictionId}') AND (SELECT count(*) = 1 FROM agendamento.outbox_event WHERE event_type = 'ClientSelfBookingUnblocked' AND aggregate_id = '${restrictionId}') AND (SELECT count(*) = 3 FROM agendamento.idempotency_record WHERE state = 'COMPLETED' AND operation_id IN ('${activatedReceiptOperationId}','${reconciliationAfterLift[0].operationId}','${reconciliationLiftAttempts[0].operationId}')) THEN 1 ELSE 0 END`,
+        appEnvironment,
+    ));
+    if (postLiftReconciliationEffects !== 1) throw new Error('Nova reconciliação duplicou ativação/outbox ou alterou indevidamente o desbloqueio.');
+    console.log('Browser: reconciliação com resposta perdida foi recuperada com mesma intenção; desbloqueio seguido de nova ação no mesmo cliente/política usou chave/operação distintas, retornou NO_UNUSED_CAUSAL_FACT e preservou o estado LIFTED sem duplicar ativação/outbox.');
 
     const cancelRetryAppointmentId = queryPostgres(
         `SELECT a.appointment_id FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.client_name_snapshot = 'Encaixe administrativo E2E' AND a.status = 'CONFIRMED'`,
@@ -1606,10 +2065,10 @@ try {
     console.log('Browser: cancelamento administrativo independente perdeu a resposta após commit, repetiu o mesmo alvo/body/chave, recuperou o receipt no DOM e manteve efeitos únicos.');
 
     const allOutcomeEffects = Number(queryPostgres(
-        `SELECT CASE WHEN (SELECT count(*) FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.status IN ('CANCELLED_BY_PROVIDER','COMPLETED','NO_SHOW')) = 4 AND (SELECT count(*) FROM agendamento.outbox_event WHERE event_type IN ('AppointmentCancelled','AppointmentCompleted','ClientNoShowRecorded') AND tenant_id = (SELECT tenant_id FROM agendamento.tenant WHERE slug = '${publication.slug}')) = 4 THEN 1 ELSE 0 END`,
+        `SELECT CASE WHEN (SELECT count(*) FROM agendamento.appointment a JOIN agendamento.tenant t USING (tenant_id) WHERE t.slug = '${publication.slug}' AND a.appointment_id <> '${reconciliationAppointmentId}' AND a.status IN ('CANCELLED_BY_PROVIDER','COMPLETED','NO_SHOW')) = 5 AND (SELECT count(*) FROM agendamento.outbox_event WHERE event_type IN ('AppointmentCancelled','AppointmentCompleted','ClientNoShowRecorded') AND tenant_id = (SELECT tenant_id FROM agendamento.tenant WHERE slug = '${publication.slug}')) = 5 THEN 1 ELSE 0 END`,
         appEnvironment,
     ));
-    if (allOutcomeEffects !== 1) throw new Error('Os quatro estados terminais não têm evento persistido único por reserva.');
+    if (allOutcomeEffects !== 1) throw new Error('As cinco transições terminais não têm evento persistido único por reserva.');
     console.log('Browser: cancelamento com resposta perdida/replay, cancelamento concorrente, conclusão e falta persistidos; detalhes e história renderizam estados terminais.');
 
     const foreignTenantQuery = await evaluate(

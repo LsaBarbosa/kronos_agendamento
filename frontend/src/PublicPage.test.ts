@@ -423,9 +423,13 @@ describe('public booking REST client', () => {
         });
     });
 
-    it.each([400, 404, 503])(
-        'preserves HTTP status %s for the booking form to explain',
-        async (status) => {
+    it.each([
+        [400, false],
+        [404, false],
+        [503, true],
+    ])(
+        'classifies HTTP status %s as outcomeUnknown=%s',
+        async (status, outcomeUnknown) => {
             const fetchMock = vi
                 .fn<FetchMock>()
                 .mockResolvedValueOnce(jsonResponse(csrf))
@@ -443,7 +447,10 @@ describe('public booking REST client', () => {
                     'A'.repeat(43),
                     '/api',
                 ),
-            ).rejects.toMatchObject<Partial<PublicBookingError>>({ status });
+            ).rejects.toMatchObject<Partial<PublicBookingError>>({
+                status,
+                outcomeUnknown,
+            });
         },
     );
 });

@@ -24,7 +24,28 @@ type Facts = {
     policyStatus: 'CONFIGURED' | 'NOT_CONFIGURED';
     threshold: number | null;
     policyVersion: number;
-    restrictionStatus: 'NOT_TRACKED';
+    restrictionStatus: 'NOT_CONFIGURED' | 'CLEAR' | 'RESTRICTED';
+    activeRestriction: {
+        restrictionId: string;
+        status: 'RESTRICTED';
+        evaluatedAt: string;
+        countAtActivation: number;
+        thresholdAtActivation: number;
+        policyVersion: number;
+        version: number;
+    } | null;
+    restrictionHistory: {
+        historyId: string;
+        restrictionId: string;
+        eventType: 'ACTIVATED' | 'LIFTED' | 'RECONCILED';
+        actorType: 'SYSTEM' | 'ADMIN';
+        occurredAt: string;
+        countAtDecision: number;
+        thresholdAtDecision: number;
+        policyVersion: number;
+        restrictionVersion: number;
+        reason: string | null;
+    }[];
     facts: Fact[];
     nextCursor: string | null;
     hasMore: boolean;
@@ -35,6 +56,17 @@ type Pending = {
     body: { expectedVersion: number; reason: string };
     key: string;
 };
+type PendingLift = Readonly<{
+    clientId: string;
+    restrictionId: string;
+    body: Readonly<{ expectedVersion: number; reason: string }>;
+    key: string;
+}>;
+type PendingReconciliation = Readonly<{
+    clientId: string;
+    body: Readonly<{ expectedPolicyVersion: number }>;
+    key: string;
+}>;
 
 async function responseMessage(response: Response): Promise<string> {
     try {
@@ -68,7 +100,18 @@ export function ClientNoShowFactsPanel({
     const [savingId, setSavingId] = useState<string | null>(null);
     const [uncertainId, setUncertainId] = useState<string | null>(null);
     const [locked, setLocked] = useState(false);
+    const [liftReason, setLiftReason] = useState('');
+    const [liftSaving, setLiftSaving] = useState(false);
+    const [liftUncertain, setLiftUncertain] = useState(false);
+    const [liftIntentLocked, setLiftIntentLocked] = useState(false);
+    const [reconcileSaving, setReconcileSaving] = useState(false);
+    const [reconcileUncertain, setReconcileUncertain] = useState(false);
     const pending = useRef<Pending | null>(null);
+    const pendingLift = useRef<PendingLift | null>(null);
+    const pendingReconciliation = useRef<PendingReconciliation | null>(null);
+    const selectedClient = useRef<Client | null>(null);
+    const liftRequestInFlight = useRef(false);
+    const reconciliationRequestInFlight = useRef(false);
     const keys = useRef(new Map<string, string>());
     const searchGeneration = useRef(0);
     const factsGeneration = useRef(0);
@@ -78,12 +121,22 @@ export function ClientNoShowFactsPanel({
             searchGeneration.current += 1;
             factsGeneration.current += 1;
             pending.current = null;
+            pendingLift.current = null;
+            pendingReconciliation.current = null;
+            selectedClient.current = null;
         },
         [],
     );
 
     async function searchClients() {
-        if (!enabled || query.trim().length < 2) return;
+        if (
+            !enabled ||
+            pending.current ||
+            pendingLift.current ||
+            pendingReconciliation.current ||
+            query.trim().length < 2
+        )
+            return;
         const generation = ++searchGeneration.current;
         setLoadingClients(true);
         setError('');
@@ -95,6 +148,7 @@ export function ClientNoShowFactsPanel({
             if (generation !== searchGeneration.current) return;
             if (response.status === 401 || response.status === 403) {
                 onSessionInvalid(response.status);
+                selectedClient.current = null;
                 setSelected(null);
                 setFacts(null);
                 return;
@@ -116,7 +170,12 @@ export function ClientNoShowFactsPanel({
     }
 
     async function loadFacts(client: Client, cursor?: string | null) {
-        if (pending.current) return;
+        if (
+            pending.current ||
+            pendingLift.current ||
+            pendingReconciliation.current
+        )
+            return;
         const generation = ++factsGeneration.current;
         setLoadingFacts(true);
         setError('');
@@ -127,9 +186,14 @@ export function ClientNoShowFactsPanel({
                 `${apiBaseUrl}/v1/admin/clients/${encodeURIComponent(client.clientId)}/no-shows?${params}`,
                 { credentials: 'same-origin', cache: 'no-store' },
             );
-            if (generation !== factsGeneration.current) return;
+            if (
+                generation !== factsGeneration.current ||
+                selectedClient.current?.clientId !== client.clientId
+            )
+                return;
             if (response.status === 401 || response.status === 403) {
                 onSessionInvalid(response.status);
+                selectedClient.current = null;
                 setSelected(null);
                 setFacts(null);
                 return;
@@ -138,6 +202,7 @@ export function ClientNoShowFactsPanel({
             const page = (await response.json()) as Facts;
             if (
                 generation !== factsGeneration.current ||
+                selectedClient.current?.clientId !== client.clientId ||
                 page.clientId !== client.clientId
             )
                 return;
@@ -147,7 +212,10 @@ export function ClientNoShowFactsPanel({
                     : page,
             );
         } catch (loadError) {
-            if (generation === factsGeneration.current) {
+            if (
+                generation === factsGeneration.current &&
+                selectedClient.current?.clientId === client.clientId
+            ) {
                 setError(
                     loadError instanceof Error
                         ? loadError.message
@@ -155,13 +223,25 @@ export function ClientNoShowFactsPanel({
                 );
             }
         } finally {
-            if (generation === factsGeneration.current) setLoadingFacts(false);
+            if (
+                generation === factsGeneration.current &&
+                selectedClient.current?.clientId === client.clientId
+            )
+                setLoadingFacts(false);
         }
     }
 
     function chooseClient(client: Client) {
-        if (pending.current) return;
+        if (
+            pending.current ||
+            pendingLift.current ||
+            pendingReconciliation.current
+        )
+            return;
+        searchGeneration.current += 1;
+        setLoadingClients(false);
         factsGeneration.current += 1;
+        selectedClient.current = client;
         setSelected(client);
         setFacts(null);
         setNotice('');
@@ -170,7 +250,13 @@ export function ClientNoShowFactsPanel({
     }
 
     async function correct(fact: Fact) {
-        if (!selected || !csrf) return;
+        if (
+            !selected ||
+            !csrf ||
+            pendingLift.current ||
+            pendingReconciliation.current
+        )
+            return;
         const existing = pending.current;
         if (
             existing &&
@@ -254,7 +340,7 @@ export function ClientNoShowFactsPanel({
             setLocked(false);
             setUncertainId(null);
             setNotice(
-                'Falta corrigida para concluída. Contagem e fatos atualizados; restrições permanecem NOT_TRACKED até AGD-033.',
+                'Falta corrigida para concluída. Contagem e fatos atualizados; a situação da restrição é consultada separadamente.',
             );
             await loadFacts(selected);
         } catch {
@@ -266,6 +352,235 @@ export function ClientNoShowFactsPanel({
             setSavingId(null);
         }
     }
+
+    async function liftRestriction() {
+        if (liftRequestInFlight.current || !csrf) return;
+        const existing = pendingLift.current;
+        if (
+            locked ||
+            pending.current ||
+            pendingReconciliation.current ||
+            (!existing && (!selected || !facts?.activeRestriction))
+        )
+            return;
+        const active = facts?.activeRestriction;
+        const body =
+            existing?.body ??
+            Object.freeze({
+                expectedVersion: active!.version,
+                reason: liftReason.trim(),
+            });
+        if (!existing && !body.reason) {
+            setError('Informe o motivo obrigatório do desbloqueio.');
+            return;
+        }
+        const restrictionId = existing?.restrictionId ?? active!.restrictionId;
+        const clientId = existing?.clientId ?? selected!.clientId;
+        const key =
+            existing?.key ??
+            commandKey(
+                keys.current,
+                `lift-client-restriction:${restrictionId}`,
+                body,
+            );
+        const intention =
+            existing ?? Object.freeze({ clientId, restrictionId, body, key });
+        pendingLift.current = intention;
+        liftRequestInFlight.current = true;
+        setLiftIntentLocked(true);
+        setLiftSaving(true);
+        setError('');
+        setNotice('');
+        try {
+            const response = await fetch(
+                `${apiBaseUrl}/v1/admin/clients/${encodeURIComponent(intention.clientId)}/restrictions/${encodeURIComponent(intention.restrictionId)}/lift`,
+                {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        [csrf.headerName]: csrf.token,
+                        'Idempotency-Key': intention.key,
+                    },
+                    body: JSON.stringify(intention.body),
+                },
+            );
+            if (response.status === 401 || response.status === 403) {
+                pendingLift.current = null;
+                setLiftUncertain(false);
+                setLiftIntentLocked(false);
+                onSessionInvalid(response.status);
+                return;
+            }
+            if (response.status === 408 || response.status >= 500) {
+                setLiftUncertain(true);
+                setError(
+                    'Resultado do desbloqueio incerto. Recupere a mesma operação sem alterar motivo ou versão.',
+                );
+                return;
+            }
+            if (!response.ok) {
+                const message = await responseMessage(response);
+                pendingLift.current = null;
+                setLiftUncertain(false);
+                setLiftIntentLocked(false);
+                setError(message);
+                if (
+                    response.status === 409 &&
+                    selectedClient.current?.clientId === intention.clientId
+                )
+                    void loadFacts(selectedClient.current);
+                return;
+            }
+            const receipt = (await response.json()) as {
+                restrictionId: string;
+                status: string;
+                version: number;
+            };
+            if (
+                receipt.restrictionId !== intention.restrictionId ||
+                receipt.status !== 'LIFTED' ||
+                receipt.version !== intention.body.expectedVersion + 1
+            ) {
+                setLiftUncertain(true);
+                setError(
+                    'Resposta inválida; recupere a mesma operação de desbloqueio.',
+                );
+                return;
+            }
+            pendingLift.current = null;
+            setLiftUncertain(false);
+            setLiftReason('');
+            setNotice(
+                'Autoagendamento desbloqueado. Os fatos de falta foram preservados; a situação foi atualizada.',
+            );
+            const originalClient = selectedClient.current;
+            if (originalClient?.clientId === intention.clientId)
+                await loadFacts(originalClient);
+        } catch {
+            setLiftUncertain(true);
+            setError(
+                'Resultado incerto. Repita o mesmo desbloqueio para recuperar a operação original.',
+            );
+        } finally {
+            liftRequestInFlight.current = false;
+            setLiftSaving(false);
+            if (!pendingLift.current) setLiftIntentLocked(false);
+        }
+    }
+
+    async function reconcileRestriction() {
+        if (reconciliationRequestInFlight.current || !csrf) return;
+        const existing = pendingReconciliation.current;
+        if (
+            locked ||
+            pending.current ||
+            pendingLift.current ||
+            (!existing &&
+                (!selected || !facts || facts.policyStatus !== 'CONFIGURED'))
+        )
+            return;
+        const clientId = existing?.clientId ?? selected!.clientId;
+        const body =
+            existing?.body ??
+            Object.freeze({ expectedPolicyVersion: facts!.policyVersion });
+        const key = existing?.key ?? crypto.randomUUID();
+        const intention = existing ?? Object.freeze({ clientId, body, key });
+        pendingReconciliation.current = intention;
+        reconciliationRequestInFlight.current = true;
+        setReconcileSaving(true);
+        setError('');
+        setNotice('');
+        try {
+            const response = await fetch(
+                `${apiBaseUrl}/v1/admin/clients/${encodeURIComponent(intention.clientId)}/restrictions/reconcile`,
+                {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        [csrf.headerName]: csrf.token,
+                        'Idempotency-Key': intention.key,
+                    },
+                    body: JSON.stringify(intention.body),
+                },
+            );
+            if (response.status === 401 || response.status === 403) {
+                pendingReconciliation.current = null;
+                setReconcileUncertain(false);
+                onSessionInvalid(response.status);
+                return;
+            }
+            if (response.status === 408 || response.status >= 500) {
+                setReconcileUncertain(true);
+                setError(
+                    'Resultado incerto. Recupere a mesma reconciliação sem alterar cliente ou versão da política.',
+                );
+                return;
+            }
+            if (!response.ok) {
+                const message = await responseMessage(response);
+                pendingReconciliation.current = null;
+                setReconcileUncertain(false);
+                setError(message);
+                if (
+                    response.status === 409 &&
+                    selectedClient.current?.clientId === intention.clientId
+                )
+                    void loadFacts(selectedClient.current);
+                return;
+            }
+            const receipt = (await response.json()) as {
+                clientId: string;
+                decision: string;
+                policyVersion: number;
+                count: number;
+            };
+            if (
+                receipt.clientId !== intention.clientId ||
+                receipt.policyVersion !==
+                    intention.body.expectedPolicyVersion ||
+                ![
+                    'ACTIVATED',
+                    'ALREADY_RESTRICTED',
+                    'BELOW_THRESHOLD',
+                    'NO_UNUSED_CAUSAL_FACT',
+                ].includes(receipt.decision) ||
+                !Number.isInteger(receipt.count) ||
+                receipt.count < 0
+            ) {
+                setReconcileUncertain(true);
+                setError(
+                    'Resposta inválida; recupere a mesma reconciliação para conferir o resultado original.',
+                );
+                return;
+            }
+            pendingReconciliation.current = null;
+            setReconcileUncertain(false);
+            setNotice(
+                `Reconciliação da política v${receipt.policyVersion}: ${receipt.decision}; ${receipt.count} falta(s) na janela.`,
+            );
+            const originalClient = selectedClient.current;
+            if (originalClient?.clientId === intention.clientId)
+                await loadFacts(originalClient);
+        } catch {
+            setReconcileUncertain(true);
+            setError(
+                'Resultado incerto. Repita a mesma reconciliação para recuperar o receipt original.',
+            );
+        } finally {
+            reconciliationRequestInFlight.current = false;
+            setReconcileSaving(false);
+        }
+    }
+
+    const interactionsLocked =
+        locked ||
+        liftSaving ||
+        liftUncertain ||
+        liftIntentLocked ||
+        reconcileSaving ||
+        reconcileUncertain;
 
     if (!enabled) return null;
     return (
@@ -286,13 +601,15 @@ export function ClientNoShowFactsPanel({
                 <input
                     id="no-show-client-search"
                     value={query}
-                    disabled={locked}
+                    disabled={interactionsLocked}
                     onChange={(event) => setQuery(event.target.value)}
                 />
                 <button
                     type="submit"
                     disabled={
-                        loadingClients || locked || query.trim().length < 2
+                        loadingClients ||
+                        interactionsLocked ||
+                        query.trim().length < 2
                     }
                 >
                     {loadingClients ? 'Buscando…' : 'Buscar'}
@@ -304,7 +621,7 @@ export function ClientNoShowFactsPanel({
                         <li key={client.clientId}>
                             <button
                                 type="button"
-                                disabled={locked}
+                                disabled={interactionsLocked}
                                 onClick={() => chooseClient(client)}
                             >
                                 {client.displayName}
@@ -313,12 +630,23 @@ export function ClientNoShowFactsPanel({
                     ))}
                 </ul>
             )}
-            {selected && <h3>Fatos de {selected.displayName}</h3>}
+            {selected && (
+                <h3
+                    data-testid="selected-no-show-client"
+                    data-client-id={selected.clientId}
+                >
+                    Fatos de {selected.displayName}
+                </h3>
+            )}
             {loadingFacts && (
                 <output aria-live="polite">Consultando fatos…</output>
             )}
             {facts && (
-                <div aria-live="polite">
+                <div
+                    aria-live="polite"
+                    data-testid="client-no-show-facts"
+                    data-client-id={facts.clientId}
+                >
                     <p>
                         Janela:{' '}
                         {new Date(facts.windowStart).toLocaleString('pt-BR', {
@@ -335,8 +663,98 @@ export function ClientNoShowFactsPanel({
                         {facts.policyStatus === 'CONFIGURED'
                             ? `${facts.threshold} (v${facts.policyVersion})`
                             : 'NOT_CONFIGURED, sem limite padrão'}
-                        . Restrição automática: {facts.restrictionStatus}.
+                        . Situação do autoagendamento: {facts.restrictionStatus}
+                        .
                     </p>
+                    {facts.activeRestriction && (
+                        <section aria-label="Restrição ativa de autoagendamento">
+                            <p>
+                                Restrição ativa desde{' '}
+                                {new Date(
+                                    facts.activeRestriction.evaluatedAt,
+                                ).toLocaleString('pt-BR', {
+                                    timeZone: facts.timeZone,
+                                })}
+                                . Decisão:{' '}
+                                {facts.activeRestriction.countAtActivation} de{' '}
+                                {facts.activeRestriction.thresholdAtActivation}{' '}
+                                faltas, política v
+                                {facts.activeRestriction.policyVersion},
+                                restrição v{facts.activeRestriction.version}.
+                            </p>
+                            <label htmlFor="restriction-lift-reason">
+                                Motivo obrigatório para desbloquear
+                            </label>
+                            <textarea
+                                id="restriction-lift-reason"
+                                maxLength={500}
+                                value={liftReason}
+                                disabled={interactionsLocked}
+                                onChange={(event) =>
+                                    setLiftReason(event.target.value)
+                                }
+                            />
+                            <button
+                                type="button"
+                                disabled={
+                                    liftUncertain
+                                        ? liftSaving || locked
+                                        : interactionsLocked ||
+                                          !liftReason.trim()
+                                }
+                                onClick={() => void liftRestriction()}
+                            >
+                                {liftSaving
+                                    ? 'Desbloqueando…'
+                                    : liftUncertain
+                                      ? 'Recuperar mesmo desbloqueio'
+                                      : 'Desbloquear autoagendamento'}
+                            </button>
+                        </section>
+                    )}
+                    {facts.policyStatus === 'CONFIGURED' && (
+                        <button
+                            type="button"
+                            disabled={
+                                reconcileUncertain
+                                    ? reconcileSaving
+                                    : interactionsLocked
+                            }
+                            onClick={() => void reconcileRestriction()}
+                        >
+                            {reconcileSaving
+                                ? 'Reconciliando…'
+                                : reconcileUncertain
+                                  ? 'Recuperar mesma reconciliação'
+                                  : 'Reavaliar política para este cliente'}
+                        </button>
+                    )}
+                    {facts.restrictionHistory.length > 0 && (
+                        <ul aria-label="Histórico da restrição">
+                            {facts.restrictionHistory.map((item) => (
+                                <li key={item.historyId}>
+                                    {item.eventType === 'ACTIVATED'
+                                        ? 'Bloqueio ativado'
+                                        : item.eventType === 'LIFTED'
+                                          ? 'Bloqueio removido'
+                                          : 'Bloqueio ativado por reconciliação'}{' '}
+                                    em{' '}
+                                    {new Date(item.occurredAt).toLocaleString(
+                                        'pt-BR',
+                                        { timeZone: facts.timeZone },
+                                    )}
+                                    {' — '}contagem {item.countAtDecision},
+                                    limite {item.thresholdAtDecision}, política
+                                    v{item.policyVersion}, versão v
+                                    {item.restrictionVersion}
+                                    {item.reason
+                                        ? ` — motivo: ${item.reason}`
+                                        : ''}
+                                    .
+                                </li>
+                            ))}
+                        </ul>
+                    )}
                     {facts.facts.length === 0 ? (
                         <p>Nenhum fato de falta na janela.</p>
                     ) : (
@@ -387,7 +805,9 @@ export function ClientNoShowFactsPanel({
                                                             fact.appointmentId
                                                         ] ?? ''
                                                     }
-                                                    disabled={locked}
+                                                    disabled={
+                                                        interactionsLocked
+                                                    }
                                                     onChange={(event) =>
                                                         setReasons(
                                                             (current) => ({
@@ -403,9 +823,9 @@ export function ClientNoShowFactsPanel({
                                                     type="button"
                                                     disabled={
                                                         savingId !== null ||
-                                                        (locked &&
-                                                            uncertainId !==
-                                                                fact.appointmentId)
+                                                        (uncertainId !==
+                                                            fact.appointmentId &&
+                                                            interactionsLocked)
                                                     }
                                                     onClick={() =>
                                                         void correct(fact)
@@ -428,7 +848,7 @@ export function ClientNoShowFactsPanel({
                     {facts.hasMore && facts.nextCursor && (
                         <button
                             type="button"
-                            disabled={loadingFacts || locked}
+                            disabled={loadingFacts || interactionsLocked}
                             onClick={() =>
                                 void loadFacts(selected!, facts.nextCursor)
                             }

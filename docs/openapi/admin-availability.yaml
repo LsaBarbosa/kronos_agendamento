@@ -17,8 +17,9 @@ paths:
       responses:
         "200":
           description: >-
-            Configuração explícita 1–5 ou ausência sem default. restrictionStatus permanece
-            NOT_TRACKED; este recurso não declara contagem ou bloqueio automático.
+            Configuração explícita 1–5 ou ausência sem default. O status da
+            integração por cliente é retornado como restrictionIntegrationStatus;
+            consulte a API de fatos para restrictionStatus e restrição ativa.
           headers:
             Cache-Control:
               schema: { type: string }
@@ -992,12 +993,12 @@ components:
     ClientNoShowPolicy:
       type: object
       additionalProperties: false
-      required: [configured, version, restrictionStatus]
+      required: [configured, version, restrictionIntegrationStatus]
       properties:
         configured: { type: boolean }
         version: { type: integer, minimum: 0 }
         threshold: { type: [integer, "null"], minimum: 1, maximum: 5 }
-        restrictionStatus: { type: string, const: NOT_TRACKED }
+        restrictionIntegrationStatus: { type: string, const: TRACKED }
     AdminAppointmentPage:
       type: object
       additionalProperties: false

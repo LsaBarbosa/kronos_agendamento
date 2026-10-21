@@ -13,6 +13,8 @@ AGD-032 requer limite configurável de 1 a 5 faltas por tenant. Esta decisão tr
 - Expor GET/PUT administrativos tenant-scoped. `expectedVersion` usa CAS; o comando usa escopo idempotente próprio e audita apenas o campo alterado e versões.
 - Restringir threshold no domínio, DTO e PostgreSQL ao intervalo 1–5. Runtime recebe somente SELECT/INSERT/UPDATE; não recebe DELETE/TRUNCATE.
 - Resposta informa estado da política (`CONFIGURED`/`NOT_CONFIGURED`) separadamente de `restrictionStatus=NOT_TRACKED`; o limite, isoladamente, não cria nem remove restrição. Bloqueio real depende de AGD-033.
+
+**Nota de evolução:** esta descrição registra a fronteira quando AGD-032 foi implementada. AGD-033 substitui o status corrente por consulta persistida tenant-scoped (`NOT_CONFIGURED`, `CLEAR` ou `RESTRICTED`); `NOT_TRACKED` permanece somente como valor histórico de auditoria. As decisões pendentes de produto estão em ADR-0024 e `OPEN-QUESTIONS.md`.
 - Contagem/fatos e correção compensatória seguem as decisões da ADR-0023; esta ADR não define o cálculo nem a semântica do comando corretivo.
 
 ## Consequências e trade-offs
