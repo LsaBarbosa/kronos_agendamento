@@ -3011,7 +3011,7 @@ try {
     await waitForText('Trial encerrado', evaluate);
     await waitForText('Operação preparada: MONTHLY', evaluate);
     await clickButtonByText('Iniciar ou recuperar a mesma operação', evaluate);
-    await waitForText('Não foi possível confirmar o resultado.', evaluate);
+    await waitForText('Resultado ainda incerto.', evaluate);
     const pendingCheckoutIntent = await evaluate(`({
       requests: window.__checkoutRequests,
       intent: document.querySelector('[aria-label="Operação de checkout pendente"]')?.innerText,
