@@ -414,6 +414,8 @@ Registro da entrega inicial AGD-033 no PR [#21](https://github.com/LsaBarbosa/kr
 
 ## AGD-041 — checkout e webhook financeiro (21/10/2026)
 
+Diagnóstico do SHA `260c0466b8ff2fbe4c0d661def9636141b4a4f45`: o E2E filtrado registrou `signature_mismatch`; CodeQL e demais jobs do App CI passaram, mas o browser falhou. A correção seguinte remove possível override de host antes da interpolação Compose e registra apenas presença/ausência. Nenhuma causa é declarada até CI confirmar esse cenário.
+
 Follow-up E2E no head `c4bf7111c5af936b3e3c1a721e3a9b297b9e711c`: App CI push/PR [39650076539](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39650076539)/[39650089619](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39650089619) falharam em HTTP 401 no webhook válido; demais jobs e CodeQL push/PR [39650076263](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39650076263)/[39650089950](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39650089950) passaram. Causa ainda desconhecida. O delta atual compartilha segredo E2E descartável/ignorado entre Compose e Node e expõe apenas categorias safe de rejeição. Localmente passaram Spotless, `SecurityBoundaryTest` 7, `BillingWebhookIT` 6 PostgreSQL, sintaxe, Compose config e `git diff --check`; build Docker/E2E local não executados pelo acesso negado ao socket. Novos checks necessários; nenhuma operação financeira real.
 
 | Critério/evidência | Implementação e resultado |

@@ -149,6 +149,10 @@ jobs:
           bash scripts/dev/prepare-keycloak.sh
       - name: Start PostgreSQL, Keycloak and backend
         run: |
+          if [[ -v APP_BILLING_E2E_WEBHOOK_SECRET ]]; then
+            echo "E2E payment secret host override detected; Compose will use the disposable env file."
+          fi
+          unset APP_BILLING_E2E_WEBHOOK_SECRET
           docker compose -p agendamento --env-file .env --env-file .env.keycloak --env-file .env.e2e \
             -f compose.yaml -f compose.keycloak.yaml -f compose.identity.yaml -f compose.e2e.yaml \
             --profile app up --build --wait --wait-timeout 240 -d
