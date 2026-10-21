@@ -18,7 +18,7 @@ As quatro decisões abaixo foram aprovadas explicitamente pelo usuário nesta in
 | Documento 01 §6.4; documentos 03 e 06 AGD-033; ADR-0024 | Reduzir limite permite aplicação retroativa por reconciliação administrativa explícita, versionada, auditável e recuperável depois do PUT. O PUT não varre clientes implicitamente. | Reconciliação por cliente com `expectedPolicyVersion`; não reutiliza fato causal já consumido/desbloqueado. |
 | Documento 01 §6.4; documentos 03 e 06 AGD-033; ADR-0024 | Sem política e sem restrição ativa, novas reservas públicas permanecem permitidas com estado `NOT_CONFIGURED`. | Não abre publicação nem contorna gates legais/comerciais, serviço ou disponibilidade. Reserva administrativa, consulta e cancelamento próprios continuam permitidos. |
 
-Implementação e evidências de reconciliação permanecem em andamento no PR #21; aprovação de produto não é evidência de execução nem prontidão operacional.
+As quatro decisões foram aprovadas e implementadas no PR #21; a reconciliação tem evidência local e aguarda E2E/CI final. Isso não representa prontidão operacional.
 
 | AGD-024: comprimento OTP e TTL de sessão cliente | Documentos 01–03/06 | Challenge expira em 5 min; comprimento não especificado, proposta 6 dígitos. Sessão curta sem TTL/renovação definida; proposta 15 min absolutos sem renovação. Valores não são decisões aprovadas; produção exige configuração explícita. | ADR-0019; requer decisão antes da habilitação real. |
 | AGD-024: fornecedor/template WhatsApp | AGD-024/030 | Não há fornecedor, template, credenciais ou hospedagem aprovados; não contratar nem enviar implicitamente. | Pendente; emissor E2E controlado não comprova entrega. |
