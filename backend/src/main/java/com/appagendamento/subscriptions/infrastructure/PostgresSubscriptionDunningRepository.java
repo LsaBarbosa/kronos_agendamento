@@ -697,6 +697,31 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
     } catch (RuntimeException unavailable) {
       authorized = false;
     }
+    now = clock.instant();
+    due =
+        row.everStarted()
+            ? row.nextAttemptAt() != null && !now.isBefore(row.nextAttemptAt())
+            : !now.isBefore(row.scheduledAt());
+    eligible =
+        due
+            && "OPEN".equals(row.cycleState())
+            && "PAST_DUE".equals(row.subscriptionStatus())
+            && row.graceEndsAt() != null
+            && now.isBefore(row.graceEndsAt());
+    if (!eligible) {
+      jdbc.update(
+          """
+          UPDATE agendamento.billing_dunning_attempt
+          SET state = 'CANCELLED', claim_token = NULL, lease_until = NULL,
+              last_error_code = 'DUNNING_CYCLE_NOT_ELIGIBLE', updated_at = ?
+          WHERE tenant_id = ? AND attempt_id = ? AND state = 'CLAIMED' AND claim_token = ?
+          """,
+          Timestamp.from(now),
+          claim.tenantId(),
+          claim.attemptId(),
+          claim.claimToken());
+      return false;
+    }
     if (!authorized) {
       blockClaimLocked(claim, now, "RECURRING_AUTHORIZATION_UNAVAILABLE");
       return false;

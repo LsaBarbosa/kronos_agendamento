@@ -448,6 +448,8 @@ class BillingWebhookIT {
       var worker = executor.submit(dunningWorker::processBatch);
       assertThat(authorizationEntered.await(10, TimeUnit.SECONDS)).isTrue();
 
+      releaseAuthorization.countDown();
+      assertThat(transportEntered.await(10, TimeUnit.SECONDS)).isTrue();
       controlledNow.set(graceEnd);
       CountDownLatch ready = new CountDownLatch(2);
       CountDownLatch start = new CountDownLatch(1);
@@ -469,8 +471,6 @@ class BillingWebhookIT {
               });
       assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
       start.countDown();
-      releaseAuthorization.countDown();
-      assertThat(transportEntered.await(10, TimeUnit.SECONDS)).isTrue();
       suspension.get(15, TimeUnit.SECONDS);
       assertThat(confirmation.get(15, TimeUnit.SECONDS)).isTrue();
       releaseTransport.countDown();
@@ -509,6 +509,64 @@ class BillingWebhookIT {
                 tenant.tenantId()))
         .isBetween(0, 1);
     org.mockito.Mockito.verify(chargeTransport).submit(any());
+  }
+
+  @Test
+  void authorizationCompletingAtGraceEndDoesNotStartACharge() throws Exception {
+    Tenant tenant = tenant("dunning-authorization-at-grace-end");
+    UUID subscriptionId = UUID.randomUUID();
+    jdbc.update(
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'MONTHLY', ?, 1)",
+        subscriptionId,
+        tenant.tenantId(),
+        java.sql.Timestamp.from(NOW.minusSeconds(60)));
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+
+    CheckoutOperation checkout = operation(tenant.tenantId());
+    billing.createCheckout(checkout);
+    UUID checkoutClaim =
+        billing.claimProviderCall(tenant.tenantId(), checkout.operationId()).orElseThrow();
+    billing.markCheckoutReady(
+        tenant.tenantId(),
+        checkout.operationId(),
+        checkoutClaim,
+        PROVIDER,
+        ACCOUNT,
+        new CheckoutSession(
+            "dunning-boundary-" + checkout.operationId(),
+            "https://checkout.example.invalid/session"));
+
+    CountDownLatch authorizationEntered = new CountDownLatch(1);
+    CountDownLatch releaseAuthorization = new CountDownLatch(1);
+    AtomicReference<Instant> controlledNow = new AtomicReference<>(NOW);
+    when(clock.instant()).thenAnswer(invocation -> controlledNow.get());
+    doAnswer(
+            invocation -> {
+              authorizationEntered.countDown();
+              assertThat(releaseAuthorization.await(10, TimeUnit.SECONDS)).isTrue();
+              return true;
+            })
+        .when(chargeAuthorization)
+        .isAuthorized(any(), any(), any(), any());
+
+    Instant graceEnd = NOW.minusSeconds(60).plusSeconds(7 * 24 * 60 * 60L);
+    try (var executor = Executors.newSingleThreadExecutor()) {
+      var worker = executor.submit(dunningWorker::processBatch);
+      assertThat(authorizationEntered.await(10, TimeUnit.SECONDS)).isTrue();
+      controlledNow.set(graceEnd);
+      releaseAuthorization.countDown();
+      assertThat(worker.get(15, TimeUnit.SECONDS)).isZero();
+    } finally {
+      releaseAuthorization.countDown();
+    }
+
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state = 'CANCELLED' AND ever_started = FALSE AND technical_attempts = 0 AND last_error_code = 'DUNNING_CYCLE_NOT_ELIGIBLE' FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND logical_sequence = 0",
+                Boolean.class,
+                tenant.tenantId()))
+        .isTrue();
+    org.mockito.Mockito.verify(chargeTransport, org.mockito.Mockito.never()).submit(any());
   }
 
   @Test
