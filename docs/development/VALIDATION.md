@@ -20,6 +20,12 @@
 - Novo head com a correção de assertion: validação local direcionada pendente de execução e App CI/CodeQL push/PR pendentes; nenhum resultado do SHA anterior é atribuído ao novo head.
 - No delta de correção, `node --check scripts/dev/test-keycloak-browser.mjs`, frontend `format:check`, lint, Vitest (23), TypeScript/build e `git diff --check` passaram localmente. Uma verificação manual do arquivo inteiro com Prettier reportou divergências de estilo preexistentes em milhares de linhas; a formatação ampla foi descartada para manter a alteração pontual, e o workflow não aplica Prettier ao roteiro. O browser E2E da composição completa será confirmado somente pelo CI do novo SHA.
 
+### Head `61174b27daad2c235bbeeb898bf662675d736811`
+
+- App CI push [39790396650](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39790396650) e PR [39790404700](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39790404700): todos os jobs/check-runs concluíram. Em ambos, `verify` (Maven/Testcontainers), frontend, secret scans e `oidc-browser-e2e` passaram. O browser validou após reload o texto atual do painel; a correção da assertion não reduziu o critério.
+- O job `security` falhou em push e PR, exclusivamente no scan da imagem Keycloak, com CVE-2026-114406 (`CRITICAL`, `ca-certificates`) e CVE-2026-91415 (`HIGH`, `java-21-openjdk-headless`), sem fixed version no relatório. Esse bloqueio permanece real e sem supressão.
+- CodeQL push [39790396944](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39790396944) e PR [39790405076](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39790405076): ambos os analisadores concluíram `success`. Não há jobs/check-runs pendentes para esse SHA. PR #24 segue draft.
+
 ## Evidências anteriores — AGD-042 V35 (histórico)
 
 - Base local: branch `agd-042-inadimplencia-retries-suspensao`, derivada da main que contém merge AGD-041 `5be58533a84e16e07f598b6a5afc786c99bbd15b`; migrations publicadas V1–V34 preservadas, nova V35.
