@@ -1,5 +1,11 @@
 # AGD-042 — Inadimplência, retries e suspensão
 
+## Evidência final do head documental `c010f2bfa733c083de3ddee8887f71e8d8b4ead8`
+
+- Backend `spotless:check verify` local: `BUILD SUCCESS`, 80 unitários/arquiteturais e 267 integrações PostgreSQL 16.13/Testcontainers. Frontend: format/lint, 23 Vitest, TypeScript/build; script browser e diff check passaram. Browser E2E sintético Chrome/Keycloak/PostgreSQL passou no CI.
+- App CI push [39803712050](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39803712050): `verify`, E2E, frontend e secret scans success; `security` failure por findings Keycloak. App CI PR [39803718476](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39803718476): primeira execução de `verify` falhou na assertion de estado do teste de limite, sem causa conclusiva; após reproduzir teste/suíte localmente com sucesso, o rerun somente desse job passou. Registra-se a falha inicial, sem alegar diagnóstico de infraestrutura. O job `security` permaneceu reprovado nos dois eventos por CVE-2026-114406 (CRITICAL) e CVE-2026-91415 (HIGH). CodeQL push/PR [39803711795](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39803711795)/[39803718663](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39803718663) passou integralmente.
+- Todos os jobs/check-runs consultados estão concluídos, mas App CI não está verde por causa do scanner. PR #24 segue draft. Não se alteraram as regras temporais, a imagem, severidades ou testes; integração real de fornecedor e homologação continuam pendentes.
+
 ## Follow-up — revalidar elegibilidade após autorização (22/10/2026)
 
 O App CI do head `18050fcc5ecee9afedee49d1a060cc0245e14bba` falhou na asserção PostgreSQL de resultado aceito em voo. Revisão sequencial encontrou uma lacuna temporal: `authorizeAttemptSend` capturava `Clock.instant()` antes da leitura local de mandato. Mesmo que essa leitura retornasse depois de `graceEndsAt`, o instante antigo ainda permitia persistir `SUBMITTING`.
@@ -8,7 +14,7 @@ Antes do CAS que registra o início irrevogável, o adapter agora captura novo `
 
 Testes usam latches, não sleeps: (1) espera transporte realmente entrar antes de avançar Clock e executar pagamento/suspensão, comprovando aceite e referência preservados; (2) bloqueia autorização local, move Clock à igualdade do fim da tolerância e comprova cancelamento não iniciado, zero tentativas e nenhuma chamada. O comportamento em `now >= graceEndsAt` permanece conforme decisão aprovada; não se alterou retry, política, provider ou fixture de produção.
 
-Validação pós-correção: suíte JDK 21 `spotless:check verify`, 80 unitários/arquiteturais + 267 integrações PostgreSQL/Testcontainers, e gates frontend (23 Vitest, format/lint/typecheck/build) passaram localmente. Não houve mudança de schema. E2E browser local não foi executado para preservar Compose compartilhado; aguarda-se CI no head publicado. O gate de imagem Keycloak e integração financeira real continuam pendentes; conferir execução e status atualizados em `docs/development/VALIDATION.md`.
+Validação pós-correção: suíte JDK 21 `spotless:check verify`, 80 unitários/arquiteturais + 267 integrações PostgreSQL/Testcontainers, e gates frontend (23 Vitest, format/lint/typecheck/build) passaram localmente. Não houve mudança de schema. E2E browser local não foi executado para preservar Compose compartilhado; o browser sintético do CI passou no head documental final, enquanto o scan da imagem Keycloak continua reprovado. Integração financeira real permanece pendente; ver as evidências atuais em `docs/development/VALIDATION.md`.
 
 ## Objetivo e origem
 
