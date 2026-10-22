@@ -1,20 +1,27 @@
 package com.appagendamento.subscriptions.infrastructure;
 
+import com.appagendamento.appointments.api.TenantAgendaLock;
 import com.appagendamento.audit.api.AuditCorrelationId;
 import com.appagendamento.audit.api.AuditEvent;
 import com.appagendamento.audit.api.AuditEventRecorder;
 import com.appagendamento.outbox.api.OutboxEvent;
 import com.appagendamento.outbox.api.OutboxEventRecorder;
+import com.appagendamento.subscriptions.application.DunningChargeAuthorization;
+import com.appagendamento.subscriptions.application.DunningChargeTransport;
+import com.appagendamento.subscriptions.application.DunningMetricsSnapshot;
 import com.appagendamento.subscriptions.application.SubscriptionDunningRepository;
+import com.appagendamento.subscriptions.domain.DunningAttemptClaim;
 import com.appagendamento.subscriptions.domain.DunningAttemptView;
 import com.appagendamento.subscriptions.domain.Subscription;
 import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -31,16 +38,25 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
   private final AuditEventRecorder audit;
   private final OutboxEventRecorder outbox;
   private final AuditCorrelationId correlation;
+  private final TenantAgendaLock agendaLock;
+  private final Clock clock;
+  private final DunningChargeAuthorization chargeAuthorization;
 
   public PostgresSubscriptionDunningRepository(
       JdbcTemplate jdbc,
       AuditEventRecorder audit,
       OutboxEventRecorder outbox,
-      AuditCorrelationId correlation) {
+      AuditCorrelationId correlation,
+      TenantAgendaLock agendaLock,
+      Clock clock,
+      DunningChargeAuthorization chargeAuthorization) {
     this.jdbc = jdbc;
     this.audit = audit;
     this.outbox = outbox;
     this.correlation = correlation;
+    this.agendaLock = agendaLock;
+    this.clock = clock;
+    this.chargeAuthorization = chargeAuthorization;
   }
 
   @Override
@@ -82,7 +98,7 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
         jdbc.query(
             """
             UPDATE agendamento.subscription
-            SET status = 'PAST_DUE', grace_ends_at = paid_through_at + INTERVAL '7 days',
+            SET status = 'PAST_DUE', grace_ends_at = paid_through_at + INTERVAL '168 hours',
                 version = version + 1
             WHERE tenant_id = ? AND subscription_id = ? AND status = 'ACTIVE'
               AND version = ? AND paid_through_at <= ?
@@ -138,15 +154,17 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
       jdbc.update(
           """
           INSERT INTO agendamento.billing_dunning_attempt
-            (attempt_id, tenant_id, cycle_id, logical_sequence, scheduled_at, state, updated_at)
-          VALUES (?, ?, ?, ?, ?, 'SCHEDULED', ?)
+            (attempt_id, tenant_id, cycle_id, logical_sequence, scheduled_at, state, updated_at,
+             external_idempotency_key)
+          VALUES (?, ?, ?, ?, ?, 'SCHEDULED', ?, ?)
           """,
           attemptId,
           due.tenantId(),
           cycleId,
           sequence,
-          Timestamp.from(due.dueAt().plus(Duration.ofDays(sequence))),
-          Timestamp.from(asOf));
+          Timestamp.from(due.dueAt().plus(Duration.ofHours(24L * sequence))),
+          Timestamp.from(asOf),
+          attemptId);
     }
     recordEffects(
         due.tenantId(),
@@ -202,8 +220,10 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
     jdbc.update(
         """
         UPDATE agendamento.billing_dunning_attempt
-        SET state = 'CANCELLED', updated_at = ?
-        WHERE tenant_id = ? AND state IN ('SCHEDULED', 'BLOCKED_CONFIGURATION')
+        SET state = 'CANCELLED', claim_token = NULL, lease_until = NULL,
+            last_error_code = 'SUBSCRIPTION_SUSPENDED', updated_at = ?
+        WHERE tenant_id = ? AND state IN (
+            'SCHEDULED', 'BLOCKED_CONFIGURATION', 'CLAIMED', 'RETRYABLE_NO_EFFECT')
           AND cycle_id IN (SELECT cycle_id FROM agendamento.billing_dunning_cycle
                            WHERE tenant_id = ? AND subscription_id = ?)
         """,
@@ -235,8 +255,11 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
         subscriptionId);
     jdbc.update(
         """
-        UPDATE agendamento.billing_dunning_attempt SET state = 'CANCELLED', updated_at = ?
-        WHERE tenant_id = ? AND state IN ('SCHEDULED', 'BLOCKED_CONFIGURATION')
+        UPDATE agendamento.billing_dunning_attempt
+        SET state = 'CANCELLED', claim_token = NULL, lease_until = NULL,
+            last_error_code = 'PAYMENT_CONFIRMED', updated_at = ?
+        WHERE tenant_id = ? AND state IN (
+            'SCHEDULED', 'BLOCKED_CONFIGURATION', 'CLAIMED', 'RETRYABLE_NO_EFFECT')
           AND cycle_id IN (SELECT cycle_id FROM agendamento.billing_dunning_cycle
                            WHERE tenant_id = ? AND subscription_id = ?)
         """,
@@ -251,7 +274,8 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
   public List<DunningAttemptView> listAttempts(UUID tenantId) {
     return jdbc.query(
         """
-        SELECT a.logical_sequence, a.scheduled_at, a.state
+        SELECT a.logical_sequence, a.scheduled_at, a.state, a.next_attempt_at,
+               a.technical_attempts, a.last_error_code, a.skip_reason
         FROM agendamento.billing_dunning_attempt a
         JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id)
         WHERE tenant_id = ?
@@ -262,8 +286,576 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
             new DunningAttemptView(
                 row.getInt("logical_sequence"),
                 row.getTimestamp("scheduled_at").toInstant(),
-                row.getString("state")),
+                row.getString("state"),
+                instant(row, "next_attempt_at"),
+                row.getInt("technical_attempts"),
+                row.getString("last_error_code"),
+                row.getString("skip_reason")),
         tenantId);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public DunningMetricsSnapshot metricsSnapshot(Instant asOf) {
+    return jdbc.queryForObject(
+        """
+        WITH reference_time AS (SELECT ?::timestamptz AS as_of),
+        attempts AS (
+          SELECT c.state AS cycle_state, a.state AS attempt_state,
+                 a.technical_attempts,
+                 CASE WHEN a.ever_started THEN a.next_attempt_at ELSE a.scheduled_at END AS due_at,
+                 reference_time.as_of
+          FROM agendamento.billing_dunning_attempt a
+          JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id)
+          CROSS JOIN reference_time
+        )
+        SELECT
+          count(*) FILTER (WHERE cycle_state = 'OPEN' AND attempt_state IN
+            ('SCHEDULED', 'BLOCKED_CONFIGURATION', 'CLAIMED', 'SUBMITTING',
+             'RETRYABLE_NO_EFFECT', 'RECONCILING')) AS backlog,
+          count(*) FILTER (WHERE cycle_state = 'OPEN' AND attempt_state IN
+            ('SCHEDULED', 'BLOCKED_CONFIGURATION', 'RETRYABLE_NO_EFFECT')
+            AND due_at <= as_of) AS overdue,
+          COALESCE(
+            MAX(EXTRACT(EPOCH FROM (as_of - due_at))) FILTER (
+              WHERE cycle_state = 'OPEN'
+                AND attempt_state IN ('SCHEDULED', 'BLOCKED_CONFIGURATION', 'RETRYABLE_NO_EFFECT')
+                AND due_at <= as_of),
+            0)::bigint AS oldest_overdue_seconds,
+          count(*) FILTER (WHERE attempt_state IN ('OUTCOME_UNKNOWN', 'RECONCILING')) AS outcome_unknown,
+          count(*) FILTER (WHERE attempt_state = 'ACCEPTED') AS accepted_transport,
+          count(*) FILTER (WHERE attempt_state = 'DECLINED') AS declined,
+          count(*) FILTER (WHERE attempt_state = 'FAILED_FINAL') AS failed_final,
+          count(*) FILTER (WHERE attempt_state = 'SKIPPED_LATE_RECOVERY') AS skipped_late_recovery,
+          COALESCE(sum(technical_attempts), 0) AS technical_attempts
+        FROM attempts
+        """,
+        (row, index) ->
+            new DunningMetricsSnapshot(
+                row.getLong("backlog"),
+                row.getLong("overdue"),
+                row.getLong("oldest_overdue_seconds"),
+                row.getLong("outcome_unknown"),
+                row.getLong("accepted_transport"),
+                row.getLong("declined"),
+                row.getLong("failed_final"),
+                row.getLong("skipped_late_recovery"),
+                row.getLong("technical_attempts")),
+        Timestamp.from(asOf));
+  }
+
+  @Override
+  @Transactional(isolation = Isolation.READ_COMMITTED)
+  public Optional<DunningAttemptClaim> claimNextAttempt(
+      Duration lease, boolean reconcilerAvailable) {
+    if (lease == null || lease.isZero() || lease.isNegative()) {
+      throw new IllegalArgumentException("Lease inválida");
+    }
+    Instant firstNow = clock.instant();
+    List<UUID> tenants =
+        jdbc.query(
+            """
+            SELECT DISTINCT c.tenant_id
+            FROM agendamento.billing_dunning_cycle c
+            JOIN agendamento.subscription s
+              ON s.subscription_id = c.subscription_id AND s.tenant_id = c.tenant_id
+            JOIN agendamento.billing_dunning_attempt a
+              ON a.cycle_id = c.cycle_id AND a.tenant_id = c.tenant_id
+            WHERE (a.state IN ('CLAIMED', 'SUBMITTING', 'RECONCILING')
+                     AND a.lease_until <= ?)
+               OR (a.state = 'OUTCOME_UNKNOWN' AND ?
+                   AND (a.next_attempt_at IS NULL OR a.next_attempt_at <= ?))
+               OR (c.state = 'OPEN' AND s.status = 'PAST_DUE'
+                     AND s.grace_ends_at > ?
+                     AND ((a.state IN ('SCHEDULED', 'BLOCKED_CONFIGURATION')
+                             AND a.scheduled_at <= ?)
+                          OR (a.state = 'RETRYABLE_NO_EFFECT'
+                             AND a.next_attempt_at <= ?)))
+            ORDER BY c.tenant_id
+            LIMIT 32
+            """,
+            (row, index) -> row.getObject(1, UUID.class),
+            Timestamp.from(firstNow),
+            reconcilerAvailable,
+            Timestamp.from(firstNow),
+            Timestamp.from(firstNow),
+            Timestamp.from(firstNow),
+            Timestamp.from(firstNow));
+
+    for (UUID tenantId : tenants) {
+      agendaLock.acquire(tenantId);
+      Instant now = clock.instant();
+      recoverExpiredClaims(tenantId, now);
+
+      if (reconcilerAvailable) {
+        Optional<DunningAttemptClaim> unknown = claimUnknown(tenantId, lease, now);
+        if (unknown.isPresent()) return unknown;
+      }
+
+      Optional<DunningAttemptClaim> active = claimDueForTenant(tenantId, lease, now);
+      if (active.isPresent()) return active;
+    }
+    return Optional.empty();
+  }
+
+  private void recoverExpiredClaims(UUID tenantId, Instant now) {
+    jdbc.update(
+        """
+        UPDATE agendamento.billing_dunning_attempt
+        SET state = CASE WHEN ever_started THEN 'RETRYABLE_NO_EFFECT' ELSE 'SCHEDULED' END,
+            next_attempt_at = CASE WHEN ever_started THEN COALESCE(next_attempt_at, ?) ELSE NULL END,
+            claim_token = NULL, lease_until = NULL, updated_at = ?,
+            last_error_code = 'LEASE_EXPIRED_BEFORE_SEND'
+        WHERE tenant_id = ? AND state = 'CLAIMED' AND lease_until <= ?
+        """,
+        Timestamp.from(now),
+        Timestamp.from(now),
+        tenantId,
+        Timestamp.from(now));
+    jdbc.update(
+        """
+        UPDATE agendamento.billing_dunning_attempt
+        SET state = 'OUTCOME_UNKNOWN', claim_token = NULL, lease_until = NULL,
+            updated_at = ?, last_error_code = 'LEASE_EXPIRED_AFTER_SEND_START'
+        WHERE tenant_id = ? AND state = 'SUBMITTING' AND lease_until <= ?
+        """,
+        Timestamp.from(now),
+        tenantId,
+        Timestamp.from(now));
+    jdbc.update(
+        """
+        UPDATE agendamento.billing_dunning_attempt
+        SET state = 'OUTCOME_UNKNOWN', claim_token = NULL, lease_until = NULL,
+            updated_at = ?, last_error_code = 'LEASE_EXPIRED_DURING_RECONCILIATION'
+        WHERE tenant_id = ? AND state = 'RECONCILING' AND lease_until <= ?
+        """,
+        Timestamp.from(now),
+        tenantId,
+        Timestamp.from(now));
+  }
+
+  private Optional<DunningAttemptClaim> claimUnknown(UUID tenantId, Duration lease, Instant now) {
+    List<AttemptRow> rows =
+        jdbc.query(
+            """
+            SELECT a.attempt_id, a.external_idempotency_key, a.cycle_id, c.subscription_id,
+                   a.logical_sequence, a.technical_attempts, a.scheduled_at,
+                   a.provider_code, a.provider_reference, s.plan_code
+            FROM agendamento.billing_dunning_attempt a
+            JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id)
+            JOIN agendamento.subscription s USING (subscription_id, tenant_id)
+            WHERE a.tenant_id = ? AND a.state = 'OUTCOME_UNKNOWN'
+              AND (a.next_attempt_at IS NULL OR a.next_attempt_at <= ?)
+            ORDER BY a.updated_at, a.attempt_id
+            FOR UPDATE OF a SKIP LOCKED
+            LIMIT 1
+            """,
+            (row, index) -> mapAttemptRow(row),
+            tenantId,
+            Timestamp.from(now));
+    if (rows.isEmpty()) return Optional.empty();
+    return Optional.of(claim(rows.getFirst(), tenantId, "RECONCILE", lease, now));
+  }
+
+  private Optional<DunningAttemptClaim> claimDueForTenant(
+      UUID tenantId, Duration lease, Instant now) {
+    List<CycleRow> cycles =
+        jdbc.query(
+            """
+            SELECT c.cycle_id, c.subscription_id, c.grace_ends_at, s.plan_code
+            FROM agendamento.billing_dunning_cycle c
+            JOIN agendamento.subscription s USING (subscription_id, tenant_id)
+            WHERE c.tenant_id = ? AND c.state = 'OPEN' AND s.status = 'PAST_DUE'
+              AND s.grace_ends_at > ?
+            ORDER BY c.due_at DESC
+            LIMIT 4
+            """,
+            (row, index) ->
+                new CycleRow(
+                    row.getObject("cycle_id", UUID.class),
+                    row.getObject("subscription_id", UUID.class),
+                    row.getTimestamp("grace_ends_at").toInstant(),
+                    row.getString("plan_code")),
+            tenantId,
+            Timestamp.from(now));
+
+    for (CycleRow cycle : cycles) {
+      List<String> blockers =
+          jdbc.query(
+              """
+              SELECT state FROM agendamento.billing_dunning_attempt
+              WHERE tenant_id = ? AND cycle_id = ?
+                AND state IN ('CLAIMED', 'SUBMITTING', 'RETRYABLE_NO_EFFECT',
+                              'OUTCOME_UNKNOWN', 'RECONCILING', 'ACCEPTED')
+              ORDER BY logical_sequence LIMIT 1
+              """,
+              (row, index) -> row.getString(1),
+              tenantId,
+              cycle.cycleId());
+      if (!blockers.isEmpty()) {
+        String state = blockers.getFirst();
+        if (!state.equals("RETRYABLE_NO_EFFECT")) continue;
+        List<AttemptRow> retries =
+            jdbc.query(
+                """
+                SELECT a.attempt_id, a.external_idempotency_key, a.cycle_id, c.subscription_id,
+                       a.logical_sequence, a.technical_attempts, a.scheduled_at,
+                       a.provider_code, a.provider_reference, s.plan_code
+                FROM agendamento.billing_dunning_attempt a
+                JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id)
+                JOIN agendamento.subscription s USING (subscription_id, tenant_id)
+                WHERE a.tenant_id = ? AND a.cycle_id = ?
+                  AND a.state = 'RETRYABLE_NO_EFFECT' AND a.next_attempt_at <= ?
+                ORDER BY a.logical_sequence LIMIT 1
+                FOR UPDATE OF a SKIP LOCKED
+                """,
+                (row, index) -> mapAttemptRow(row),
+                tenantId,
+                cycle.cycleId(),
+                Timestamp.from(now));
+        if (retries.isEmpty()) return Optional.empty();
+        return Optional.of(claim(retries.getFirst(), tenantId, "SEND", lease, now));
+      }
+
+      List<AttemptRow> due =
+          jdbc.query(
+              """
+              SELECT a.attempt_id, a.external_idempotency_key, a.cycle_id, c.subscription_id,
+                     a.logical_sequence, a.technical_attempts, a.scheduled_at,
+                     a.provider_code, a.provider_reference, s.plan_code
+              FROM agendamento.billing_dunning_attempt a
+              JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id)
+              JOIN agendamento.subscription s USING (subscription_id, tenant_id)
+              WHERE a.tenant_id = ? AND a.cycle_id = ? AND a.ever_started = FALSE
+                AND a.state IN ('SCHEDULED', 'BLOCKED_CONFIGURATION')
+                AND a.scheduled_at <= ?
+              ORDER BY a.logical_sequence DESC
+              FOR UPDATE OF a SKIP LOCKED
+              LIMIT 1
+              """,
+              (row, index) -> mapAttemptRow(row),
+              tenantId,
+              cycle.cycleId(),
+              Timestamp.from(now));
+      if (due.isEmpty()) continue;
+      AttemptRow latest = due.getFirst();
+      jdbc.update(
+          """
+          UPDATE agendamento.billing_dunning_attempt
+          SET state = 'SKIPPED_LATE_RECOVERY', skip_reason = 'LATE_RECOVERY_OLDER_DUE',
+              last_error_code = 'LATE_RECOVERY_SKIPPED', updated_at = ?
+          WHERE tenant_id = ? AND cycle_id = ? AND ever_started = FALSE
+            AND state IN ('SCHEDULED', 'BLOCKED_CONFIGURATION')
+            AND scheduled_at <= ? AND logical_sequence < ?
+          """,
+          Timestamp.from(now),
+          tenantId,
+          cycle.cycleId(),
+          Timestamp.from(now),
+          latest.logicalSequence());
+      return Optional.of(claim(latest, tenantId, "SEND", lease, now));
+    }
+    return Optional.empty();
+  }
+
+  private DunningAttemptClaim claim(
+      AttemptRow row, UUID tenantId, String workType, Duration lease, Instant now) {
+    UUID token = UUID.randomUUID();
+    int changed;
+    if (workType.equals("RECONCILE")) {
+      changed =
+          jdbc.update(
+              """
+              UPDATE agendamento.billing_dunning_attempt
+              SET state = 'RECONCILING', claim_token = ?, lease_until = ?, updated_at = ?
+              WHERE tenant_id = ? AND attempt_id = ? AND state = 'OUTCOME_UNKNOWN'
+              """,
+              token,
+              Timestamp.from(now.plus(lease)),
+              Timestamp.from(now),
+              tenantId,
+              row.attemptId());
+    } else {
+      changed =
+          jdbc.update(
+              """
+              UPDATE agendamento.billing_dunning_attempt
+              SET state = 'CLAIMED', claim_token = ?, lease_until = ?, updated_at = ?
+              WHERE tenant_id = ? AND attempt_id = ?
+                AND state IN ('SCHEDULED', 'BLOCKED_CONFIGURATION', 'RETRYABLE_NO_EFFECT')
+                AND (CASE WHEN ever_started THEN next_attempt_at ELSE scheduled_at END) <= ?
+              """,
+              token,
+              Timestamp.from(now.plus(lease)),
+              Timestamp.from(now),
+              tenantId,
+              row.attemptId(),
+              Timestamp.from(now));
+    }
+    if (changed != 1) return null;
+    return new DunningAttemptClaim(
+        tenantId,
+        row.subscriptionId(),
+        row.cycleId(),
+        row.attemptId(),
+        row.externalIdempotencyKey(),
+        token,
+        row.logicalSequence(),
+        row.technicalAttempts(),
+        workType,
+        row.planCode(),
+        row.scheduledAt(),
+        now.plus(lease),
+        row.providerCode(),
+        row.providerReference());
+  }
+
+  private AttemptRow mapAttemptRow(ResultSet row) throws SQLException {
+    return new AttemptRow(
+        row.getObject("attempt_id", UUID.class),
+        row.getObject("external_idempotency_key", UUID.class),
+        row.getObject("cycle_id", UUID.class),
+        row.getObject("subscription_id", UUID.class),
+        row.getInt("logical_sequence"),
+        row.getInt("technical_attempts"),
+        row.getTimestamp("scheduled_at").toInstant(),
+        row.getString("provider_code"),
+        row.getString("provider_reference"),
+        row.getString("plan_code"));
+  }
+
+  @Override
+  @Transactional(isolation = Isolation.READ_COMMITTED)
+  public boolean authorizeAttemptSend(DunningAttemptClaim claim) {
+    agendaLock.acquire(claim.tenantId());
+    Instant now = clock.instant();
+    List<SendAuthorizationRow> rows =
+        jdbc.query(
+            """
+            SELECT a.state, a.claim_token, a.lease_until, a.ever_started,
+                   a.scheduled_at, a.next_attempt_at, a.send_claim_token,
+                   c.state AS cycle_state, s.status AS subscription_status,
+                   s.plan_code, s.grace_ends_at
+            FROM agendamento.billing_dunning_attempt a
+            JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id)
+            JOIN agendamento.subscription s USING (subscription_id, tenant_id)
+            WHERE a.tenant_id = ? AND a.attempt_id = ? AND a.cycle_id = ?
+              AND s.subscription_id = ?
+            FOR UPDATE OF a, c, s
+            """,
+            (row, index) ->
+                new SendAuthorizationRow(
+                    row.getString("state"),
+                    row.getObject("claim_token", UUID.class),
+                    instant(row, "lease_until"),
+                    row.getBoolean("ever_started"),
+                    row.getTimestamp("scheduled_at").toInstant(),
+                    instant(row, "next_attempt_at"),
+                    row.getString("cycle_state"),
+                    row.getString("subscription_status"),
+                    row.getString("plan_code"),
+                    instant(row, "grace_ends_at")),
+            claim.tenantId(),
+            claim.attemptId(),
+            claim.cycleId(),
+            claim.subscriptionId());
+    if (rows.isEmpty()) return false;
+    SendAuthorizationRow row = rows.getFirst();
+    if (!"CLAIMED".equals(row.state())
+        || !claim.claimToken().equals(row.claimToken())
+        || row.leaseUntil() == null
+        || !row.leaseUntil().isAfter(now)) return false;
+    boolean due =
+        row.everStarted()
+            ? row.nextAttemptAt() != null && !now.isBefore(row.nextAttemptAt())
+            : !now.isBefore(row.scheduledAt());
+    boolean eligible =
+        due
+            && "OPEN".equals(row.cycleState())
+            && "PAST_DUE".equals(row.subscriptionStatus())
+            && row.graceEndsAt() != null
+            && now.isBefore(row.graceEndsAt());
+    if (!eligible) {
+      jdbc.update(
+          """
+          UPDATE agendamento.billing_dunning_attempt
+          SET state = 'CANCELLED', claim_token = NULL, lease_until = NULL,
+              last_error_code = 'DUNNING_CYCLE_NOT_ELIGIBLE', updated_at = ?
+          WHERE tenant_id = ? AND attempt_id = ? AND state = 'CLAIMED' AND claim_token = ?
+          """,
+          Timestamp.from(now),
+          claim.tenantId(),
+          claim.attemptId(),
+          claim.claimToken());
+      return false;
+    }
+    boolean authorized;
+    try {
+      authorized =
+          chargeAuthorization.isAuthorized(
+              claim.tenantId(), claim.subscriptionId(), row.planCode(), now);
+    } catch (RuntimeException unavailable) {
+      authorized = false;
+    }
+    if (!authorized) {
+      blockClaimLocked(claim, now, "RECURRING_AUTHORIZATION_UNAVAILABLE");
+      return false;
+    }
+    return jdbc.update(
+            """
+            UPDATE agendamento.billing_dunning_attempt
+            SET state = 'SUBMITTING', ever_started = TRUE,
+                technical_attempts = technical_attempts + 1,
+                send_claim_token = claim_token, next_attempt_at = NULL,
+                last_error_code = NULL, updated_at = ?
+            WHERE tenant_id = ? AND attempt_id = ? AND state = 'CLAIMED'
+              AND claim_token = ? AND lease_until > ?
+            """,
+            Timestamp.from(now),
+            claim.tenantId(),
+            claim.attemptId(),
+            claim.claimToken(),
+            Timestamp.from(now))
+        == 1;
+  }
+
+  @Override
+  @Transactional(isolation = Isolation.READ_COMMITTED)
+  public boolean blockAttemptForConfiguration(DunningAttemptClaim claim, String reasonCode) {
+    Instant now = clock.instant();
+    return blockClaimLocked(claim, now, reasonCode);
+  }
+
+  private boolean blockClaimLocked(DunningAttemptClaim claim, Instant now, String reasonCode) {
+    if (reasonCode == null || !reasonCode.matches("[A-Z0-9_]{1,48}")) {
+      throw new IllegalArgumentException("Motivo operacional inválido");
+    }
+    return jdbc.update(
+            """
+            UPDATE agendamento.billing_dunning_attempt
+            SET state = CASE WHEN ever_started THEN 'RETRYABLE_NO_EFFECT'
+                             ELSE 'BLOCKED_CONFIGURATION' END,
+                claim_token = NULL, lease_until = NULL,
+                next_attempt_at = CASE WHEN ever_started
+                                       THEN COALESCE(next_attempt_at, ?) ELSE NULL END,
+                last_error_code = ?, updated_at = ?
+            WHERE tenant_id = ? AND attempt_id = ? AND state = 'CLAIMED'
+              AND claim_token = ?
+            """,
+            Timestamp.from(now.plusSeconds(30)),
+            reasonCode,
+            Timestamp.from(now),
+            claim.tenantId(),
+            claim.attemptId(),
+            claim.claimToken())
+        == 1;
+  }
+
+  @Override
+  @Transactional(isolation = Isolation.READ_COMMITTED)
+  public boolean recordTransportResult(
+      DunningAttemptClaim claim,
+      DunningChargeTransport.TransportResult result,
+      Duration retryDelay,
+      int maxTechnicalAttempts) {
+    return recordAttemptResult(claim, result, retryDelay, maxTechnicalAttempts, false);
+  }
+
+  @Override
+  @Transactional(isolation = Isolation.READ_COMMITTED)
+  public boolean recordReconciliationResult(
+      DunningAttemptClaim claim,
+      DunningChargeTransport.TransportResult result,
+      Duration retryDelay,
+      int maxTechnicalAttempts) {
+    return recordAttemptResult(claim, result, retryDelay, maxTechnicalAttempts, true);
+  }
+
+  private boolean recordAttemptResult(
+      DunningAttemptClaim claim,
+      DunningChargeTransport.TransportResult result,
+      Duration retryDelay,
+      int maxTechnicalAttempts,
+      boolean reconciliation) {
+    if (retryDelay == null || retryDelay.isNegative() || maxTechnicalAttempts < 1) {
+      throw new IllegalArgumentException("Política de retry inválida");
+    }
+    Instant now = clock.instant();
+    List<Integer> numbers =
+        jdbc.query(
+            "SELECT technical_attempts FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND attempt_id = ?",
+            (row, index) -> row.getInt(1),
+            claim.tenantId(),
+            claim.attemptId());
+    if (numbers.isEmpty()) return false;
+    int technicalAttempts = numbers.getFirst();
+    String nextState = stateFor(result.outcome(), technicalAttempts, maxTechnicalAttempts);
+    Instant nextAt =
+        nextState.equals("RETRYABLE_NO_EFFECT")
+            ? now.plus(retryDelay)
+            : nextState.equals("OUTCOME_UNKNOWN")
+                ? (reconciliation ? now.plus(retryDelay) : now)
+                : null;
+    String providerCode =
+        result.providerCode() == null ? claim.providerCode() : result.providerCode();
+    String errorCode = result.safeErrorCode();
+    String sql =
+        reconciliation
+            ? """
+              UPDATE agendamento.billing_dunning_attempt
+              SET state = ?, claim_token = NULL, lease_until = NULL,
+                  provider_code = ?, provider_reference = COALESCE(?, provider_reference),
+                  next_attempt_at = ?, last_error_code = ?, updated_at = ?
+              WHERE tenant_id = ? AND attempt_id = ? AND state = 'RECONCILING'
+                AND claim_token = ? AND lease_until > ?
+              """
+            : """
+              UPDATE agendamento.billing_dunning_attempt
+              SET state = ?, claim_token = NULL, lease_until = NULL,
+                  provider_code = ?, provider_reference = COALESCE(?, provider_reference),
+                  next_attempt_at = ?, last_error_code = ?, updated_at = ?
+              WHERE tenant_id = ? AND attempt_id = ? AND send_claim_token = ?
+                AND state IN ('SUBMITTING', 'OUTCOME_UNKNOWN', 'RECONCILING')
+              """;
+    if (reconciliation) {
+      return jdbc.update(
+              sql,
+              nextState,
+              providerCode,
+              result.providerReference(),
+              nextAt == null ? null : Timestamp.from(nextAt),
+              errorCode,
+              Timestamp.from(now),
+              claim.tenantId(),
+              claim.attemptId(),
+              claim.claimToken(),
+              Timestamp.from(now))
+          == 1;
+    }
+    return jdbc.update(
+            sql,
+            nextState,
+            providerCode,
+            result.providerReference(),
+            nextAt == null ? null : Timestamp.from(nextAt),
+            errorCode,
+            Timestamp.from(now),
+            claim.tenantId(),
+            claim.attemptId(),
+            claim.claimToken())
+        == 1;
+  }
+
+  private static String stateFor(
+      DunningChargeTransport.Outcome outcome, int attempts, int maxTechnicalAttempts) {
+    return switch (outcome) {
+      case ACCEPTED -> "ACCEPTED";
+      case RETRYABLE_NO_EFFECT ->
+          attempts >= maxTechnicalAttempts ? "FAILED_FINAL" : "RETRYABLE_NO_EFFECT";
+      case DECLINED -> "DECLINED";
+      case FAILED_FINAL -> "FAILED_FINAL";
+      case OUTCOME_UNKNOWN -> "OUTCOME_UNKNOWN";
+    };
   }
 
   private void recordEffects(
@@ -331,6 +923,33 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
     Timestamp value = row.getTimestamp(column);
     return value == null ? null : value.toInstant();
   }
+
+  private record AttemptRow(
+      UUID attemptId,
+      UUID externalIdempotencyKey,
+      UUID cycleId,
+      UUID subscriptionId,
+      int logicalSequence,
+      int technicalAttempts,
+      Instant scheduledAt,
+      String providerCode,
+      String providerReference,
+      String planCode) {}
+
+  private record CycleRow(
+      UUID cycleId, UUID subscriptionId, Instant graceEndsAt, String planCode) {}
+
+  private record SendAuthorizationRow(
+      String state,
+      UUID claimToken,
+      Instant leaseUntil,
+      boolean everStarted,
+      Instant scheduledAt,
+      Instant nextAttemptAt,
+      String cycleState,
+      String subscriptionStatus,
+      String planCode,
+      Instant graceEndsAt) {}
 
   private record DueState(
       UUID subscriptionId, UUID tenantId, Instant dueAt, Instant graceEndsAt, long version) {}

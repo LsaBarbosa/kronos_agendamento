@@ -1,9 +1,12 @@
 package com.appagendamento.subscriptions.application;
 
+import com.appagendamento.subscriptions.domain.DunningAttemptClaim;
 import com.appagendamento.subscriptions.domain.DunningAttemptView;
 import com.appagendamento.subscriptions.domain.Subscription;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface SubscriptionDunningRepository {
@@ -19,4 +22,24 @@ public interface SubscriptionDunningRepository {
   void closeCyclesForPayment(UUID tenantId, UUID subscriptionId, Instant paidAt);
 
   List<DunningAttemptView> listAttempts(UUID tenantId);
+
+  DunningMetricsSnapshot metricsSnapshot(Instant asOf);
+
+  Optional<DunningAttemptClaim> claimNextAttempt(Duration lease, boolean reconcilerAvailable);
+
+  boolean authorizeAttemptSend(DunningAttemptClaim claim);
+
+  boolean blockAttemptForConfiguration(DunningAttemptClaim claim, String reasonCode);
+
+  boolean recordTransportResult(
+      DunningAttemptClaim claim,
+      com.appagendamento.subscriptions.application.DunningChargeTransport.TransportResult result,
+      Duration retryDelay,
+      int maxTechnicalAttempts);
+
+  boolean recordReconciliationResult(
+      DunningAttemptClaim claim,
+      com.appagendamento.subscriptions.application.DunningChargeTransport.TransportResult result,
+      Duration retryDelay,
+      int maxTechnicalAttempts);
 }

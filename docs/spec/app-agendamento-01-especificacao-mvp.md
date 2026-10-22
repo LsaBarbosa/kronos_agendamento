@@ -365,12 +365,16 @@ Política ausente é `NOT_CONFIGURED`, sem limite padrão. Contagem e fatos cont
 
 ### 12.3 Pagamento e inadimplência
 
-- Tentativas de cobrança em D0, D+3 e D+6.
-- Tolerância total de sete dias a partir do vencimento.
+- Tentativas lógicas únicas em D0, D+3 e D+6, nos instantes UTC de 0, 72 e 144 horas após o vencimento pago.
+- Tolerância total de sete dias como 168 horas exatas desde o vencimento pago.
 - Durante a tolerância, o tenant continua operando com aviso visível.
 - Sem pagamento confirmado ao fim da tolerância, a assinatura passa a `SUSPENDED`.
 - Webhook duplicado não duplica cobrança, crédito ou transição.
 - Reativação ocorre após confirmação autoritativa do pagamento.
+
+**Decisão aprovada pelo usuário em 22/10/2026 para AGD-042:** a tolerância termina em `now >= graceEndsAt`. Após indisponibilidade, durante a tolerância, somente a tentativa vencida mais recente que nunca foi iniciada permanece elegível; tentativas anteriores vencidas e nunca iniciadas são registradas `SKIPPED_LATE_RECOVERY` com motivo explícito. Tentativas futuras mantêm seus vencimentos; não são criadas tentativas extras nem novo ciclo. Tentativas iniciadas, em voo, aceitas pelo transporte ou desconhecidas nunca são puladas e precisam de reconciliação antes de outra cobrança lógica. No fim da tolerância não se inicia nova chamada; resultados de chamadas iniciadas continuam persistidos/reconciliáveis, inclusive pagamento após suspensão. Isso não acrescenta tolerância ao trial.
+
+Falha transitória somente admite retry técnico da mesma tentativa se a resposta comprovar ausência de efeito ou houver idempotência externa aplicável. Timeout/crash isolado é ambíguo e não autoriza cobrança paralela. Sem consulta/idempotência suportada, `OUTCOME_UNKNOWN` permanece bloqueado para reconciliação operacional. Estado de tentativa ou aceite do transporte não é confirmação de pagamento.
 
 ### 12.4 Efeito da suspensão
 

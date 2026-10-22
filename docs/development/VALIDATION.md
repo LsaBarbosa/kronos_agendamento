@@ -1,6 +1,18 @@
 # Evidências de validação — AGD-001
 
-## AGD-042 — validação local (22/10/2026)
+## AGD-042 — validação V36 (22/10/2026)
+
+- Base: branch `agd-042-inadimplencia-retries-suspensao`, PR #24 draft, head inicial conferido `2469a362b51391181b3b972c7263d08756f380f6`; alterações locais preservadas. V1–V35 imutáveis; V36 cobre processamento, lease/fencing, chave externa estável, late-recovery skip e grants restritos.
+- Decisões registradas: grace 168 horas, igualdade `now >= graceEndsAt`; D0/D+3/D+6 em 0/72/144 horas UTC; catch-up mantém só a mais recente vencida não iniciada, pula anteriores com motivo, mantém futuras; iniciadas/desconhecidas requerem reconciliação; após grace nenhuma chamada nova, resultados iniciados permanecem reconciliáveis.
+- Suíte completa: `cd backend && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` — `BUILD SUCCESS`, 80 testes unitários/arquiteturais + 266 integrações PostgreSQL 16.13/Testcontainers, sem falhas/erros. Inclui clean install, upgrades V35→V36, Flyway validate/rerun, grants, late recovery, leases/fencing, ausência de transporte, retry com identidade estável, ambiguidades, pagamento/suspensão concorrentes e resultado de chamada em voo.
+- Validação dirigida: `cd backend && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check '-Dit.test=BillingWebhookIT,SubscriptionTrialIT,TenantPersistenceIT' verify` — `BUILD SUCCESS`, 64 integrações. Incluiu latch para corrida entre autorização/send, pagamento autenticado e suspensão; resultado sintético aceito persistido sem reabrir tentativas canceladas.
+- Frontend/script/OpenAPI: `cd frontend && export PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH && npm run format:check && npm run lint && npm test -- --run && npm run check && node --check ../scripts/dev/test-keycloak-browser.mjs && npx prettier --check ../docs/openapi/admin-subscription.yaml` — passou; 23 Vitest, TypeScript e build Vite.
+- `git diff --check` passou. Revisão local sequencial; revisores independentes não puderam ser criados por limite de threads. Isso não é aprovação humana.
+- E2E local não executado para preservar o Compose compartilhado/persistente sem backend/frontend. A composição browser sintética fica pendente no CI do novo head; nenhum provider, cobrança, segredo real ou sandbox foi acionado.
+- Primeiro `mvn verify` após acrescentar métricas revelou erro de sintaxe SQL na consulta agregada; a consulta foi reestruturada com CTE e a suíte completa final passou. Uma tentativa concorrente de Testcontainers e falhas iniciais de Spotless/compilação do teste foram corrigidas e reexecutadas; não se contam como aprovação.
+- Intermitência de remarcação AGD-022 permanece com causa desconhecida. CI push/PR e CodeQL do SHA final ainda pendentes.
+
+## Evidências anteriores — AGD-042 V35 (histórico)
 
 - Base local: branch `agd-042-inadimplencia-retries-suspensao`, derivada da main que contém merge AGD-041 `5be58533a84e16e07f598b6a5afc786c99bbd15b`; migrations publicadas V1–V34 preservadas, nova V35.
 - `TenantPersistenceIT`: `cd backend && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp -Dit.test=TenantPersistenceIT verify` — BUILD SUCCESS, 34 testes, PostgreSQL 16.13/Testcontainers; cobre instalação, upgrade V34→V35, Flyway validate/rerun e grants runtime mínimos.

@@ -61,7 +61,10 @@ paths:
                     enum: [VERIFICATION_UNAVAILABLE, VERIFIED]
                   dunningAttempts:
                     type: array
-                    description: Tentativas lógicas agendadas; não comprovam chamada, aceite ou pagamento.
+                    description: >-
+                      Estados minimizados do processamento. Agendamento, claim e aceite do
+                      transporte não confirmam pagamento; resultado incerto bloqueia nova
+                      cobrança lógica até reconciliação.
                     items: { $ref: "#/components/schemas/DunningAttempt" }
         "401": { description: Sessão ausente/expirada }
         "403": { description: Associação administrativa inválida ou revogada }
@@ -216,10 +219,24 @@ components:
     DunningAttempt:
       type: object
       additionalProperties: false
-      required: [logicalSequence, scheduledAt, state]
+      required:
+        [
+          logicalSequence,
+          scheduledAt,
+          state,
+          nextAttemptAt,
+          technicalAttempts,
+          safeErrorCode,
+          skipReason,
+        ]
       properties:
         logicalSequence: { type: integer, enum: [0, 3, 6] }
         scheduledAt: { type: string, format: date-time }
+        nextAttemptAt: { type: [string, "null"], format: date-time }
+        technicalAttempts: { type: integer, minimum: 0 }
+        safeErrorCode: { type: [string, "null"], pattern: "^[A-Z0-9_]{1,48}$" }
+        skipReason:
+          { type: [string, "null"], enum: [LATE_RECOVERY_OLDER_DUE, null] }
         state:
           {
             type: string,
@@ -227,10 +244,15 @@ components:
               [
                 SCHEDULED,
                 BLOCKED_CONFIGURATION,
+                CLAIMED,
                 SUBMITTING,
+                RETRYABLE_NO_EFFECT,
                 OUTCOME_UNKNOWN,
+                RECONCILING,
                 ACCEPTED,
                 DECLINED,
+                FAILED_FINAL,
+                SKIPPED_LATE_RECOVERY,
                 CANCELLED,
               ],
           }

@@ -3,6 +3,7 @@ package com.appagendamento.subscriptions;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.when;
 
 import com.appagendamento.identityaccess.api.AdminAccessPolicy;
@@ -14,7 +15,11 @@ import com.appagendamento.subscriptions.api.HostedCheckoutProvider;
 import com.appagendamento.subscriptions.api.HostedCheckoutProvider.CheckoutSession;
 import com.appagendamento.subscriptions.application.AdmitPaymentWebhook;
 import com.appagendamento.subscriptions.application.BillingRepository;
+import com.appagendamento.subscriptions.application.DunningAttemptReconciler;
+import com.appagendamento.subscriptions.application.DunningChargeAuthorization;
+import com.appagendamento.subscriptions.application.DunningChargeTransport;
 import com.appagendamento.subscriptions.application.StartSubscriptionCheckout;
+import com.appagendamento.subscriptions.application.SubscriptionDunningWorker;
 import com.appagendamento.subscriptions.application.SubscriptionTrialLifecycle;
 import com.appagendamento.subscriptions.domain.CheckoutOperation;
 import com.appagendamento.subscriptions.domain.PlanCode;
@@ -28,6 +33,7 @@ import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,7 +43,11 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
-@SpringBootTest(properties = "app.subscriptions.trial-expiry-worker.enabled=false")
+@SpringBootTest(
+    properties = {
+      "app.subscriptions.trial-expiry-worker.enabled=false",
+      "app.subscriptions.dunning-worker.enabled=false"
+    })
 class BillingWebhookIT {
 
   private static final String PROVIDER = "controlled-provider";
@@ -50,8 +60,12 @@ class BillingWebhookIT {
   @Autowired private AdmitPaymentWebhook webhook;
   @Autowired private StartSubscriptionCheckout startCheckout;
   @Autowired private SubscriptionTrialLifecycle lifecycle;
+  @Autowired private SubscriptionDunningWorker dunningWorker;
   @MockitoBean private HostedCheckoutProvider checkoutProvider;
   @MockitoBean private BillingOfferCatalog offerCatalog;
+  @MockitoBean private DunningChargeAuthorization chargeAuthorization;
+  @MockitoBean private DunningChargeTransport chargeTransport;
+  @MockitoBean private DunningAttemptReconciler attemptReconciler;
   @MockitoBean private AdminAccessPolicy adminAccessPolicy;
   @MockitoBean private Clock clock;
 
@@ -375,6 +389,126 @@ class BillingWebhookIT {
                 Integer.class,
                 tenant.tenantId()))
         .isEqualTo(suspensionEvents);
+  }
+
+  @Test
+  void paymentAndSuspensionRaceAfterSendAuthorizationPreservesInFlightAttempt() throws Exception {
+    Tenant tenant = tenant("dunning-payment-send-race");
+    UUID subscriptionId = UUID.randomUUID();
+    jdbc.update(
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'MONTHLY', ?, 1)",
+        subscriptionId,
+        tenant.tenantId(),
+        java.sql.Timestamp.from(NOW.minusSeconds(60)));
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+
+    CheckoutOperation checkout = operation(tenant.tenantId());
+    billing.createCheckout(checkout);
+    UUID checkoutClaim =
+        billing.claimProviderCall(tenant.tenantId(), checkout.operationId()).orElseThrow();
+    String checkoutReference = "dunning-race-payment-" + checkout.operationId();
+    billing.markCheckoutReady(
+        tenant.tenantId(),
+        checkout.operationId(),
+        checkoutClaim,
+        PROVIDER,
+        ACCOUNT,
+        new CheckoutSession(checkoutReference, "https://checkout.example.invalid/session"));
+
+    CountDownLatch authorizationEntered = new CountDownLatch(1);
+    CountDownLatch releaseAuthorization = new CountDownLatch(1);
+    CountDownLatch transportEntered = new CountDownLatch(1);
+    CountDownLatch releaseTransport = new CountDownLatch(1);
+    AtomicReference<Instant> controlledNow = new AtomicReference<>(NOW);
+    when(clock.instant()).thenAnswer(invocation -> controlledNow.get());
+    doAnswer(
+            invocation -> {
+              authorizationEntered.countDown();
+              assertThat(releaseAuthorization.await(10, TimeUnit.SECONDS)).isTrue();
+              return true;
+            })
+        .when(chargeAuthorization)
+        .isAuthorized(any(), any(), any(), any());
+    when(chargeTransport.submit(any()))
+        .thenAnswer(
+            invocation -> {
+              transportEntered.countDown();
+              assertThat(releaseTransport.await(10, TimeUnit.SECONDS)).isTrue();
+              return new DunningChargeTransport.TransportResult(
+                  DunningChargeTransport.Outcome.ACCEPTED,
+                  "synthetic",
+                  "accepted-during-payment-race",
+                  null);
+            });
+
+    Instant graceEnd = NOW.minusSeconds(60).plusSeconds(7 * 24 * 60 * 60L);
+    AuthenticatedPaymentEvent payment =
+        confirmed("dunning-race-confirmed", checkoutReference, 1, 1);
+    try (var executor = Executors.newFixedThreadPool(3)) {
+      var worker = executor.submit(dunningWorker::processBatch);
+      assertThat(authorizationEntered.await(10, TimeUnit.SECONDS)).isTrue();
+
+      controlledNow.set(graceEnd);
+      CountDownLatch ready = new CountDownLatch(2);
+      CountDownLatch start = new CountDownLatch(1);
+      var suspension =
+          executor.submit(
+              () -> {
+                ready.countDown();
+                if (!start.await(5, TimeUnit.SECONDS))
+                  throw new IllegalStateException("Largada da suspensão expirou");
+                return lifecycle.materializeBillingBatch(10);
+              });
+      var confirmation =
+          executor.submit(
+              () -> {
+                ready.countDown();
+                if (!start.await(5, TimeUnit.SECONDS))
+                  throw new IllegalStateException("Largada do pagamento expirou");
+                return billing.recordAuthenticatedEvent(payment);
+              });
+      assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+      start.countDown();
+      releaseAuthorization.countDown();
+      assertThat(transportEntered.await(10, TimeUnit.SECONDS)).isTrue();
+      suspension.get(15, TimeUnit.SECONDS);
+      assertThat(confirmation.get(15, TimeUnit.SECONDS)).isTrue();
+      releaseTransport.countDown();
+      assertThat(worker.get(15, TimeUnit.SECONDS)).isEqualTo(1);
+    } finally {
+      releaseAuthorization.countDown();
+      releaseTransport.countDown();
+    }
+
+    assertThat(status(tenant.tenantId())).startsWith("ACTIVE:");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state FROM agendamento.billing_dunning_cycle WHERE tenant_id = ?",
+                String.class,
+                tenant.tenantId()))
+        .isEqualTo("PAID");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state = 'ACCEPTED' AND provider_reference = 'accepted-during-payment-race' AND ever_started FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND logical_sequence = 0",
+                Boolean.class,
+                tenant.tenantId()))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND logical_sequence > 0 AND state <> 'CANCELLED'",
+                Integer.class,
+                tenant.tenantId()))
+        .isZero();
+    assertThat(historyCount(tenant.tenantId())).isEqualTo(1);
+    assertThat(paymentAuditCount(tenant.tenantId())).isEqualTo(1);
+    assertThat(outboxCount(tenant.tenantId())).isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.subscription_history WHERE tenant_id = ? AND event_type = 'PAYMENT_SUSPENDED'",
+                Integer.class,
+                tenant.tenantId()))
+        .isBetween(0, 1);
+    org.mockito.Mockito.verify(chargeTransport).submit(any());
   }
 
   @Test

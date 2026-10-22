@@ -1,6 +1,16 @@
 # Rastreabilidade inicial
 
-## AGD-042 — inadimplência, tentativas lógicas e suspensão (22/10/2026)
+## AGD-042 — worker persistido V36 (22/10/2026)
+
+Branch `agd-042-inadimplencia-retries-suspensao`, PR #24 permanece draft; base/head conferido antes das alterações: `2469a362b51391181b3b972c7263d08756f380f6`. V36 preserva V1–V35 e persiste external id estável, início irrevogável, lease/fencing, retomada técnica, estado incerto e motivo de late recovery. Worker lê um item por vez, revalida sob lock tenant-scoped antes de gravar autorização de início; chamada/reconciliação externa fica fora da transação. Uma falha ambígua não libera nova cobrança lógica. Pagamento fecha o ciclo e cancela apenas o que não iniciou; fatos de uma chamada iniciada continuam persistíveis após suspensão. Métricas agregadas Micrometer não incluem PII ou dimensões tenant.
+
+Decisões aprovadas nesta instrução foram registradas em requisitos, ADR-0027, OPEN-QUESTIONS e plano: grace 168 horas, igualdade fecha em `now >= graceEndsAt`; D0/D+3/D+6 em offsets UTC 0/72/144h; late catch-up só mantém a última tentativa vencida não iniciada e marca anteriores como puladas com razão; mantém datas futuras; iniciadas/desconhecidas exigem reconciliação; nenhuma chamada nova depois da tolerância. Sem tolerância adicional ao trial.
+
+Validação local no working tree: `spotless:check verify` com JDK 21 passou, 80 testes unitários/arquiteturais + 266 integrações PostgreSQL 16.13/Testcontainers; valida clean/upgrade V35→V36, Flyway validate/rerun e grants. O comando dirigido `-Dit.test=BillingWebhookIT,SubscriptionTrialIT,TenantPersistenceIT` passou com 64 integrações; inclui disputa latch entre autorização e envio enquanto pagamento autenticado/suspensão competem, preservando a evidência da tentativa em voo. Frontend format/lint, 23 Vitest, TypeScript/build, sintaxe Node E2E, OpenAPI Prettier e `git diff --check` passaram. Falha SQL na primeira consulta de métricas foi corrigida e a suíte completa final passou.
+
+E2E local não executado para preservar Compose compartilhado; browser E2E sintético em CI pendente para o SHA final. A prova existente do roteiro foi ampliada para persistir e recarregar estados agendado, late-skip, desconhecido e aceite distinguido de pagamento. CI anterior em `c438d69a06ef52f0b64724af6e7d42ffba158f5d` não valida V36. Revisão foi sequencial: limite de threads impediu revisores independentes. Sem aprovação humana registrada, operação financeira, provider, autorização de mandato ou segredos reais.
+
+### Evidência histórica do incremento V35 (não cobre V36)
 
 Branch `agd-042-inadimplencia-retries-suspensao`, base integrada AGD-041 `5be58533a84e16e07f598b6a5afc786c99bbd15b`. V35 acrescenta ciclo e identidades únicas de tentativa por assinatura/tenant/seq D0/D+3/D+6; `SubscriptionTrialLifecycle` materializa ACTIVE→PAST_DUE e PAST_DUE→SUSPENDED com lock tenant-scoped e CAS; pagamento autenticado encerra o ciclo inclusive quando suspenso e cancela tentativas ainda não iniciadas. Gate público é temporal e fechado após grace, preservando acesso aos compromissos existentes. UI administrativa exibe datas e tentativas explicitamente não equivalentes a cobranças.
 

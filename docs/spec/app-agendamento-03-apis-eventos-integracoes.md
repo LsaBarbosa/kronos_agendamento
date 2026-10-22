@@ -635,17 +635,20 @@ Requisitos:
 
 Uma tentativa com efeito incerto não autoriza criar nova cobrança com outra identidade. Primeiro reconciliar a mesma cobrança lógica.
 
-AGD-042 materializa `ACTIVE → PAST_DUE` quando o instante de vencimento (`paid_through_at`) é alcançado, conserva o instante e persiste `grace_ends_at` sete dias depois. As tentativas lógicas são únicas por ciclo de vencimento e sequência; reexecução técnica conserva a identidade da mesma tentativa. `OUTCOME_UNKNOWN` não autoriza iniciar outra tentativa financeira. O significado de D+3/D+6 durante indisponibilidade e a igualdade exata do fim da tolerância seguem em `OPEN-QUESTIONS.md`; não se infere envio de uma linha `SCHEDULED`.
+AGD-042 materializa `ACTIVE → PAST_DUE` quando o instante de vencimento (`paid_through_at`) é alcançado, conserva o instante e persiste `grace_ends_at = paid_through_at + 168 horas`. As tentativas lógicas são únicas por ciclo/sequence em D0/D+3/D+6 nos offsets UTC de 0/72/144 horas; reexecução técnica conserva identidade e chave externa. `now >= grace_ends_at` encerra tolerância. Após downtime, durante a tolerância, somente a tentativa vencida mais recente nunca iniciada permanece elegível; anteriores são `SKIPPED_LATE_RECOVERY` com motivo, sem mover futuras. Tentativa iniciada/em voo/aceita/ambígua nunca é pulada e exige reconciliação antes de autorizar outra cobrança lógica. Após o fim da tolerância não se inicia nova chamada, mas resultado de chamada iniciada continua persistível/reconciliável mesmo após suspensão. Agendamento, claim ou aceite de transporte não comprovam pagamento.
 
 `GET /api/v1/admin/subscription` também devolve estado, `paidThroughAt`, `graceEndsAt` e até 30 agendamentos lógicos do tenant autenticado, sem PII. A resposta é `no-store`. `PAST_DUE` mantém o uso permitido durante a tolerância; após a fronteira temporal aprovada, novas reservas públicas são negadas mesmo antes da materialização `SUSPENDED`. Nenhuma dessas regras amplia o prazo de trial de AGD-040. Sem provider e autorização recorrente aprovados/configurados, o transporte financeiro continua desabilitado.
+
+O worker expõe métricas agregadas de backlog, vencimento/idade, tentativas técnicas, `OUTCOME_UNKNOWN`, aceite de transporte, recusas, falhas finais e pulos por recuperação tardia. Métricas não usam tenant, referência de operação, provedor ou PII como label. Aceite de transporte não é liquidação nem pagamento.
 
 ## 12. Jobs agendados
 
 | Job | Frequência/acionamento | Proteção |
 |---|---|---|
 | lembretes | consulta contínua por `due_at` | claim com lease, dedupe e verificação da versão da reserva |
-| pagamento D0/D+3/D+6 | scheduler por `next_attempt_at` | chave por assinatura + vencimento + sequência |
-| suspensão | após `grace_end` | CAS da assinatura e confirmação de ausência de pagamento |
+| cobrança D0/D+3/D+6 | scheduler por vencimento/`next_attempt_at` | claim individual, lease/fencing, autorização sob lock tenant-scoped e chave estável por tentativa |
+| reconciliação financeira | consulta pelo identificador persistido | somente protocolo/idempotência suportados; sem suporte, estado ambíguo permanece bloqueado |
+| suspensão | quando `now >= grace_end` | CAS da assinatura; impede novos inícios e preserva resultados de chamadas já iniciadas |
 | expiração de código | lazy + limpeza periódica | estado terminal idempotente |
 | exportação | fila | um ativo por tenant, lease e retries |
 | expiração de exportação | por `expires_at` | fechamento lógico antes de apagar objeto |
