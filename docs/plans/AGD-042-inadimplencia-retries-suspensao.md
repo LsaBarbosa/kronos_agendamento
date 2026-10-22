@@ -1,5 +1,9 @@
 # AGD-042 — Inadimplência, retries e suspensão
 
+## Atualização de CI — head documental `9e249371e212a0f05a07c026b7a4903e6d6cbd5e`
+
+App CI push [39827661444](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39827661444) e PR [39827669958](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39827669958) concluíram `verify`, browser E2E, frontend e secret scans com sucesso; o gate `security` falhou por CVE-2026-114406 (CRITICAL) e CVE-2026-91415 (HIGH) na imagem Keycloak. CodeQL push [39827661448](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39827661448) e PR [39827670051](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39827670051) passaram. Todos os jobs/check-runs consultados terminaram. A revisão/validação de código é a do commit `c010f2b`; `9e24937` só atualizou registros. A falha anterior do verify PR permanece sem causa conhecida. Sem afrouxar scanner; integração real e homologação continuam pendentes.
+
 ## Evidência final do head documental `c010f2bfa733c083de3ddee8887f71e8d8b4ead8`
 
 - Backend `spotless:check verify` local: `BUILD SUCCESS`, 80 unitários/arquiteturais e 267 integrações PostgreSQL 16.13/Testcontainers. Frontend: format/lint, 23 Vitest, TypeScript/build; script browser e diff check passaram. Browser E2E sintético Chrome/Keycloak/PostgreSQL passou no CI.

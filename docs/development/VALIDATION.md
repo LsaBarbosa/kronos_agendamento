@@ -1,5 +1,12 @@
 # Evidências de validação — AGD-001
 
+## AGD-042 — checks do head documental `9e249371e212a0f05a07c026b7a4903e6d6cbd5e`
+
+- App CI push [39827661444](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39827661444) e PR [39827669958](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39827669958): `verify`, frontend, OIDC browser E2E e secret scans concluíram success; `security` concluiu failure por CVE-2026-114406 (`CRITICAL`, ca-certificates) e CVE-2026-91415 (`HIGH`, java-21-openjdk-headless) na imagem Keycloak pinada. Os demais jobs/check-runs estão concluídos. Não houve redução de scanners ou severidades.
+- CodeQL push [39827661448](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39827661448) e PR [39827670051](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39827670051) concluíram success em todos os analisadores/jobs.
+- O head `9e24937` é documental em relação ao código `c010f2b` validado localmente. No CI anterior, o verify PR falhou inicialmente em assertion temporal e somente esse job foi repetido após teste dirigido e suíte completa locais passarem; o rerun passou, mas a causa da falha inicial permanece desconhecida. Esse histórico não foi atribuído à infraestrutura.
+- Todos os jobs dos quatro runs acima estão em estado terminal; App CI permanece globalmente reprovado pelo gate de segurança da imagem. Browser E2E sintético passou no CI; não foi executado localmente para preservar o Compose compartilhado. PR #24 continua draft.
+
 ## AGD-042 — fechamento da revalidação temporal e CI (22/10/2026)
 
 - No SHA `c010f2bfa733c083de3ddee8887f71e8d8b4ead8`, App CI push [39803712050](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39803712050) concluiu: `verify`, browser E2E, frontend e secret scans passaram; `security` falhou no scan da imagem Keycloak pinada por CVE-2026-114406 (`CRITICAL`) e CVE-2026-91415 (`HIGH`). App CI PR [39803718476](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39803718476) teve a mesma falha de `security`; `verify` falhou na primeira execução na asserção do teste `authorizationCompletingAtGraceEndDoesNotStartACharge` (estado composto da tentativa não correspondeu). Não há evidência suficiente para atribuir causa à infraestrutura ou afirmar que a causa da divergência foi identificada.
