@@ -402,10 +402,11 @@ class BillingWebhookIT {
         subscriptionId,
         tenant.tenantId(),
         java.sql.Timestamp.from(NOW.minusSeconds(60)));
-    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
-
     CheckoutOperation checkout = operation(tenant.tenantId());
     billing.createCheckout(checkout);
+    persistContractTerms(tenant.tenantId(), subscriptionId, checkout);
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+    isolateOtherDunningCycles(tenant.tenantId());
     UUID checkoutClaim =
         billing.claimProviderCall(tenant.tenantId(), checkout.operationId()).orElseThrow();
     String checkoutReference = "dunning-race-payment-" + checkout.operationId();
@@ -439,6 +440,7 @@ class BillingWebhookIT {
               return new DunningChargeTransport.TransportResult(
                   DunningChargeTransport.Outcome.ACCEPTED,
                   "synthetic",
+                  ACCOUNT,
                   "accepted-during-payment-race",
                   null);
             });
@@ -522,10 +524,11 @@ class BillingWebhookIT {
         subscriptionId,
         tenant.tenantId(),
         java.sql.Timestamp.from(NOW.minusSeconds(60)));
-    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
-
     CheckoutOperation checkout = operation(tenant.tenantId());
     billing.createCheckout(checkout);
+    persistContractTerms(tenant.tenantId(), subscriptionId, checkout);
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+    isolateOtherDunningCycles(tenant.tenantId());
     UUID checkoutClaim =
         billing.claimProviderCall(tenant.tenantId(), checkout.operationId()).orElseThrow();
     billing.markCheckoutReady(
@@ -581,7 +584,11 @@ class BillingWebhookIT {
         subscriptionId,
         tenant.tenantId(),
         java.sql.Timestamp.from(paidThrough));
+    CheckoutOperation contractOperation = operation(tenant.tenantId());
+    billing.createCheckout(contractOperation);
+    persistContractTerms(tenant.tenantId(), subscriptionId, contractOperation);
     assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+    isolateOtherDunningCycles(tenant.tenantId());
 
     Instant graceEnd = paidThrough.plusSeconds(168 * 60 * 60L);
     Instant justBeforeGraceEnd = graceEnd.minusNanos(1_000);
@@ -592,6 +599,7 @@ class BillingWebhookIT {
             new DunningChargeTransport.TransportResult(
                 DunningChargeTransport.Outcome.ACCEPTED,
                 PROVIDER,
+                ACCOUNT,
                 "accepted-before-grace-end",
                 null));
 
@@ -623,8 +631,11 @@ class BillingWebhookIT {
         subscriptionId,
         tenant.tenantId(),
         java.sql.Timestamp.from(paidThrough));
-    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
     Instant graceEnd = paidThrough.plusSeconds(168 * 60 * 60L);
+    CheckoutOperation contractOperation = operation(tenant.tenantId());
+    billing.createCheckout(contractOperation);
+    persistContractTerms(tenant.tenantId(), subscriptionId, contractOperation);
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
     AtomicReference<Instant> controlledNow = new AtomicReference<>(graceEnd.minusSeconds(5));
     when(clock.instant()).thenAnswer(invocation -> controlledNow.get());
     when(chargeAuthorization.isAuthorized(any(), any(), any(), any())).thenReturn(true);
@@ -647,9 +658,10 @@ class BillingWebhookIT {
       boolean waitingOnTenantLock = false;
       while (System.nanoTime() < deadline) {
         Boolean waiting =
-            jdbc.queryForObject(
-                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '%SELECT tenant_id FROM agendamento.tenant%' AND query ILIKE '%FOR UPDATE%')",
-                Boolean.class);
+            new JdbcTemplate(PostgresTestEnvironment.migrationDataSource())
+                .queryForObject(
+                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '%SELECT tenant_id FROM agendamento.tenant%' AND query ILIKE '%FOR UPDATE%')",
+                    Boolean.class);
         if (Boolean.TRUE.equals(waiting)) {
           waitingOnTenantLock = true;
           break;
@@ -825,6 +837,35 @@ class BillingWebhookIT {
         null,
         0,
         NOW);
+  }
+
+  private void persistContractTerms(
+      UUID tenantId, UUID subscriptionId, CheckoutOperation sourceOperation) {
+    jdbc.update(
+        """
+        INSERT INTO agendamento.billing_subscription_contract
+          (subscription_id, tenant_id, source_operation_id, amount_minor_units, currency,
+           terms_version, offer_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        subscriptionId,
+        tenantId,
+        sourceOperation.operationId(),
+        sourceOperation.amountMinorUnits(),
+        sourceOperation.currency(),
+        sourceOperation.termsVersion(),
+        sourceOperation.offerVersion());
+  }
+
+  private void isolateOtherDunningCycles(UUID targetTenantId) {
+    jdbc.update(
+        "UPDATE agendamento.billing_dunning_attempt SET state = 'CANCELLED', claim_token = NULL, lease_until = NULL, next_attempt_at = NULL, skip_reason = NULL, updated_at = ? WHERE tenant_id <> ? AND state IN ('SCHEDULED', 'BLOCKED_CONFIGURATION', 'CLAIMED', 'SUBMITTING', 'RETRYABLE_NO_EFFECT', 'OUTCOME_UNKNOWN', 'RECONCILING')",
+        java.sql.Timestamp.from(NOW),
+        targetTenantId);
+    jdbc.update(
+        "UPDATE agendamento.billing_dunning_cycle SET state = 'SUSPENDED', closed_at = ? WHERE tenant_id <> ? AND state = 'OPEN'",
+        java.sql.Timestamp.from(NOW),
+        targetTenantId);
   }
 
   private boolean tryCreateCheckout(UUID tenantId, CountDownLatch ready, CountDownLatch start)

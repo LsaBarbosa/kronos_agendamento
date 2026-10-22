@@ -6,10 +6,12 @@ import com.appagendamento.audit.api.AuditEvent;
 import com.appagendamento.audit.api.AuditEventRecorder;
 import com.appagendamento.outbox.api.OutboxEvent;
 import com.appagendamento.outbox.api.OutboxEventRecorder;
+import com.appagendamento.subscriptions.application.AnnualRenewalAuthorization;
 import com.appagendamento.subscriptions.application.DunningChargeAuthorization;
 import com.appagendamento.subscriptions.application.DunningChargeTransport;
 import com.appagendamento.subscriptions.application.DunningMetricsSnapshot;
 import com.appagendamento.subscriptions.application.SubscriptionDunningRepository;
+import com.appagendamento.subscriptions.domain.AnnualRenewalNoticeView;
 import com.appagendamento.subscriptions.domain.DunningAttemptClaim;
 import com.appagendamento.subscriptions.domain.DunningAttemptView;
 import com.appagendamento.subscriptions.domain.Subscription;
@@ -21,6 +23,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -41,6 +44,7 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
   private final TenantAgendaLock agendaLock;
   private final Clock clock;
   private final DunningChargeAuthorization chargeAuthorization;
+  private final AnnualRenewalAuthorization annualAuthorization;
 
   public PostgresSubscriptionDunningRepository(
       JdbcTemplate jdbc,
@@ -49,7 +53,8 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
       AuditCorrelationId correlation,
       TenantAgendaLock agendaLock,
       Clock clock,
-      DunningChargeAuthorization chargeAuthorization) {
+      DunningChargeAuthorization chargeAuthorization,
+      AnnualRenewalAuthorization annualAuthorization) {
     this.jdbc = jdbc;
     this.audit = audit;
     this.outbox = outbox;
@@ -57,6 +62,7 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
     this.agendaLock = agendaLock;
     this.clock = clock;
     this.chargeAuthorization = chargeAuthorization;
+    this.annualAuthorization = annualAuthorization;
   }
 
   @Override
@@ -147,6 +153,25 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
         Timestamp.from(due.dueAt()),
         Timestamp.from(due.graceEndsAt()),
         Timestamp.from(asOf));
+    ContractTerms contractTerms =
+        jdbc
+            .query(
+                """
+                SELECT amount_minor_units, currency, terms_version, offer_version
+                FROM agendamento.billing_subscription_contract
+                WHERE tenant_id = ? AND subscription_id = ?
+                """,
+                (row, index) ->
+                    new ContractTerms(
+                        row.getObject("amount_minor_units", Long.class),
+                        row.getString("currency"),
+                        row.getString("terms_version"),
+                        row.getString("offer_version")),
+                due.tenantId(),
+                due.subscriptionId())
+            .stream()
+            .findFirst()
+            .orElse(null);
     for (int sequence : List.of(0, 3, 6)) {
       UUID attemptId =
           UUID.nameUUIDFromBytes(
@@ -155,8 +180,9 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
           """
           INSERT INTO agendamento.billing_dunning_attempt
             (attempt_id, tenant_id, cycle_id, logical_sequence, scheduled_at, state, updated_at,
-             external_idempotency_key)
-          VALUES (?, ?, ?, ?, ?, 'SCHEDULED', ?, ?)
+             external_idempotency_key, contract_amount_minor_units, contract_currency,
+             contract_terms_version, contract_offer_version)
+          VALUES (?, ?, ?, ?, ?, 'SCHEDULED', ?, ?, ?, ?, ?, ?)
           """,
           attemptId,
           due.tenantId(),
@@ -164,7 +190,11 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
           sequence,
           Timestamp.from(due.dueAt().plus(Duration.ofHours(24L * sequence))),
           Timestamp.from(asOf),
-          attemptId);
+          attemptId,
+          contractTerms == null ? null : contractTerms.amountMinorUnits(),
+          contractTerms == null ? null : contractTerms.currency(),
+          contractTerms == null ? null : contractTerms.termsVersion(),
+          contractTerms == null ? null : contractTerms.offerVersion());
     }
     recordEffects(
         due.tenantId(),
@@ -292,6 +322,469 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
                 row.getString("last_error_code"),
                 row.getString("skip_reason")),
         tenantId);
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<AnnualRenewalNoticeView> listAnnualRenewalNotices(UUID tenantId) {
+    return jdbc.query(
+        """
+        SELECT notice_id, subscription_version, paid_through_at, scheduled_at, state, obsolete_reason
+        FROM agendamento.billing_annual_renewal_notice
+        WHERE tenant_id = ?
+        ORDER BY paid_through_at DESC, notice_id DESC
+        LIMIT 12
+        """,
+        (row, index) ->
+            new AnnualRenewalNoticeView(
+                row.getObject("notice_id", UUID.class),
+                row.getLong("subscription_version"),
+                row.getTimestamp("paid_through_at").toInstant(),
+                row.getTimestamp("scheduled_at").toInstant(),
+                row.getString("state"),
+                row.getString("obsolete_reason")),
+        tenantId);
+  }
+
+  @Override
+  @Transactional(isolation = Isolation.READ_COMMITTED)
+  public int materializeAnnualRenewalNotices(Instant asOf, int limit) {
+    if (asOf == null || limit < 1 || limit > 500) {
+      throw new IllegalArgumentException("Parâmetros de aviso anual inválidos");
+    }
+    jdbc.update(
+        """
+        UPDATE agendamento.billing_annual_renewal_notice notice
+        SET state = 'OBSOLETE', obsolete_reason = CASE
+              WHEN EXISTS (
+                SELECT 1 FROM agendamento.subscription subscription
+                WHERE subscription.tenant_id = notice.tenant_id
+                  AND subscription.subscription_id = notice.subscription_id
+                  AND subscription.status = 'ACTIVE' AND subscription.plan_code = 'ANNUAL'
+              ) THEN 'PERIOD_CHANGED'
+              ELSE 'SUBSCRIPTION_INELIGIBLE'
+            END,
+            updated_at = ?
+        WHERE notice.state IN ('SCHEDULED', 'READY')
+          AND NOT EXISTS (
+            SELECT 1 FROM agendamento.subscription subscription
+            WHERE subscription.tenant_id = notice.tenant_id
+              AND subscription.subscription_id = notice.subscription_id
+              AND subscription.status = 'ACTIVE' AND subscription.plan_code = 'ANNUAL'
+              AND subscription.version = notice.subscription_version
+              AND subscription.paid_through_at = notice.paid_through_at
+          )
+        """,
+        Timestamp.from(asOf));
+    List<UUID> tenants =
+        jdbc.query(
+            """
+            SELECT tenant_id FROM agendamento.subscription
+            WHERE status = 'ACTIVE' AND plan_code = 'ANNUAL'
+              AND paid_through_at > ?
+              AND paid_through_at - INTERVAL '168 hours' <= ?
+            ORDER BY paid_through_at, tenant_id
+            LIMIT ?
+            """,
+            (row, index) -> row.getObject("tenant_id", UUID.class),
+            Timestamp.from(asOf),
+            Timestamp.from(asOf),
+            limit);
+    int created = 0;
+    for (UUID tenantId : tenants) {
+      agendaLock.acquire(tenantId);
+      Instant now = clock.instant();
+      List<AnnualSubscriptionRow> subscriptions =
+          jdbc.query(
+              """
+              SELECT subscription_id, version, paid_through_at
+              FROM agendamento.subscription
+              WHERE tenant_id = ? AND status = 'ACTIVE' AND plan_code = 'ANNUAL'
+                AND paid_through_at > ?
+                AND paid_through_at - INTERVAL '168 hours' <= ?
+              FOR UPDATE
+              """,
+              (row, index) ->
+                  new AnnualSubscriptionRow(
+                      row.getObject("subscription_id", UUID.class),
+                      row.getLong("version"),
+                      row.getTimestamp("paid_through_at").toInstant()),
+              tenantId,
+              Timestamp.from(now),
+              Timestamp.from(now));
+      if (subscriptions.isEmpty()) continue;
+      AnnualSubscriptionRow subscription = subscriptions.getFirst();
+      jdbc.update(
+          """
+          UPDATE agendamento.billing_annual_renewal_notice notice
+          SET state = 'OBSOLETE', obsolete_reason = 'PERIOD_CHANGED', updated_at = ?
+          WHERE tenant_id = ? AND subscription_id = ? AND state IN ('SCHEDULED', 'READY')
+            AND (notice.paid_through_at <> ? OR notice.subscription_version <> ?)
+          """,
+          Timestamp.from(now),
+          tenantId,
+          subscription.subscriptionId(),
+          Timestamp.from(subscription.paidThroughAt()),
+          subscription.version());
+      UUID noticeId =
+          UUID.nameUUIDFromBytes(
+              (subscription.subscriptionId()
+                      + ":annual-renewal-notice:v1:"
+                      + subscription.paidThroughAt())
+                  .getBytes(StandardCharsets.UTF_8));
+      Instant scheduledAt = subscription.paidThroughAt().minus(Duration.ofHours(168));
+      created +=
+          jdbc.update(
+              """
+              INSERT INTO agendamento.billing_annual_renewal_notice
+                (notice_id, tenant_id, subscription_id, subscription_version, paid_through_at,
+                 scheduled_at, state, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ON CONFLICT (subscription_id, paid_through_at) DO NOTHING
+              """,
+              noticeId,
+              tenantId,
+              subscription.subscriptionId(),
+              subscription.version(),
+              Timestamp.from(subscription.paidThroughAt()),
+              Timestamp.from(scheduledAt),
+              scheduledAt.isAfter(now) ? "SCHEDULED" : "READY",
+              Timestamp.from(now),
+              Timestamp.from(now));
+    }
+    return created;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public List<SubscriptionDunningRepository.ProviderReference> pendingPaymentEvidence(int limit) {
+    if (limit < 1 || limit > 500) {
+      throw new IllegalArgumentException("Limite de reconciliação inválido");
+    }
+    return jdbc.query(
+        """
+        SELECT DISTINCT inbox.provider_code, inbox.provider_account_id, inbox.provider_reference
+        FROM agendamento.billing_event_inbox inbox
+        JOIN agendamento.billing_dunning_attempt attempt
+          ON attempt.provider_code = inbox.provider_code
+         AND attempt.provider_account_id = inbox.provider_account_id
+         AND attempt.provider_reference = inbox.provider_reference
+        WHERE inbox.tenant_id IS NULL AND inbox.operation_id IS NULL
+          AND inbox.dunning_attempt_id IS NULL
+          AND attempt.state IN ('ACCEPTED', 'OUTCOME_UNKNOWN', 'RECONCILING',
+                                'CONFIRMED', 'DECLINED', 'FAILED_FINAL')
+        ORDER BY inbox.provider_code, inbox.provider_account_id, inbox.provider_reference
+        LIMIT ?
+        """,
+        (row, index) ->
+            new SubscriptionDunningRepository.ProviderReference(
+                row.getString("provider_code"),
+                row.getString("provider_account_id"),
+                row.getString("provider_reference")),
+        limit);
+  }
+
+  @Override
+  @Transactional(isolation = Isolation.READ_COMMITTED)
+  public int reconcilePaymentEvidence(String providerCode, String accountId, String reference) {
+    if (providerCode == null || accountId == null || reference == null) return 0;
+    lockReference(providerCode, accountId, reference);
+    List<UUID> candidateTenants =
+        jdbc.query(
+            """
+            SELECT DISTINCT tenant_id FROM agendamento.billing_dunning_attempt
+            WHERE provider_code = ? AND provider_account_id = ? AND provider_reference = ?
+            """,
+            (row, index) -> row.getObject("tenant_id", UUID.class),
+            providerCode,
+            accountId,
+            reference);
+    if (candidateTenants.size() != 1) return 0;
+    UUID tenantId = candidateTenants.getFirst();
+    agendaLock.acquire(tenantId);
+
+    Boolean checkoutCollision =
+        jdbc.queryForObject(
+            """
+            SELECT EXISTS (
+              SELECT 1 FROM agendamento.billing_checkout_operation
+              WHERE provider_code = ? AND provider_account_id = ? AND provider_reference = ?
+            )
+            """,
+            Boolean.class,
+            providerCode,
+            accountId,
+            reference);
+    if (Boolean.TRUE.equals(checkoutCollision)) return 0;
+
+    List<PaymentAttemptRow> attempts =
+        jdbc.query(
+            """
+            SELECT attempt.attempt_id, attempt.cycle_id, cycle.subscription_id,
+                   attempt.last_provider_sequence, attempt.state AS attempt_state,
+                   cycle.state AS cycle_state, subscription.status AS subscription_status,
+                   subscription.version AS subscription_version,
+                   subscription.paid_through_at AS current_paid_through,
+                   attempt.contract_amount_minor_units AS amount_minor_units,
+                   attempt.contract_currency AS currency, subscription.plan_code
+            FROM agendamento.billing_dunning_attempt attempt
+            JOIN agendamento.billing_dunning_cycle cycle USING (cycle_id, tenant_id)
+            JOIN agendamento.subscription subscription USING (subscription_id, tenant_id)
+            WHERE attempt.tenant_id = ? AND attempt.provider_code = ?
+              AND attempt.provider_account_id = ? AND attempt.provider_reference = ?
+              AND attempt.state IN ('ACCEPTED', 'OUTCOME_UNKNOWN', 'RECONCILING',
+                                    'CONFIRMED', 'DECLINED', 'FAILED_FINAL')
+            FOR UPDATE OF attempt, cycle, subscription
+            """,
+            (row, index) ->
+                new PaymentAttemptRow(
+                    row.getObject("attempt_id", UUID.class),
+                    row.getObject("cycle_id", UUID.class),
+                    row.getObject("subscription_id", UUID.class),
+                    row.getLong("last_provider_sequence"),
+                    row.getString("attempt_state"),
+                    row.getString("cycle_state"),
+                    row.getString("subscription_status"),
+                    row.getLong("subscription_version"),
+                    instant(row, "current_paid_through"),
+                    row.getObject("amount_minor_units", Long.class),
+                    row.getString("currency"),
+                    row.getString("plan_code")),
+            tenantId,
+            providerCode,
+            accountId,
+            reference);
+    if (attempts.size() != 1) return 0;
+    PaymentAttemptRow attempt = attempts.getFirst();
+    List<InboxPaymentEvent> events =
+        jdbc.query(
+            """
+            SELECT provider_event_id, provider_sequence, outcome, amount_minor_units,
+                   currency, occurred_at, paid_through_at
+            FROM agendamento.billing_event_inbox
+            WHERE provider_code = ? AND provider_account_id = ? AND provider_reference = ?
+              AND tenant_id IS NULL AND operation_id IS NULL AND dunning_attempt_id IS NULL
+            ORDER BY provider_sequence, provider_event_id
+            FOR UPDATE
+            """,
+            (row, index) ->
+                new InboxPaymentEvent(
+                    row.getString("provider_event_id"),
+                    row.getLong("provider_sequence"),
+                    row.getString("outcome"),
+                    row.getLong("amount_minor_units"),
+                    row.getString("currency"),
+                    row.getTimestamp("occurred_at").toInstant(),
+                    instant(row, "paid_through_at")),
+            providerCode,
+            accountId,
+            reference);
+    int applied = 0;
+    for (InboxPaymentEvent event : events) {
+      jdbc.update(
+          """
+          UPDATE agendamento.billing_event_inbox
+          SET tenant_id = ?, dunning_attempt_id = ?, disposition = 'PENDING'
+          WHERE provider_code = ? AND provider_account_id = ? AND provider_event_id = ?
+            AND tenant_id IS NULL AND dunning_attempt_id IS NULL
+          """,
+          tenantId,
+          attempt.attemptId(),
+          providerCode,
+          accountId,
+          event.eventId());
+      applyDunningPaymentEvidence(tenantId, providerCode, accountId, event, attempt);
+      attempt = paymentAttemptForUpdate(tenantId, attempt.attemptId());
+      applied++;
+    }
+    return applied;
+  }
+
+  private void applyDunningPaymentEvidence(
+      UUID tenantId,
+      String providerCode,
+      String accountId,
+      InboxPaymentEvent event,
+      PaymentAttemptRow attempt) {
+    if (event.sequence() <= attempt.lastProviderSequence()) {
+      setInboxDisposition(providerCode, accountId, event.eventId(), "OLDER");
+      return;
+    }
+    if (attempt.amountMinorUnits() == null
+        || attempt.currency() == null
+        || event.amountMinorUnits() != attempt.amountMinorUnits()
+        || !event.currency().equals(attempt.currency())
+        || (event.outcome().equals("CONFIRMED") && event.paidThroughAt() == null)) {
+      setInboxDisposition(providerCode, accountId, event.eventId(), "MISMATCHED");
+      return;
+    }
+    jdbc.update(
+        """
+        UPDATE agendamento.billing_dunning_attempt
+        SET last_provider_sequence = ?, updated_at = ?
+        WHERE tenant_id = ? AND attempt_id = ?
+        """,
+        event.sequence(),
+        Timestamp.from(clock.instant()),
+        tenantId,
+        attempt.attemptId());
+    if (event.outcome().equals("PENDING")) {
+      setInboxDisposition(providerCode, accountId, event.eventId(), "PENDING");
+      return;
+    }
+    if (event.outcome().equals("DECLINED")) {
+      jdbc.update(
+          """
+          UPDATE agendamento.billing_dunning_attempt
+          SET state = 'DECLINED', claim_token = NULL, lease_until = NULL,
+              last_error_code = 'PROVIDER_DECLINED', updated_at = ?
+          WHERE tenant_id = ? AND attempt_id = ? AND state <> 'CONFIRMED'
+          """,
+          Timestamp.from(clock.instant()),
+          tenantId,
+          attempt.attemptId());
+      setInboxDisposition(providerCode, accountId, event.eventId(), "DECLINED");
+      return;
+    }
+
+    Instant now = clock.instant();
+    if (attempt.currentPaidThrough() != null
+        && !event.paidThroughAt().isAfter(attempt.currentPaidThrough())) {
+      if ("ACTIVE".equals(attempt.subscriptionStatus())) {
+        settleSupersededAttempt(tenantId, attempt, event.occurredAt());
+      } else {
+        jdbc.update(
+            "UPDATE agendamento.billing_dunning_attempt SET state = 'OUTCOME_UNKNOWN', last_error_code = 'PAYMENT_PERIOD_NOT_NEWER', updated_at = ? WHERE tenant_id = ? AND attempt_id = ?",
+            Timestamp.from(now),
+            tenantId,
+            attempt.attemptId());
+      }
+      setInboxDisposition(providerCode, accountId, event.eventId(), "OLDER");
+      return;
+    }
+    if (!List.of("PAST_DUE", "SUSPENDED").contains(attempt.subscriptionStatus())
+        || !List.of("OPEN", "SUSPENDED").contains(attempt.cycleState())) {
+      if ("ACTIVE".equals(attempt.subscriptionStatus())) {
+        settleSupersededAttempt(tenantId, attempt, event.occurredAt());
+      }
+      setInboxDisposition(providerCode, accountId, event.eventId(), "OLDER");
+      return;
+    }
+
+    int changed =
+        jdbc.update(
+            """
+            UPDATE agendamento.subscription
+            SET status = 'ACTIVE', paid_through_at = ?, grace_ends_at = NULL,
+                version = version + 1
+            WHERE tenant_id = ? AND subscription_id = ? AND version = ?
+              AND status IN ('PAST_DUE', 'SUSPENDED')
+              AND paid_through_at < ?
+            """,
+            Timestamp.from(event.paidThroughAt()),
+            tenantId,
+            attempt.subscriptionId(),
+            attempt.subscriptionVersion(),
+            Timestamp.from(event.paidThroughAt()));
+    if (changed != 1) throw new IllegalStateException("CAS da renovação foi perdido");
+    long after = attempt.subscriptionVersion() + 1;
+    UUID operationId = attempt.attemptId();
+    jdbc.update(
+        """
+        INSERT INTO agendamento.subscription_history
+          (event_id, tenant_id, subscription_id, event_type, from_status, to_status,
+           event_at, version, operation_id)
+        VALUES (?, ?, ?, 'PAYMENT_CONFIRMED', ?, 'ACTIVE', ?, ?, ?)
+        """,
+        UUID.randomUUID(),
+        tenantId,
+        attempt.subscriptionId(),
+        attempt.subscriptionStatus(),
+        Timestamp.from(event.occurredAt()),
+        after,
+        operationId);
+    closeCyclesForPayment(tenantId, attempt.subscriptionId(), event.occurredAt());
+    jdbc.update(
+        """
+        UPDATE agendamento.billing_dunning_attempt
+        SET state = 'CONFIRMED', claim_token = NULL, lease_until = NULL,
+            last_error_code = NULL, updated_at = ?
+        WHERE tenant_id = ? AND attempt_id = ?
+        """,
+        Timestamp.from(now),
+        tenantId,
+        attempt.attemptId());
+    recordEffects(
+        tenantId,
+        attempt.subscriptionId(),
+        operationId,
+        "SUBSCRIPTION_PAYMENT_CONFIRMED",
+        "SubscriptionReactivated",
+        attempt.subscriptionVersion(),
+        after);
+    setInboxDisposition(providerCode, accountId, event.eventId(), "APPLIED");
+  }
+
+  private void settleSupersededAttempt(UUID tenantId, PaymentAttemptRow attempt, Instant paidAt) {
+    closeCyclesForPayment(tenantId, attempt.subscriptionId(), paidAt);
+    jdbc.update(
+        """
+        UPDATE agendamento.billing_dunning_attempt
+        SET state = 'CANCELLED', claim_token = NULL, lease_until = NULL,
+            last_error_code = 'SUPERSEDED_BY_NEWER_PAYMENT', updated_at = ?
+        WHERE tenant_id = ? AND attempt_id = ?
+        """,
+        Timestamp.from(clock.instant()),
+        tenantId,
+        attempt.attemptId());
+  }
+
+  private PaymentAttemptRow paymentAttemptForUpdate(UUID tenantId, UUID attemptId) {
+    return jdbc.queryForObject(
+        """
+        SELECT attempt.attempt_id, attempt.cycle_id, cycle.subscription_id,
+               attempt.last_provider_sequence, attempt.state AS attempt_state,
+               cycle.state AS cycle_state, subscription.status AS subscription_status,
+               subscription.version AS subscription_version,
+               subscription.paid_through_at AS current_paid_through,
+               attempt.contract_amount_minor_units AS amount_minor_units,
+               attempt.contract_currency AS currency, subscription.plan_code
+        FROM agendamento.billing_dunning_attempt attempt
+        JOIN agendamento.billing_dunning_cycle cycle USING (cycle_id, tenant_id)
+        JOIN agendamento.subscription subscription USING (subscription_id, tenant_id)
+        WHERE attempt.tenant_id = ? AND attempt.attempt_id = ?
+        FOR UPDATE OF attempt, cycle, subscription
+        """,
+        (row, index) ->
+            new PaymentAttemptRow(
+                row.getObject("attempt_id", UUID.class),
+                row.getObject("cycle_id", UUID.class),
+                row.getObject("subscription_id", UUID.class),
+                row.getLong("last_provider_sequence"),
+                row.getString("attempt_state"),
+                row.getString("cycle_state"),
+                row.getString("subscription_status"),
+                row.getLong("subscription_version"),
+                instant(row, "current_paid_through"),
+                row.getObject("amount_minor_units", Long.class),
+                row.getString("currency"),
+                row.getString("plan_code")),
+        tenantId,
+        attemptId);
+  }
+
+  private void setInboxDisposition(
+      String providerCode, String accountId, String eventId, String disposition) {
+    jdbc.update(
+        """
+        UPDATE agendamento.billing_event_inbox
+        SET disposition = ?
+        WHERE provider_code = ? AND provider_account_id = ? AND provider_event_id = ?
+        """,
+        disposition,
+        providerCode,
+        accountId,
+        eventId);
   }
 
   @Override
@@ -440,7 +933,12 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
             """
             SELECT a.attempt_id, a.external_idempotency_key, a.cycle_id, c.subscription_id,
                    a.logical_sequence, a.technical_attempts, a.scheduled_at,
-                   a.provider_code, a.provider_reference, s.plan_code
+                   a.provider_code, a.provider_account_id, a.provider_reference, s.plan_code,
+                   s.paid_through_at AS period_ends_at,
+                   a.contract_amount_minor_units AS amount_minor_units,
+                   a.contract_currency AS currency,
+                   a.contract_terms_version AS terms_version,
+                   a.contract_offer_version AS offer_version
             FROM agendamento.billing_dunning_attempt a
             JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id)
             JOIN agendamento.subscription s USING (subscription_id, tenant_id)
@@ -500,7 +998,12 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
                 """
                 SELECT a.attempt_id, a.external_idempotency_key, a.cycle_id, c.subscription_id,
                        a.logical_sequence, a.technical_attempts, a.scheduled_at,
-                       a.provider_code, a.provider_reference, s.plan_code
+                       a.provider_code, a.provider_account_id, a.provider_reference, s.plan_code,
+                       s.paid_through_at AS period_ends_at,
+                       a.contract_amount_minor_units AS amount_minor_units,
+                       a.contract_currency AS currency,
+                       a.contract_terms_version AS terms_version,
+                       a.contract_offer_version AS offer_version
                 FROM agendamento.billing_dunning_attempt a
                 JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id)
                 JOIN agendamento.subscription s USING (subscription_id, tenant_id)
@@ -520,9 +1023,14 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
       List<AttemptRow> due =
           jdbc.query(
               """
-              SELECT a.attempt_id, a.external_idempotency_key, a.cycle_id, c.subscription_id,
-                     a.logical_sequence, a.technical_attempts, a.scheduled_at,
-                     a.provider_code, a.provider_reference, s.plan_code
+          SELECT a.attempt_id, a.external_idempotency_key, a.cycle_id, c.subscription_id,
+                 a.logical_sequence, a.technical_attempts, a.scheduled_at,
+                 a.provider_code, a.provider_account_id, a.provider_reference, s.plan_code,
+                 s.paid_through_at AS period_ends_at,
+                 a.contract_amount_minor_units AS amount_minor_units,
+                 a.contract_currency AS currency,
+                 a.contract_terms_version AS terms_version,
+                 a.contract_offer_version AS offer_version
               FROM agendamento.billing_dunning_attempt a
               JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id)
               JOIN agendamento.subscription s USING (subscription_id, tenant_id)
@@ -607,7 +1115,13 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
         row.scheduledAt(),
         now.plus(lease),
         row.providerCode(),
-        row.providerReference());
+        row.providerAccountId(),
+        row.providerReference(),
+        row.periodEndsAt(),
+        row.amountMinorUnits(),
+        row.currency(),
+        row.termsVersion(),
+        row.offerVersion());
   }
 
   private AttemptRow mapAttemptRow(ResultSet row) throws SQLException {
@@ -620,8 +1134,14 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
         row.getInt("technical_attempts"),
         row.getTimestamp("scheduled_at").toInstant(),
         row.getString("provider_code"),
+        row.getString("provider_account_id"),
         row.getString("provider_reference"),
-        row.getString("plan_code"));
+        row.getString("plan_code"),
+        instant(row, "period_ends_at"),
+        row.getObject("amount_minor_units", Long.class),
+        row.getString("currency"),
+        row.getString("terms_version"),
+        row.getString("offer_version"));
   }
 
   @Override
@@ -635,7 +1155,11 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
             SELECT a.state, a.claim_token, a.lease_until, a.ever_started,
                    a.scheduled_at, a.next_attempt_at, a.send_claim_token,
                    c.state AS cycle_state, s.status AS subscription_status,
-                   s.plan_code, s.grace_ends_at
+                   s.plan_code, s.grace_ends_at, s.paid_through_at AS period_ends_at,
+                   a.contract_amount_minor_units AS amount_minor_units,
+                   a.contract_currency AS currency,
+                   a.contract_terms_version AS terms_version,
+                   a.contract_offer_version AS offer_version
             FROM agendamento.billing_dunning_attempt a
             JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id)
             JOIN agendamento.subscription s USING (subscription_id, tenant_id)
@@ -654,7 +1178,12 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
                     row.getString("cycle_state"),
                     row.getString("subscription_status"),
                     row.getString("plan_code"),
-                    instant(row, "grace_ends_at")),
+                    instant(row, "grace_ends_at"),
+                    instant(row, "period_ends_at"),
+                    row.getObject("amount_minor_units", Long.class),
+                    row.getString("currency"),
+                    row.getString("terms_version"),
+                    row.getString("offer_version")),
             claim.tenantId(),
             claim.attemptId(),
             claim.cycleId(),
@@ -689,11 +1218,30 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
           claim.claimToken());
       return false;
     }
+    if (row.amountMinorUnits() == null
+        || row.currency() == null
+        || row.termsVersion() == null
+        || row.offerVersion() == null
+        || !Objects.equals(claim.periodEndsAt(), row.periodEndsAt())
+        || !Objects.equals(claim.amountMinorUnits(), row.amountMinorUnits())
+        || !Objects.equals(claim.currency(), row.currency())
+        || !Objects.equals(claim.termsVersion(), row.termsVersion())
+        || !Objects.equals(claim.offerVersion(), row.offerVersion())) {
+      blockClaimLocked(claim, now, "CONTRACT_TERMS_UNAVAILABLE_OR_CHANGED");
+      return false;
+    }
     boolean authorized;
     try {
       authorized =
-          chargeAuthorization.isAuthorized(
-              claim.tenantId(), claim.subscriptionId(), row.planCode(), now);
+          switch (row.planCode()) {
+            case "MONTHLY" ->
+                chargeAuthorization.isAuthorized(
+                    claim.tenantId(), claim.subscriptionId(), row.planCode(), now);
+            case "ANNUAL" ->
+                annualAuthorization.isAuthorizedForPeriod(
+                    claim.tenantId(), claim.subscriptionId(), row.periodEndsAt(), now);
+            default -> false;
+          };
     } catch (RuntimeException unavailable) {
       authorized = false;
     }
@@ -823,13 +1371,31 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
                 : null;
     String providerCode =
         result.providerCode() == null ? claim.providerCode() : result.providerCode();
-    String errorCode = result.safeErrorCode();
+    String providerAccount = result.providerAccountId();
+    String providerReference = result.providerReference();
+    boolean missingReferenceContext =
+        providerReference != null && (providerAccount == null || providerCode == null);
+    if (missingReferenceContext) {
+      providerReference = null;
+      if (result.outcome() == DunningChargeTransport.Outcome.ACCEPTED) {
+        nextState = "OUTCOME_UNKNOWN";
+        nextAt = null;
+      }
+    }
+    if (providerCode != null && providerAccount != null && providerReference != null) {
+      lockReference(providerCode, providerAccount, providerReference);
+    }
+    String errorCode =
+        missingReferenceContext && result.outcome() == DunningChargeTransport.Outcome.ACCEPTED
+            ? "PROVIDER_REFERENCE_CONTEXT_MISSING"
+            : result.safeErrorCode();
     String sql =
         reconciliation
             ? """
               UPDATE agendamento.billing_dunning_attempt
               SET state = ?, claim_token = NULL, lease_until = NULL,
-                  provider_code = ?, provider_reference = COALESCE(?, provider_reference),
+                  provider_code = ?, provider_account_id = COALESCE(?, provider_account_id),
+                  provider_reference = COALESCE(?, provider_reference),
                   next_attempt_at = ?, last_error_code = ?, updated_at = ?
               WHERE tenant_id = ? AND attempt_id = ? AND state = 'RECONCILING'
                 AND claim_token = ? AND lease_until > ?
@@ -837,38 +1403,49 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
             : """
               UPDATE agendamento.billing_dunning_attempt
               SET state = ?, claim_token = NULL, lease_until = NULL,
-                  provider_code = ?, provider_reference = COALESCE(?, provider_reference),
+                  provider_code = ?, provider_account_id = COALESCE(?, provider_account_id),
+                  provider_reference = COALESCE(?, provider_reference),
                   next_attempt_at = ?, last_error_code = ?, updated_at = ?
               WHERE tenant_id = ? AND attempt_id = ? AND send_claim_token = ?
                 AND state IN ('SUBMITTING', 'OUTCOME_UNKNOWN', 'RECONCILING')
               """;
+    boolean persisted;
     if (reconciliation) {
-      return jdbc.update(
-              sql,
-              nextState,
-              providerCode,
-              result.providerReference(),
-              nextAt == null ? null : Timestamp.from(nextAt),
-              errorCode,
-              Timestamp.from(now),
-              claim.tenantId(),
-              claim.attemptId(),
-              claim.claimToken(),
-              Timestamp.from(now))
-          == 1;
+      persisted =
+          jdbc.update(
+                  sql,
+                  nextState,
+                  providerCode,
+                  providerAccount,
+                  providerReference,
+                  nextAt == null ? null : Timestamp.from(nextAt),
+                  errorCode,
+                  Timestamp.from(now),
+                  claim.tenantId(),
+                  claim.attemptId(),
+                  claim.claimToken(),
+                  Timestamp.from(now))
+              == 1;
+    } else {
+      persisted =
+          jdbc.update(
+                  sql,
+                  nextState,
+                  providerCode,
+                  providerAccount,
+                  providerReference,
+                  nextAt == null ? null : Timestamp.from(nextAt),
+                  errorCode,
+                  Timestamp.from(now),
+                  claim.tenantId(),
+                  claim.attemptId(),
+                  claim.claimToken())
+              == 1;
     }
-    return jdbc.update(
-            sql,
-            nextState,
-            providerCode,
-            result.providerReference(),
-            nextAt == null ? null : Timestamp.from(nextAt),
-            errorCode,
-            Timestamp.from(now),
-            claim.tenantId(),
-            claim.attemptId(),
-            claim.claimToken())
-        == 1;
+    if (persisted && providerCode != null && providerAccount != null && providerReference != null) {
+      reconcilePaymentEvidence(providerCode, providerAccount, providerReference);
+    }
+    return persisted;
   }
 
   private static String stateFor(
@@ -926,6 +1503,13 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
             "{\"subscriptionId\":\"" + subscriptionId + "\",\"version\":" + after + "}"));
   }
 
+  private void lockReference(String provider, String account, String reference) {
+    jdbc.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+        resultSet -> null,
+        provider + ":" + account + ":" + reference);
+  }
+
   private static UUID operationId(UUID subscriptionId, String action, long version) {
     return UUID.nameUUIDFromBytes(
         (subscriptionId + ":" + action + ":v" + version).getBytes(StandardCharsets.UTF_8));
@@ -958,8 +1542,42 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
       int technicalAttempts,
       Instant scheduledAt,
       String providerCode,
+      String providerAccountId,
       String providerReference,
+      String planCode,
+      Instant periodEndsAt,
+      Long amountMinorUnits,
+      String currency,
+      String termsVersion,
+      String offerVersion) {}
+
+  private record ContractTerms(
+      Long amountMinorUnits, String currency, String termsVersion, String offerVersion) {}
+
+  private record PaymentAttemptRow(
+      UUID attemptId,
+      UUID cycleId,
+      UUID subscriptionId,
+      long lastProviderSequence,
+      String attemptState,
+      String cycleState,
+      String subscriptionStatus,
+      long subscriptionVersion,
+      Instant currentPaidThrough,
+      Long amountMinorUnits,
+      String currency,
       String planCode) {}
+
+  private record InboxPaymentEvent(
+      String eventId,
+      long sequence,
+      String outcome,
+      long amountMinorUnits,
+      String currency,
+      Instant occurredAt,
+      Instant paidThroughAt) {}
+
+  private record AnnualSubscriptionRow(UUID subscriptionId, long version, Instant paidThroughAt) {}
 
   private record CycleRow(
       UUID cycleId, UUID subscriptionId, Instant graceEndsAt, String planCode) {}
@@ -974,7 +1592,12 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
       String cycleState,
       String subscriptionStatus,
       String planCode,
-      Instant graceEndsAt) {}
+      Instant graceEndsAt,
+      Instant periodEndsAt,
+      Long amountMinorUnits,
+      String currency,
+      String termsVersion,
+      String offerVersion) {}
 
   private record DueState(
       UUID subscriptionId, UUID tenantId, Instant dueAt, Instant graceEndsAt, long version) {}

@@ -40,6 +40,15 @@ type Overview = {
         safeErrorCode: string | null;
         skipReason: string | null;
     }[];
+    annualRenewalNotices?: {
+        noticeId: string;
+        subscriptionVersion: number;
+        paidThroughAt: string;
+        scheduledAt: string;
+        state: 'SCHEDULED' | 'READY' | 'OBSOLETE';
+        obsoleteReason: string | null;
+    }[];
+    annualRenewalAuthorized?: boolean;
 };
 
 type CheckoutIntent = {
@@ -89,6 +98,8 @@ function dunningStateLabel(state: string) {
             return 'Resultado incerto; aguardando reconciliação, sem nova cobrança';
         case 'ACCEPTED':
             return 'Aceita pelo transporte; pagamento ainda não confirmado';
+        case 'CONFIRMED':
+            return 'Pagamento confirmado e assinatura regularizada';
         case 'DECLINED':
             return 'Recusada pelo transporte';
         case 'FAILED_FINAL':
@@ -762,6 +773,53 @@ export function AdminSubscriptionPanel({
                             </li>
                         ))}
                     </ol>
+                </section>
+            )}
+            {overview?.subscription?.planCode === 'ANNUAL' && (
+                <section aria-label="Renovação anual">
+                    <h3>Renovação anual</h3>
+                    <p>
+                        Autorização para este período:{' '}
+                        {overview.annualRenewalAuthorized
+                            ? 'confirmada pela fonte configurada'
+                            : 'indisponível ou não confirmada'}
+                        . A assinatura ou um cartão anterior não substituem
+                        autorização específica. Nenhuma cobrança é iniciada por
+                        esta tela.
+                    </p>
+                    {overview.annualRenewalNotices?.length ? (
+                        <ul>
+                            {overview.annualRenewalNotices.map((notice) => (
+                                <li key={notice.noticeId}>
+                                    Aviso previsto para{' '}
+                                    {new Date(
+                                        notice.scheduledAt,
+                                    ).toLocaleString('pt-BR', {
+                                        timeZone: 'UTC',
+                                    })}{' '}
+                                    UTC, relativo ao período pago até{' '}
+                                    {new Date(
+                                        notice.paidThroughAt,
+                                    ).toLocaleString('pt-BR', {
+                                        timeZone: 'UTC',
+                                    })}{' '}
+                                    UTC —{' '}
+                                    {notice.state === 'OBSOLETE'
+                                        ? `obsoleto (${notice.obsoleteReason ?? 'motivo não informado'})`
+                                        : notice.state === 'READY'
+                                          ? 'intenção pronta; não enviada'
+                                          : 'agendado; não enviado'}
+                                    . Versão {notice.subscriptionVersion}.
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <p>Nenhuma intenção de aviso materializada.</p>
+                    )}
+                    <p>
+                        Sem fornecedor e autorização de notificação aprovados,
+                        não há envio nem confirmação de entrega.
+                    </p>
                 </section>
             )}
             {overview && (

@@ -383,6 +383,8 @@ Critérios de aceite:
 - Anual avisa sete dias antes e exige autorização.
 - Resultado ambíguo de cobrança fica reconciliando; não cria cobrança paralela com nova identidade.
 
+AGD-043 reutiliza as tentativas periódicas de AGD-042 como autoridade única. O caminho de pagamento renovado exige evento autenticado, correlacionado ao attempt e compatível com seus termos persistidos; dedupe/replay não repetem reativação. A autorização para mensal é revalidada no início da tentativa; anual exige autorização específica do período, distinta do mandato mensal. Aviso anual usa uma intenção lógica tenant/assinatura/período e é invalidado por mudança de período. Sem transport/verificador real, testes sintéticos demonstram somente composição. Âncora/duração do período e pagamentos antecipados/atrasados seguem pendentes até definição comercial e contrato com autoridade financeira.
+
 ### AGD-044 — Exportação CSV e PDF
 
 **Prioridade:** P0 · **Tamanho:** L

@@ -13,6 +13,8 @@ import com.appagendamento.audit.api.AuditEvent;
 import com.appagendamento.audit.api.AuditEventRecorder;
 import com.appagendamento.subscriptions.api.CommercialEligibilityIdentitySource;
 import com.appagendamento.subscriptions.api.VerifiedCommercialIdentity;
+import com.appagendamento.subscriptions.application.AnnualRenewalAuthorization;
+import com.appagendamento.subscriptions.application.BillingRepository;
 import com.appagendamento.subscriptions.application.DunningAttemptReconciler;
 import com.appagendamento.subscriptions.application.DunningChargeAuthorization;
 import com.appagendamento.subscriptions.application.DunningChargeTransport;
@@ -59,12 +61,14 @@ class SubscriptionTrialIT {
   @Autowired private SubscriptionTrialLifecycle lifecycle;
   @Autowired private SubscriptionDunningWorker dunningWorker;
   @Autowired private SubscriptionDunningRepository dunningRepository;
+  @Autowired private BillingRepository billingRepository;
   @Autowired private MeterRegistry meterRegistry;
   @Autowired private JdbcTemplate jdbc;
   private JdbcTemplate migrationJdbc;
   @MockitoBean private CommercialEligibilityIdentitySource identities;
   @MockitoBean private Clock clock;
   @MockitoBean private DunningChargeAuthorization chargeAuthorization;
+  @MockitoBean private AnnualRenewalAuthorization annualAuthorization;
   @MockitoBean private DunningChargeTransport chargeTransport;
   @MockitoBean private DunningAttemptReconciler attemptReconciler;
   @MockitoSpyBean private AuditEventRecorder audit;
@@ -76,7 +80,14 @@ class SubscriptionTrialIT {
 
   @BeforeEach
   void configureDeterministicAdapters() {
-    reset(identities, clock, audit, chargeAuthorization, chargeTransport, attemptReconciler);
+    reset(
+        identities,
+        clock,
+        audit,
+        chargeAuthorization,
+        annualAuthorization,
+        chargeTransport,
+        attemptReconciler);
     migrationJdbc = new JdbcTemplate(PostgresTestEnvironment.migrationDataSource());
     migrationJdbc.update(
         "TRUNCATE TABLE agendamento.billing_dunning_attempt, agendamento.billing_dunning_cycle CASCADE");
@@ -444,7 +455,11 @@ class SubscriptionTrialIT {
                 null,
                 "NO_EFFECT_CONFIRMED"),
             new DunningChargeTransport.TransportResult(
-                DunningChargeTransport.Outcome.ACCEPTED, "synthetic", "controlled-ref", null));
+                DunningChargeTransport.Outcome.ACCEPTED,
+                "synthetic",
+                "synthetic-account",
+                "controlled-ref",
+                null));
     Tenant tenant = createTenant("dunning-technical-retry");
     paidSubscription(tenant.tenantId(), NOW.minusSeconds(1));
     assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
@@ -472,6 +487,148 @@ class SubscriptionTrialIT {
     assertThat(requests.getAllValues())
         .extracting(DunningChargeTransport.ChargeRequest::externalIdempotencyKey)
         .containsOnly(logicalAttemptId);
+  }
+
+  @Test
+  void authenticatedPaymentBeforeAttemptReferenceIsConvergedAfterAcceptedResult() {
+    when(identities.findVerifiedIdentity(any())).thenReturn(Optional.empty());
+    when(chargeAuthorization.isAuthorized(any(), any(), any(), any())).thenReturn(true);
+    Tenant tenant = createTenant("dunning-early-payment-evidence");
+    UUID subscriptionId = paidSubscription(tenant.tenantId(), NOW.minusSeconds(1));
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+    when(chargeTransport.submit(any()))
+        .thenAnswer(
+            invocation -> {
+              DunningChargeTransport.ChargeRequest request = invocation.getArgument(0);
+              billingRepository.recordAuthenticatedEvent(
+                  new com.appagendamento.subscriptions.api.AuthenticatedPaymentEvent(
+                      "synthetic",
+                      "synthetic-account",
+                      "early-dunning-event-" + request.attemptId(),
+                      "dunning-reference-" + request.attemptId(),
+                      1,
+                      "CONFIRMED",
+                      100,
+                      "XTS",
+                      NOW,
+                      NOW.plus(Duration.ofDays(30))));
+              return new DunningChargeTransport.TransportResult(
+                  DunningChargeTransport.Outcome.ACCEPTED,
+                  "synthetic",
+                  "synthetic-account",
+                  "dunning-reference-" + request.attemptId(),
+                  null);
+            });
+
+    assertThat(dunningWorker.processBatch()).isEqualTo(1);
+    assertThat(status(tenant.tenantId())).isEqualTo("ACTIVE:3");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND logical_sequence = 0",
+                String.class,
+                tenant.tenantId()))
+        .isEqualTo("CONFIRMED");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT disposition FROM agendamento.billing_event_inbox WHERE provider_event_id = ?",
+                String.class,
+                "early-dunning-event-" + attemptId(tenant.tenantId(), 0)))
+        .isEqualTo("APPLIED");
+    assertThat(count("billing_dunning_cycle", tenant.tenantId())).isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.subscription_history WHERE tenant_id = ? AND event_type = 'PAYMENT_CONFIRMED'",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.audit_event WHERE tenant_id = ? AND action = 'SUBSCRIPTION_PAYMENT_CONFIRMED'",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.outbox_event WHERE tenant_id = ? AND event_type = 'SubscriptionReactivated'",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(1);
+    assertThat(subscriptionId).isNotNull();
+  }
+
+  @Test
+  void annualNoticeIsDeduplicatedAndObsoletedWhenThePaidPeriodChanges() {
+    when(identities.findVerifiedIdentity(any())).thenReturn(Optional.empty());
+    Tenant tenant = createTenant("annual-notice-lifecycle");
+    UUID subscriptionId =
+        paidSubscription(tenant.tenantId(), NOW.plus(Duration.ofHours(168)), "ANNUAL");
+
+    assertThat(dunningRepository.materializeAnnualRenewalNotices(NOW, 20)).isEqualTo(1);
+    assertThat(dunningRepository.materializeAnnualRenewalNotices(NOW, 20)).isZero();
+    var notices = dunningRepository.listAnnualRenewalNotices(tenant.tenantId());
+    assertThat(notices).hasSize(1);
+    assertThat(notices.getFirst().scheduledAt()).isEqualTo(NOW);
+    assertThat(notices.getFirst().state()).isEqualTo("READY");
+
+    jdbc.update(
+        "UPDATE agendamento.subscription SET paid_through_at = ?, version = version + 1 WHERE tenant_id = ? AND subscription_id = ?",
+        java.sql.Timestamp.from(NOW.plus(Duration.ofDays(365))),
+        tenant.tenantId(),
+        subscriptionId);
+    assertThat(dunningRepository.materializeAnnualRenewalNotices(NOW, 20)).isZero();
+    var afterChange = dunningRepository.listAnnualRenewalNotices(tenant.tenantId());
+    assertThat(afterChange).hasSize(1);
+    assertThat(afterChange.getFirst().state()).isEqualTo("OBSOLETE");
+    assertThat(afterChange.getFirst().obsoleteReason()).isEqualTo("PERIOD_CHANGED");
+  }
+
+  @Test
+  void annualRenewalDoesNotCallTransportWithoutPeriodSpecificAuthorization() {
+    when(identities.findVerifiedIdentity(any())).thenReturn(Optional.empty());
+    Tenant tenant = createTenant("annual-renewal-no-authorization");
+    paidSubscription(tenant.tenantId(), NOW.minusSeconds(1), "ANNUAL");
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+
+    assertThat(dunningWorker.processBatch()).isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state = 'BLOCKED_CONFIGURATION' AND last_error_code = 'RECURRING_AUTHORIZATION_UNAVAILABLE' AND NOT ever_started AND technical_attempts = 0 FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND logical_sequence = 0",
+                Boolean.class,
+                tenant.tenantId()))
+        .isTrue();
+    verify(chargeTransport, org.mockito.Mockito.never()).submit(any());
+  }
+
+  @Test
+  void annualRenewalRevalidatesAuthorizationForThePersistedPeriod() {
+    when(identities.findVerifiedIdentity(any())).thenReturn(Optional.empty());
+    when(annualAuthorization.isAuthorizedForPeriod(any(), any(), any(), any())).thenReturn(true);
+    when(chargeTransport.submit(any()))
+        .thenReturn(
+            new DunningChargeTransport.TransportResult(
+                DunningChargeTransport.Outcome.ACCEPTED,
+                "synthetic",
+                "synthetic-account",
+                "annual-acceptance",
+                null));
+    Tenant tenant = createTenant("annual-renewal-period-authorization");
+    Instant paidThrough = NOW.minusSeconds(1);
+    UUID subscriptionId = paidSubscription(tenant.tenantId(), paidThrough, "ANNUAL");
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+
+    assertThat(dunningWorker.processBatch()).isEqualTo(1);
+
+    org.mockito.Mockito.verify(annualAuthorization)
+        .isAuthorizedForPeriod(tenant.tenantId(), subscriptionId, paidThrough, NOW);
+    verify(chargeAuthorization, org.mockito.Mockito.never())
+        .isAuthorized(any(), any(), any(), any());
+    verify(chargeTransport).submit(any());
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state = 'ACCEPTED' AND ever_started AND technical_attempts = 1 FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND logical_sequence = 0",
+                Boolean.class,
+                tenant.tenantId()))
+        .isTrue();
   }
 
   @Test
@@ -537,7 +694,11 @@ class SubscriptionTrialIT {
               sendStarted.countDown();
               assertThat(releaseSend.await(10, TimeUnit.SECONDS)).isTrue();
               return new DunningChargeTransport.TransportResult(
-                  DunningChargeTransport.Outcome.ACCEPTED, "synthetic", "one-acceptance", null);
+                  DunningChargeTransport.Outcome.ACCEPTED,
+                  "synthetic",
+                  "synthetic-account",
+                  "one-acceptance",
+                  null);
             });
     Tenant tenant = createTenant("dunning-concurrent-claim");
     paidSubscription(tenant.tenantId(), NOW.minusSeconds(1));
@@ -578,6 +739,7 @@ class SubscriptionTrialIT {
               return new DunningChargeTransport.TransportResult(
                   DunningChargeTransport.Outcome.ACCEPTED,
                   "synthetic",
+                  "synthetic-account",
                   "late-accepted-reference",
                   null);
             });
@@ -634,6 +796,7 @@ class SubscriptionTrialIT {
               return new DunningChargeTransport.TransportResult(
                   DunningChargeTransport.Outcome.ACCEPTED,
                   "synthetic",
+                  "synthetic-account",
                   "accepted-after-suspension",
                   null);
             });
@@ -728,6 +891,69 @@ class SubscriptionTrialIT {
             jdbc.queryForObject(
                 "SELECT count(*) FROM agendamento.audit_event "
                     + "WHERE tenant_id = ? AND action = 'SUBSCRIPTION_TRIAL_EXPIRED'",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void dunningEvidenceUsesImmutableAttemptTermsAfterCheckoutContractChanges() {
+    when(identities.findVerifiedIdentity(any())).thenReturn(Optional.empty());
+    when(chargeAuthorization.isAuthorized(any(), any(), any(), any())).thenReturn(true);
+    when(chargeTransport.submit(any()))
+        .thenReturn(
+            new DunningChargeTransport.TransportResult(
+                DunningChargeTransport.Outcome.ACCEPTED,
+                "synthetic",
+                "synthetic-account",
+                "immutable-attempt-reference",
+                null));
+    Tenant tenant = createTenant("dunning-immutable-attempt-terms");
+    UUID subscriptionId = paidSubscription(tenant.tenantId(), NOW.minusSeconds(1));
+
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+    assertThat(dunningWorker.processBatch()).isEqualTo(1);
+    UUID attemptId = attemptId(tenant.tenantId(), 0);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT contract_amount_minor_units = 100 AND contract_currency = 'XTS' AND contract_terms_version = 'synthetic-terms-v1' AND contract_offer_version = 'synthetic-offer-v1' FROM agendamento.billing_dunning_attempt WHERE attempt_id = ?",
+                Boolean.class,
+                attemptId))
+        .isTrue();
+
+    jdbc.update(
+        "UPDATE agendamento.billing_subscription_contract SET amount_minor_units = 250, terms_version = 'synthetic-terms-v2', offer_version = 'synthetic-offer-v2', recorded_at = ? WHERE tenant_id = ? AND subscription_id = ?",
+        java.sql.Timestamp.from(NOW.plusSeconds(1)),
+        tenant.tenantId(),
+        subscriptionId);
+    billingRepository.recordAuthenticatedEvent(
+        new com.appagendamento.subscriptions.api.AuthenticatedPaymentEvent(
+            "synthetic",
+            "synthetic-account",
+            "immutable-attempt-payment-event",
+            "immutable-attempt-reference",
+            1,
+            "CONFIRMED",
+            100,
+            "XTS",
+            NOW.plusSeconds(2),
+            NOW.plus(Duration.ofDays(30))));
+
+    assertThat(status(tenant.tenantId())).isEqualTo("ACTIVE:3");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state FROM agendamento.billing_dunning_attempt WHERE attempt_id = ?",
+                String.class,
+                attemptId))
+        .isEqualTo("CONFIRMED");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT disposition FROM agendamento.billing_event_inbox WHERE provider_event_id = 'immutable-attempt-payment-event'",
+                String.class))
+        .isEqualTo("APPLIED");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.subscription_history WHERE tenant_id = ? AND event_type = 'PAYMENT_CONFIRMED'",
                 Integer.class,
                 tenant.tenantId()))
         .isEqualTo(1);
@@ -890,12 +1116,41 @@ class SubscriptionTrialIT {
   }
 
   private UUID paidSubscription(UUID tenantId, Instant paidThroughAt) {
+    return paidSubscription(tenantId, paidThroughAt, "MONTHLY");
+  }
+
+  private UUID paidSubscription(UUID tenantId, Instant paidThroughAt, String planCode) {
     UUID id = UUID.randomUUID();
     jdbc.update(
-        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'MONTHLY', ?, 1)",
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', ?, ?, 1)",
         id,
         tenantId,
+        planCode,
         java.sql.Timestamp.from(paidThroughAt));
+    UUID sourceOperationId = UUID.randomUUID();
+    jdbc.update(
+        """
+        INSERT INTO agendamento.billing_checkout_operation
+          (operation_id, tenant_id, plan_code, amount_minor_units, currency, terms_version,
+           offer_version, expected_subscription_version, provider_code, provider_account_id,
+           provider_reference, state)
+        VALUES (?, ?, ?, 100, 'XTS', 'synthetic-terms-v1', 'synthetic-offer-v1', 0,
+                'synthetic', 'synthetic-account', ?, 'CONFIRMED')
+        """,
+        sourceOperationId,
+        tenantId,
+        planCode,
+        "fixture-ref-" + sourceOperationId);
+    jdbc.update(
+        """
+        INSERT INTO agendamento.billing_subscription_contract
+          (subscription_id, tenant_id, source_operation_id, amount_minor_units, currency,
+           terms_version, offer_version)
+        VALUES (?, ?, ?, 100, 'XTS', 'synthetic-terms-v1', 'synthetic-offer-v1')
+        """,
+        id,
+        tenantId,
+        sourceOperationId);
     return id;
   }
 

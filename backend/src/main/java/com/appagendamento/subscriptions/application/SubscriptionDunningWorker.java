@@ -74,6 +74,11 @@ public class SubscriptionDunningWorker {
 
   private int processAvailableBatch() {
     int completed = 0;
+    for (var reference : dunning.pendingPaymentEvidence(100)) {
+      dunning.reconcilePaymentEvidence(
+          reference.providerCode(), reference.accountId(), reference.reference());
+    }
+    dunning.materializeAnnualRenewalNotices(clock.instant(), batchSize);
     for (int index = 0; index < batchSize; index++) {
       DunningChargeTransport transport = transports.getIfAvailable();
       DunningAttemptReconciler reconciler = reconcilers.getIfAvailable();
@@ -152,7 +157,11 @@ public class SubscriptionDunningWorker {
         claim.externalIdempotencyKey(),
         claim.logicalSequence(),
         claim.planCode(),
-        claim.scheduledAt());
+        claim.scheduledAt(),
+        claim.amountMinorUnits(),
+        claim.currency(),
+        claim.termsVersion(),
+        claim.offerVersion());
   }
 
   private static DunningChargeTransport.TransportResult unknown(String code) {

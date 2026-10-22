@@ -1,5 +1,6 @@
 package com.appagendamento.subscriptions.application;
 
+import com.appagendamento.subscriptions.domain.AnnualRenewalNoticeView;
 import com.appagendamento.subscriptions.domain.DunningAttemptClaim;
 import com.appagendamento.subscriptions.domain.DunningAttemptView;
 import com.appagendamento.subscriptions.domain.Subscription;
@@ -23,6 +24,14 @@ public interface SubscriptionDunningRepository {
 
   List<DunningAttemptView> listAttempts(UUID tenantId);
 
+  List<AnnualRenewalNoticeView> listAnnualRenewalNotices(UUID tenantId);
+
+  int materializeAnnualRenewalNotices(Instant asOf, int limit);
+
+  List<ProviderReference> pendingPaymentEvidence(int limit);
+
+  int reconcilePaymentEvidence(String providerCode, String accountId, String reference);
+
   DunningMetricsSnapshot metricsSnapshot(Instant asOf);
 
   Optional<DunningAttemptClaim> claimNextAttempt(Duration lease, boolean reconcilerAvailable);
@@ -42,4 +51,6 @@ public interface SubscriptionDunningRepository {
       com.appagendamento.subscriptions.application.DunningChargeTransport.TransportResult result,
       Duration retryDelay,
       int maxTechnicalAttempts);
+
+  record ProviderReference(String providerCode, String accountId, String reference) {}
 }

@@ -391,6 +391,10 @@ Falha transitória somente admite retry técnico da mesma tentativa se a respost
 - Ausência de autorização não deve produzir cobrança silenciosa.
 - A expiração segue política comercial documentada e oferece migração para mensal quando aplicável.
 
+**Contrato incremental AGD-043:** a renovação mensal reutiliza o ciclo persistido de AGD-042 e só pode iniciar tentativa com autorização recorrente mensal válida revalidada no servidor. O plano anual não reutiliza essa autorização; requer autorização própria para a renovação correspondente. O aviso anual é deduplicado pelo tenant/assinatura/período e uma alteração do período torna obsoleta a intenção anterior. A confirmação que reativa a assinatura deve ser evidência autenticada do provedor; redirecionamento, aceite do transporte ou retry não confirmam pagamento.
+
+**Limite ainda não definido pela especificação:** a duração/âncora comercial do novo período e o tratamento de pagamentos antecipados/atrasados não são calculados pela aplicação neste incremento. `paidThroughAt` de evento autenticado permanece um dado fornecido pela autoridade financeira e não uma regra local de calendário; produto/contrato do provedor deve definir sua semântica antes de habilitar operações reais. O instante técnico do aviso em sete dias é `paidThroughAt - 168h`; canal, destinatário, template, política de atraso e fornecedor continuam pendentes.
+
 ## 13. Exportações e relatórios
 
 ### Conteúdo

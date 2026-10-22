@@ -1,0 +1,23 @@
+# ADR-0028 — Renovação integrada ao ciclo de inadimplência
+
+- **Status:** Proposta técnica para AGD-043; decisões comerciais explicitamente pendentes.
+- **Contexto:** AGD-042 já persiste ciclos, tentativas lógicas D0/D+3/D+6, leases/fencing, retry técnico e resultados incertos. AGD-041 correlaciona inbox financeira somente a checkout. Uma confirmação de pagamento da tentativa periódica precisa liquidar o ciclo sem introduzir um segundo ledger de cobrança.
+
+## Decisão técnica
+
+1. O ciclo Dunning/attempt é a única identidade lógica de uma renovação mensal. Retry técnico usa o mesmo attempt e external idempotency key. Eventos autenticados associam-se exclusivamente ao checkout operation ou ao Dunning attempt; a inbox não pode apontar para ambos.
+2. Correlação exige provedor, conta, referência, tenant/attempt persistidos e termos financeiros server-side. Cada tentativa lógica guarda seu próprio snapshot imutável de valor, moeda e versões de oferta/termos; a tabela de contrato corrente do subscription não é usada para reavaliar uma tentativa já criada. Evento sem correlação permanece pendente e não altera assinatura. A chave de serialização por provedor/conta/referência é compartilhada pelo recebimento do evento e pela persistência da referência do transporte; reconciliação pendente deve convergir após restart.
+3. Pagamento que liquida attempt adquire o lock tenant-first usado pelo ciclo, reserva e suspensão, então relê assinatura/ciclo/attempt em `READ_COMMITTED`. Fecha o ciclo, preserva evidência, reativa somente se o período autenticado é mais recente e cancela somente tentativas que ainda não iniciaram. História, auditoria, estado, receipt/inbox e outbox compartilham a transação.
+4. Mandato mensal e autorização anual são portas separadas. A segunda é por assinatura/período e não é presumida por mandato mensal. Implementações padrão são indisponíveis; testes usam adapter sintético explicitamente restrito.
+5. Avisos anuais têm identidade por tenant, subscription e `paidThroughAt` corrente, com instante técnico `paidThroughAt - 168h`. Intenção em tabela específica não reutiliza o pipeline de appointment, cujo destinatário/contrato é incompatível. Mudança da versão/período torna a intenção antiga obsoleta. A intenção não representa envio/entrega e não habilita provider.
+6. A aplicação não calcula duração nem âncora de período: apenas consome `paidThroughAt` autenticado. Período mensal/anual, pagamento antecipado/atrasado, canal/destinatário do aviso e comportamento após período mais recente continuam decisões comerciais abertas em `OPEN-QUESTIONS.md`.
+7. Claims, autorização de envio e reconciliação de evidência leem os termos da linha do attempt. Uma mudança posterior do contrato corrente não pode transformar um evento autêntico já vinculado a tentativa anterior em divergência de valor/moeda.
+8. `billing_event_inbox` mantém `SELECT`/`INSERT` runtime e somente `UPDATE` por coluna de vínculo/correlação (`tenant_id`, `operation_id`, `dunning_attempt_id`, `disposition`). V37 revoga o `UPDATE` de tabela concedido em V32, que não era restringido por um grant adicional de colunas.
+
+## Consequências e limites
+
+- V37 acrescenta vínculo inbox→attempt, snapshot contratual por tentativa, intents de aviso e grants mínimos; V1–V36 não são alteradas. O preflight falha explicitamente quando uma tentativa legada já iniciada não pode receber termos comprovadamente anteriores ao ciclo. O upgrade não inventa termos nem altera silenciosamente tentativas; requer reconciliação operacional baseada em registros autoritativos. Um legado sem snapshot contratual não é elegível para cobrança automática.
+- Sem oferta, transport, mandato mensal ou autorização anual validados, o início da tentativa falha fechado. Sem notificações aprovadas, nenhuma intenção é marcada como enviada.
+- `paidThroughAt - 168h` é decisão técnica de instante para agendar a intenção, não aprovação de canal, entrega, retenção ou calendário comercial.
+- Resultado `OUTCOME_UNKNOWN` não autoriza outro attempt/ciclo financeiro. Sem consulta/idempotência suportada, reconciliação operacional segue necessária.
+- Nenhuma evidência sintética comprova integração financeira/comunicação real ou prontidão de produção.

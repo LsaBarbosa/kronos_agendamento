@@ -124,6 +124,8 @@ Os relacionamentos com provedores externos usam referências opacas. Payload bru
 - Transições financeiras dependem de fato autenticado ou consulta autoritativa ao provedor.
 - Evento do provedor é processado no máximo uma vez do ponto de vista lógico.
 
+AGD-043 reutiliza o ciclo/attempt de inadimplência da assinatura; pagamento confirmado por evento autenticado correlacionado ao attempt atualiza `ACTIVE`, encerra o ciclo e cancela apenas tentativas ainda não iniciadas na mesma transação. Cada attempt conserva snapshot imutável de valor, moeda e versões de oferta/termos; mudança posterior do contrato corrente não reinterpreta evento ou retry já associado ao attempt. A referência de pagamento, provider/account e termos devem coincidir com dados persistidos no servidor. `paidThroughAt` é recebido da autoridade financeira; o domínio não deduz a duração de mês/ano nem reinterpreta o instante por timezone local. Período mais antigo não substitui um período persistido mais recente. Mandato mensal e autorização anual por período são portas distintas, ambas fail-closed sem configuração confiável. A intenção de aviso anual tem identidade por tenant, assinatura e período; mudança do período/versão a obsoleta, sem alegar envio.
+
 ### 4.8 Exportação
 
 - Critérios e snapshot não mudam depois do início.

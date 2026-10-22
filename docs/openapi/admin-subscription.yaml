@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: App Agendamento — assinatura administrativa (AGD-040/041)
+  title: App Agendamento — assinatura administrativa (AGD-040–043)
   version: 1.0.0
   description: >-
     Leitura tenant-scoped de estado comercial e ofertas fornecidas pelo servidor.
@@ -36,6 +36,8 @@ paths:
                     trialEligibilityPending,
                     commercialEligibility,
                     dunningAttempts,
+                    annualRenewalNotices,
+                    annualRenewalAuthorized,
                   ]
                 properties:
                   tenantContextId:
@@ -66,6 +68,17 @@ paths:
                       transporte não confirmam pagamento; resultado incerto bloqueia nova
                       cobrança lógica até reconciliação.
                     items: { $ref: "#/components/schemas/DunningAttempt" }
+                  annualRenewalNotices:
+                    type: array
+                    description: >-
+                      Intenções deduplicadas de aviso anual; READY significa apenas vencimento
+                      técnico alcançado, sem evidência de envio ou entrega.
+                    items: { $ref: "#/components/schemas/AnnualRenewalNotice" }
+                  annualRenewalAuthorized:
+                    type: boolean
+                    description: >-
+                      Consulta local à autorização explícita do período vigente. Falso inclui
+                      ausência de fonte confiável e não inicia cobrança.
         "401": { description: Sessão ausente/expirada }
         "403": { description: Associação administrativa inválida ou revogada }
   /api/v1/admin/subscription/checkout:
@@ -256,6 +269,19 @@ components:
                 CANCELLED,
               ],
           }
+    AnnualRenewalNotice:
+      type: object
+      additionalProperties: false
+      required:
+        [noticeId, subscriptionVersion, paidThroughAt, scheduledAt, state, obsoleteReason]
+      properties:
+        noticeId: { type: string, format: uuid }
+        subscriptionVersion: { type: integer, minimum: 1 }
+        paidThroughAt: { type: string, format: date-time }
+        scheduledAt: { type: string, format: date-time }
+        state: { type: string, enum: [SCHEDULED, READY, OBSOLETE] }
+        obsoleteReason:
+          { type: [string, "null"], enum: [PERIOD_CHANGED, SUBSCRIPTION_INELIGIBLE, null] }
     Plan:
       type: object
       required:
