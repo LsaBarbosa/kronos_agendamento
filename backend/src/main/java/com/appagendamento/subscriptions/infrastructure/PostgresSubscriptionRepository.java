@@ -89,7 +89,7 @@ public class PostgresSubscriptionRepository implements SubscriptionRepository {
         .query(
             """
             SELECT subscription_id, tenant_id, status, trial_started_at, trial_ends_at,
-                   plan_code, paid_through_at, version
+                   plan_code, paid_through_at, grace_ends_at, version
             FROM agendamento.subscription WHERE tenant_id = ?
             """,
             MAPPER,
@@ -139,7 +139,7 @@ public class PostgresSubscriptionRepository implements SubscriptionRepository {
     return jdbc.query(
         """
         SELECT subscription_id, tenant_id, status, trial_started_at, trial_ends_at,
-               plan_code, paid_through_at, version
+               plan_code, paid_through_at, grace_ends_at, version
         FROM agendamento.subscription
         WHERE status = 'TRIALING' AND trial_ends_at <= ?
         ORDER BY trial_ends_at, tenant_id
@@ -188,6 +188,9 @@ public class PostgresSubscriptionRepository implements SubscriptionRepository {
         row.getTimestamp("paid_through_at") == null
             ? null
             : row.getTimestamp("paid_through_at").toInstant(),
+        row.getTimestamp("grace_ends_at") == null
+            ? null
+            : row.getTimestamp("grace_ends_at").toInstant(),
         row.getLong("version"));
   }
 }

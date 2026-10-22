@@ -12,11 +12,12 @@ type Overview = {
     tenantContextId: string;
     subscription: {
         subscriptionId: string;
-        status: 'TRIALING' | 'SUSPENDED' | 'ACTIVE';
+        status: 'TRIALING' | 'SUSPENDED' | 'ACTIVE' | 'PAST_DUE';
         trialStartedAt: string | null;
         trialEndsAt: string | null;
         planCode: 'MONTHLY' | 'ANNUAL' | null;
         paidThroughAt: string | null;
+        graceEndsAt: string | null;
         version: number;
     } | null;
     plans: Plan[];
@@ -30,6 +31,11 @@ type Overview = {
     checkoutAvailable: boolean;
     trialEligibilityPending: boolean;
     commercialEligibility: 'VERIFICATION_UNAVAILABLE' | 'VERIFIED';
+    dunningAttempts?: {
+        logicalSequence: 0 | 3 | 6;
+        scheduledAt: string;
+        state: string;
+    }[];
 };
 
 type CheckoutIntent = {
@@ -623,7 +629,11 @@ export function AdminSubscriptionPanel({
                             ? 'Trial ativo'
                             : overview.subscription.status === 'ACTIVE'
                               ? 'Assinatura ativa'
-                              : 'Trial encerrado'}
+                              : overview.subscription.status === 'PAST_DUE'
+                                ? 'Pagamento pendente — em tolerância'
+                                : overview.subscription.planCode
+                                  ? 'Assinatura suspensa'
+                                  : 'Trial encerrado'}
                         .
                     </p>
                     {overview.subscription.trialStartedAt && (
@@ -656,6 +666,38 @@ export function AdminSubscriptionPanel({
                             UTC
                         </p>
                     )}
+                    {overview.subscription.graceEndsAt && (
+                        <p>
+                            Fim da tolerância:{' '}
+                            {new Date(
+                                overview.subscription.graceEndsAt,
+                            ).toLocaleString('pt-BR', { timeZone: 'UTC' })}{' '}
+                            UTC
+                        </p>
+                    )}
+                </section>
+            )}
+            {!!overview?.dunningAttempts?.length && (
+                <section aria-label="Tentativas lógicas de cobrança">
+                    <h3>Tentativas agendadas</h3>
+                    <p>
+                        São agendamentos lógicos; não significam que houve
+                        cobrança, aceite ou pagamento.
+                    </p>
+                    <ol>
+                        {overview.dunningAttempts.map((attempt) => (
+                            <li
+                                key={`${attempt.logicalSequence}:${attempt.scheduledAt}`}
+                            >
+                                D+{attempt.logicalSequence}:{' '}
+                                {new Date(attempt.scheduledAt).toLocaleString(
+                                    'pt-BR',
+                                    { timeZone: 'UTC' },
+                                )}{' '}
+                                UTC — {attempt.state}
+                            </li>
+                        ))}
+                    </ol>
                 </section>
             )}
             {overview && (

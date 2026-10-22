@@ -212,6 +212,151 @@ class SubscriptionTrialIT {
   }
 
   @Test
+  void overdueSubscriptionCreatesStableDunningCycleAndSuspendsAtProposedBoundary() {
+    when(identities.findVerifiedIdentity(any())).thenReturn(Optional.empty());
+    Tenant tenant = createTenant("dunning-cycle");
+    UUID subscriptionId = paidSubscription(tenant.tenantId(), NOW.minusSeconds(1));
+
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+    assertThat(status(tenant.tenantId())).isEqualTo("PAST_DUE:2");
+    Instant graceEnd = NOW.minusSeconds(1).plusSeconds(7 * 24 * 60 * 60L);
+    java.sql.Timestamp persistedGraceEnd =
+        jdbc.queryForObject(
+            "SELECT grace_ends_at FROM agendamento.subscription WHERE subscription_id = ?",
+            java.sql.Timestamp.class,
+            subscriptionId);
+    assertThat(persistedGraceEnd.toInstant()).isEqualTo(graceEnd);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT array_agg(logical_sequence ORDER BY logical_sequence)::text FROM agendamento.billing_dunning_attempt a JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id) WHERE c.tenant_id = ?",
+                String.class,
+                tenant.tenantId()))
+        .isEqualTo("{0,3,6}");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT bool_and(state = 'SCHEDULED' AND technical_attempts = 0 AND claim_token IS NULL) FROM agendamento.billing_dunning_attempt WHERE tenant_id = ?",
+                Boolean.class,
+                tenant.tenantId()))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.subscription_history WHERE tenant_id = ? AND event_type = 'PAYMENT_PAST_DUE'",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.audit_event WHERE tenant_id = ? AND action = 'SUBSCRIPTION_PAYMENT_PAST_DUE'",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.outbox_event WHERE tenant_id = ? AND event_type = 'SubscriptionPastDue'",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(1);
+
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.billing_dunning_attempt WHERE tenant_id = ?",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(3);
+
+    when(clock.instant()).thenReturn(graceEnd);
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isFalse();
+    assertThat(status(tenant.tenantId())).isEqualTo("SUSPENDED:3");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.subscription_history WHERE tenant_id = ? AND event_type = 'PAYMENT_SUSPENDED'",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND state = 'CANCELLED'",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(3);
+  }
+
+  @Test
+  void concurrentBillingWorkersMaterializeOneCycleAndStableLogicalAttempts() throws Exception {
+    when(identities.findVerifiedIdentity(any())).thenReturn(Optional.empty());
+    Tenant tenant = createTenant("dunning-worker-race");
+    paidSubscription(tenant.tenantId(), NOW.minusSeconds(1));
+    CountDownLatch ready = new CountDownLatch(2);
+    CountDownLatch start = new CountDownLatch(1);
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var first = executor.submit(() -> materializeBillingAfter(start, ready));
+      var second = executor.submit(() -> materializeBillingAfter(start, ready));
+      assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+      start.countDown();
+      assertThat(first.get(15, TimeUnit.SECONDS) + second.get(15, TimeUnit.SECONDS)).isEqualTo(1);
+    }
+
+    assertThat(status(tenant.tenantId())).isEqualTo("PAST_DUE:2");
+    assertThat(count("billing_dunning_cycle", tenant.tenantId())).isEqualTo(1);
+    assertThat(count("billing_dunning_attempt", tenant.tenantId())).isEqualTo(3);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT array_agg(logical_sequence ORDER BY logical_sequence)::text FROM agendamento.billing_dunning_attempt a JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id) WHERE c.tenant_id = ?",
+                String.class,
+                tenant.tenantId()))
+        .isEqualTo("{0,3,6}");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.subscription_history WHERE tenant_id = ? AND event_type = 'PAYMENT_PAST_DUE'",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.outbox_event WHERE tenant_id = ? AND event_type = 'SubscriptionPastDue'",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void dunningAuditFailureRollsBackStatusCycleHistoryAndOutbox() {
+    when(identities.findVerifiedIdentity(any())).thenReturn(Optional.empty());
+    Tenant tenant = createTenant("dunning-rollback");
+    paidSubscription(tenant.tenantId(), NOW.minusSeconds(1));
+    doAnswer(
+            invocation -> {
+              AuditEvent event = invocation.getArgument(0);
+              if (event.action().equals("SUBSCRIPTION_PAYMENT_PAST_DUE")) {
+                throw new IllegalStateException("controlled dunning audit failure");
+              }
+              return null;
+            })
+        .when(audit)
+        .record(any(AuditEvent.class));
+
+    assertThatThrownBy(() -> lifecycle.allowsNewPublicAppointments(tenant.tenantId()))
+        .isInstanceOf(org.springframework.dao.InvalidDataAccessApiUsageException.class)
+        .hasRootCauseMessage("controlled dunning audit failure");
+    assertThat(status(tenant.tenantId())).isEqualTo("ACTIVE:1");
+    assertThat(count("billing_dunning_cycle", tenant.tenantId())).isZero();
+    assertThat(count("billing_dunning_attempt", tenant.tenantId())).isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.subscription_history WHERE tenant_id = ? AND event_type = 'PAYMENT_PAST_DUE'",
+                Integer.class,
+                tenant.tenantId()))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.outbox_event WHERE tenant_id = ? AND event_type = 'SubscriptionPastDue'",
+                Integer.class,
+                tenant.tenantId()))
+        .isZero();
+  }
+
+  @Test
   void concurrentExpiryMaterializesOneTransitionAndOneAudit() throws Exception {
     when(identities.findVerifiedIdentity(any()))
         .thenReturn(Optional.of(identity("trial-worker-race-key-for-test-0001")));
@@ -373,6 +518,13 @@ class SubscriptionTrialIT {
     return lifecycle.materializeExpired(tenantId);
   }
 
+  private int materializeBillingAfter(CountDownLatch start, CountDownLatch ready) throws Exception {
+    ready.countDown();
+    if (!start.await(10, TimeUnit.SECONDS))
+      throw new IllegalStateException("Billing worker race latch timed out");
+    return lifecycle.materializeBillingBatch(10);
+  }
+
   private Instant trialEndsAt(UUID tenantId) {
     return jdbc.queryForObject(
         "SELECT trial_ends_at FROM agendamento.subscription WHERE tenant_id = ?",
@@ -390,6 +542,23 @@ class SubscriptionTrialIT {
   private Tenant createTenant(String prefix) {
     return createTenant.execute(
         "Trial " + prefix, prefix + "-" + UUID.randomUUID().toString().substring(0, 8), "UTC");
+  }
+
+  private UUID paidSubscription(UUID tenantId, Instant paidThroughAt) {
+    UUID id = UUID.randomUUID();
+    jdbc.update(
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'MONTHLY', ?, 1)",
+        id,
+        tenantId,
+        java.sql.Timestamp.from(paidThroughAt));
+    return id;
+  }
+
+  private int count(String table, UUID tenantId) {
+    return jdbc.queryForObject(
+        "SELECT count(*) FROM agendamento." + table + " WHERE tenant_id = ?",
+        Integer.class,
+        tenantId);
   }
 
   private static VerifiedCommercialIdentity identity(String value) {

@@ -1,5 +1,6 @@
 package com.appagendamento.subscriptions.infrastructure;
 
+import com.appagendamento.appointments.api.TenantAgendaLock;
 import com.appagendamento.audit.api.AuditCorrelationId;
 import com.appagendamento.audit.api.AuditEvent;
 import com.appagendamento.audit.api.AuditEventRecorder;
@@ -8,6 +9,7 @@ import com.appagendamento.outbox.api.OutboxEventRecorder;
 import com.appagendamento.subscriptions.api.AuthenticatedPaymentEvent;
 import com.appagendamento.subscriptions.api.HostedCheckoutProvider.CheckoutSession;
 import com.appagendamento.subscriptions.application.BillingRepository;
+import com.appagendamento.subscriptions.application.SubscriptionDunningRepository;
 import com.appagendamento.subscriptions.domain.CheckoutOperation;
 import com.appagendamento.subscriptions.domain.PlanCode;
 import java.sql.ResultSet;
@@ -31,16 +33,22 @@ public class PostgresBillingRepository implements BillingRepository {
   private final OutboxEventRecorder outbox;
   private final AuditEventRecorder audit;
   private final AuditCorrelationId correlation;
+  private final TenantAgendaLock agendaLock;
+  private final SubscriptionDunningRepository dunning;
 
   public PostgresBillingRepository(
       JdbcTemplate jdbc,
       OutboxEventRecorder outbox,
       AuditEventRecorder audit,
-      AuditCorrelationId correlation) {
+      AuditCorrelationId correlation,
+      TenantAgendaLock agendaLock,
+      SubscriptionDunningRepository dunning) {
     this.jdbc = jdbc;
     this.outbox = outbox;
     this.audit = audit;
     this.correlation = correlation;
+    this.agendaLock = agendaLock;
+    this.dunning = dunning;
   }
 
   @Override
@@ -364,6 +372,7 @@ public class PostgresBillingRepository implements BillingRepository {
   }
 
   private void activateSubscription(CheckoutOperation operation, InboxEvent event) {
+    agendaLock.acquire(operation.tenantId());
     List<SubscriptionState> current =
         jdbc.query(
             "SELECT subscription_id, status, version FROM agendamento.subscription WHERE tenant_id = ? FOR UPDATE",
@@ -411,8 +420,10 @@ public class PostgresBillingRepository implements BillingRepository {
           jdbc.update(
               """
               UPDATE agendamento.subscription
-              SET status = 'ACTIVE', plan_code = ?, paid_through_at = ?, version = version + 1
-              WHERE tenant_id = ? AND subscription_id = ? AND version = ? AND status IN ('TRIALING', 'SUSPENDED')
+              SET status = 'ACTIVE', plan_code = ?, paid_through_at = ?, grace_ends_at = NULL,
+                  version = version + 1
+              WHERE tenant_id = ? AND subscription_id = ? AND version = ?
+                AND status IN ('TRIALING', 'PAST_DUE', 'SUSPENDED')
               """,
               operation.planCode().name(),
               Timestamp.from(event.paidThroughAt()),
@@ -420,6 +431,9 @@ public class PostgresBillingRepository implements BillingRepository {
               subscriptionId,
               state.version());
       if (changed != 1) throw new IllegalStateException("CAS da assinatura foi perdido");
+      if (state.status().equals("PAST_DUE") || state.status().equals("SUSPENDED")) {
+        dunning.closeCyclesForPayment(operation.tenantId(), subscriptionId, event.occurredAt());
+      }
     }
     jdbc.update(
         """

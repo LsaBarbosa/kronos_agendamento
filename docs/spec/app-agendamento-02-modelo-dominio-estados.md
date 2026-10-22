@@ -216,6 +216,8 @@ stateDiagram-v2
 
 `PAST_DUE` é preferível a representar tolerância como booleano, pois torna políticas e métricas explícitas.
 
+Para AGD-042, `grace_ends_at` é persistido como vencimento mais sete dias; a atualização a `PAST_DUE` e a suspensão posterior usam CAS sob o lock tenant-scoped também usado por reservas. O instante exato de suspensão na igualdade e a política de recuperação dos retries vencidos durante downtime continuam pendentes em `OPEN-QUESTIONS.md`. O valor de `grace_ends_at` nunca altera o fim de trial.
+
 Para AGD-040, o trial dura 14 dias corridos em instantes UTC (336 horas): é válido somente enquanto `now < trialEndsAt` e expira na igualdade (`now >= trialEndsAt`), transitando para `SUSPENDED`. A tolerância de sete dias pertence exclusivamente a `PAST_DUE`; o worker pode materializar a transição por CAS, mas o gate de novas reservas não aguarda o worker. A fonte de identidade comercial verificável segue pendente; sem fonte configurada ou resultado conclusivo não existe trial ativo.
 
 ## 8. Máquina de estados de notificação

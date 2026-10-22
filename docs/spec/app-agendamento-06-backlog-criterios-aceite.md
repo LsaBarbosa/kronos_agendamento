@@ -369,6 +369,8 @@ Critérios de aceite:
 - Sem confirmação até o fim, assinatura passa a `SUSPENDED` por CAS.
 - Link público não aceita nova reserva; dados e reservas existentes permanecem.
 
+O ciclo de inadimplência não acrescenta sete dias ao trial de AGD-040. A API administrativa apresenta vencimento, início/fim da tolerância e tentativas lógicas minimizadas; agendamento não equivale a envio ou pagamento. Provider, oferta, preço/moeda, autorização de recorrência e homologação precisam de aprovação/configuração antes de qualquer operação externa. A igualdade no limite da tolerância e a recuperação de sequências vencidas durante indisponibilidade estão registradas como perguntas abertas e não são decisão deste critério.
+
 ### AGD-043 — Reativação e renovação
 
 **Prioridade:** P0 · **Tamanho:** M

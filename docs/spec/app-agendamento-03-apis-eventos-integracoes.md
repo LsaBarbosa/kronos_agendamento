@@ -635,6 +635,10 @@ Requisitos:
 
 Uma tentativa com efeito incerto não autoriza criar nova cobrança com outra identidade. Primeiro reconciliar a mesma cobrança lógica.
 
+AGD-042 materializa `ACTIVE → PAST_DUE` quando o instante de vencimento (`paid_through_at`) é alcançado, conserva o instante e persiste `grace_ends_at` sete dias depois. As tentativas lógicas são únicas por ciclo de vencimento e sequência; reexecução técnica conserva a identidade da mesma tentativa. `OUTCOME_UNKNOWN` não autoriza iniciar outra tentativa financeira. O significado de D+3/D+6 durante indisponibilidade e a igualdade exata do fim da tolerância seguem em `OPEN-QUESTIONS.md`; não se infere envio de uma linha `SCHEDULED`.
+
+`GET /api/v1/admin/subscription` também devolve estado, `paidThroughAt`, `graceEndsAt` e até 30 agendamentos lógicos do tenant autenticado, sem PII. A resposta é `no-store`. `PAST_DUE` mantém o uso permitido durante a tolerância; após a fronteira temporal aprovada, novas reservas públicas são negadas mesmo antes da materialização `SUSPENDED`. Nenhuma dessas regras amplia o prazo de trial de AGD-040. Sem provider e autorização recorrente aprovados/configurados, o transporte financeiro continua desabilitado.
+
 ## 12. Jobs agendados
 
 | Job | Frequência/acionamento | Proteção |

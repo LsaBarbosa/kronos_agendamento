@@ -15,16 +15,20 @@ import com.appagendamento.subscriptions.api.HostedCheckoutProvider.CheckoutSessi
 import com.appagendamento.subscriptions.application.AdmitPaymentWebhook;
 import com.appagendamento.subscriptions.application.BillingRepository;
 import com.appagendamento.subscriptions.application.StartSubscriptionCheckout;
+import com.appagendamento.subscriptions.application.SubscriptionTrialLifecycle;
 import com.appagendamento.subscriptions.domain.CheckoutOperation;
 import com.appagendamento.subscriptions.domain.PlanCode;
 import com.appagendamento.support.PostgresTestEnvironment;
 import com.appagendamento.tenant.application.CreateTenant;
 import com.appagendamento.tenant.domain.Tenant;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -45,9 +49,18 @@ class BillingWebhookIT {
   @Autowired private JdbcTemplate jdbc;
   @Autowired private AdmitPaymentWebhook webhook;
   @Autowired private StartSubscriptionCheckout startCheckout;
+  @Autowired private SubscriptionTrialLifecycle lifecycle;
   @MockitoBean private HostedCheckoutProvider checkoutProvider;
   @MockitoBean private BillingOfferCatalog offerCatalog;
   @MockitoBean private AdminAccessPolicy adminAccessPolicy;
+  @MockitoBean private Clock clock;
+
+  @BeforeEach
+  void configureClock() {
+    when(clock.instant()).thenReturn(NOW);
+    when(clock.getZone()).thenReturn(ZoneOffset.UTC);
+    when(clock.withZone(any())).thenReturn(clock);
+  }
 
   @DynamicPropertySource
   static void postgres(DynamicPropertyRegistry registry) {
@@ -220,6 +233,148 @@ class BillingWebhookIT {
     assertThat(historyCount(tenant.tenantId())).isEqualTo(1);
     assertThat(paymentAuditCount(tenant.tenantId())).isEqualTo(1);
     assertThat(outboxCount(tenant.tenantId())).isEqualTo(1);
+  }
+
+  @Test
+  void authenticatedPaymentClosesPastDueCycleAndCancelsUnstartedRetries() {
+    Tenant tenant = tenant("billing-past-due-recovery");
+    UUID subscriptionId = UUID.randomUUID();
+    jdbc.update(
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'MONTHLY', ?, 1)",
+        subscriptionId,
+        tenant.tenantId(),
+        java.sql.Timestamp.from(NOW.minusSeconds(60)));
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+    assertThat(status(tenant.tenantId())).isEqualTo("PAST_DUE:2");
+
+    CheckoutOperation operation = operation(tenant.tenantId());
+    billing.createCheckout(operation);
+    UUID claim =
+        billing.claimProviderCall(tenant.tenantId(), operation.operationId()).orElseThrow();
+    String reference = "past-due-payment-" + operation.operationId();
+    billing.markCheckoutReady(
+        tenant.tenantId(),
+        operation.operationId(),
+        claim,
+        PROVIDER,
+        ACCOUNT,
+        new CheckoutSession(reference, "https://checkout.example.invalid/session"));
+
+    assertThat(billing.recordAuthenticatedEvent(confirmed("past-due-paid", reference, 1, 1)))
+        .isTrue();
+    assertThat(status(tenant.tenantId())).isEqualTo("ACTIVE:3");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT grace_ends_at IS NULL FROM agendamento.subscription WHERE tenant_id = ?",
+                Boolean.class,
+                tenant.tenantId()))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state FROM agendamento.billing_dunning_cycle WHERE tenant_id = ?",
+                String.class,
+                tenant.tenantId()))
+        .isEqualTo("PAID");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND state = 'CANCELLED'",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(3);
+    assertThat(billing.recordAuthenticatedEvent(confirmed("past-due-paid", reference, 1, 1)))
+        .isFalse();
+    assertThat(historyCount(tenant.tenantId())).isEqualTo(1);
+    assertThat(paymentAuditCount(tenant.tenantId())).isEqualTo(1);
+    assertThat(outboxCount(tenant.tenantId())).isEqualTo(1);
+  }
+
+  @Test
+  void concurrentPaymentAndGraceSuspensionSerializeWithoutLeavingCycleOpen() throws Exception {
+    Tenant tenant = tenant("billing-payment-suspension-race");
+    UUID subscriptionId = UUID.randomUUID();
+    jdbc.update(
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'MONTHLY', ?, 1)",
+        subscriptionId,
+        tenant.tenantId(),
+        java.sql.Timestamp.from(NOW.minusSeconds(60)));
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+    assertThat(status(tenant.tenantId())).isEqualTo("PAST_DUE:2");
+    Instant graceEnd = NOW.minusSeconds(60).plusSeconds(7 * 24 * 60 * 60L);
+
+    CheckoutOperation operation = operation(tenant.tenantId());
+    billing.createCheckout(operation);
+    UUID claim =
+        billing.claimProviderCall(tenant.tenantId(), operation.operationId()).orElseThrow();
+    String reference = "suspension-race-" + operation.operationId();
+    billing.markCheckoutReady(
+        tenant.tenantId(),
+        operation.operationId(),
+        claim,
+        PROVIDER,
+        ACCOUNT,
+        new CheckoutSession(reference, "https://checkout.example.invalid/session"));
+    AuthenticatedPaymentEvent payment = confirmed("suspension-race-payment", reference, 1, 1);
+
+    when(clock.instant()).thenReturn(graceEnd);
+    CountDownLatch ready = new CountDownLatch(2);
+    CountDownLatch start = new CountDownLatch(1);
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var suspension =
+          executor.submit(
+              () -> {
+                ready.countDown();
+                if (!start.await(5, TimeUnit.SECONDS))
+                  throw new IllegalStateException("Largada da suspensão expirou");
+                return lifecycle.materializeBillingBatch(10);
+              });
+      var confirmation =
+          executor.submit(
+              () -> {
+                ready.countDown();
+                if (!start.await(5, TimeUnit.SECONDS))
+                  throw new IllegalStateException("Largada do pagamento expirou");
+                return billing.recordAuthenticatedEvent(payment);
+              });
+      assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+      start.countDown();
+      suspension.get(15, TimeUnit.SECONDS);
+      assertThat(confirmation.get(15, TimeUnit.SECONDS)).isTrue();
+    }
+
+    int suspensionEvents =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM agendamento.subscription_history WHERE tenant_id = ? AND event_type = 'PAYMENT_SUSPENDED'",
+            Integer.class,
+            tenant.tenantId());
+    assertThat(status(tenant.tenantId())).isEqualTo("ACTIVE:" + (suspensionEvents == 1 ? 4 : 3));
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state FROM agendamento.billing_dunning_cycle WHERE tenant_id = ?",
+                String.class,
+                tenant.tenantId()))
+        .isEqualTo("PAID");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND state = 'CANCELLED'",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(3);
+    assertThat(historyCount(tenant.tenantId())).isEqualTo(1);
+    assertThat(paymentAuditCount(tenant.tenantId())).isEqualTo(1);
+    assertThat(outboxCount(tenant.tenantId())).isEqualTo(1);
+    assertThat(suspensionEvents).isBetween(0, 1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.audit_event WHERE tenant_id = ? AND action = 'SUBSCRIPTION_PAYMENT_SUSPENDED'",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(suspensionEvents);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.outbox_event WHERE tenant_id = ? AND event_type = 'SubscriptionPaymentSuspended'",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(suspensionEvents);
   }
 
   @Test

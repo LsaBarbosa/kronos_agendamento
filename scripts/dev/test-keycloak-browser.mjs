@@ -3110,7 +3110,25 @@ try {
     if (checkoutRows !== 1 || paymentHistoryRows !== 1 || paymentAuditRows !== 1 || paymentOutboxRows !== 1 || currentSubscription?.status !== 'ACTIVE' || currentSubscription?.planCode !== 'MONTHLY') {
         throw new Error(`Confirmação de pagamento sintética não foi aplicada uma única vez: ${JSON.stringify({checkoutRows, paymentHistoryRows, paymentAuditRows, paymentOutboxRows, currentSubscription})}`);
     }
-    console.log('Browser E2E: CSRF pendente durante logout não enviou checkout e preservou a intenção; HTTP 408 substituindo resposta após commit manteve descarte bloqueado e retry idêntico; webhook inválido não alterou assinatura/inbox, evento autenticado duplicado/out-of-order manteve estado, histórico, auditoria e outbox únicos. Sem fornecedor ou cobrança real.');
+    queryPostgres(`UPDATE agendamento.subscription SET paid_through_at = clock_timestamp() - INTERVAL '6 days' WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}' AND status = 'ACTIVE'`, appEnvironment);
+    await command('Page.reload');
+    await waitForText('Pagamento pendente — em tolerância', evaluate);
+    const dunningDom = await evaluate(`({
+      section: document.querySelector('[aria-label="Estado do trial"]')?.innerText,
+      attempts: document.querySelector('[aria-label="Tentativas lógicas de cobrança"]')?.innerText,
+      warning: document.body.innerText.includes('não significam que houve cobrança, aceite ou pagamento')
+    })`);
+    const cycleRows = Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_dunning_cycle WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}' AND state = 'OPEN'`, appEnvironment));
+    const logicalAttempts = Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_dunning_attempt a JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id) WHERE c.tenant_id = '${authenticatedSession.tenantId}' AND c.subscription_id = '${activeTrial.subscriptionId}'`, appEnvironment));
+    if (!dunningDom.section?.includes('Fim da tolerância') || !dunningDom.attempts?.includes('D+0:') || !dunningDom.attempts?.includes('D+3:') || !dunningDom.attempts?.includes('D+6:') || !dunningDom.warning || cycleRows !== 1 || logicalAttempts !== 3) {
+        throw new Error(`Estado de inadimplência não persistiu/apareceu corretamente após reload: ${JSON.stringify({dunningDom, cycleRows, logicalAttempts})}`);
+    }
+    await command('Page.reload');
+    await waitForText('Pagamento pendente — em tolerância', evaluate);
+    if (Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_dunning_cycle WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}'`, appEnvironment)) !== 1 || Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_dunning_attempt a JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id) WHERE c.tenant_id = '${authenticatedSession.tenantId}' AND c.subscription_id = '${activeTrial.subscriptionId}'`, appEnvironment)) !== 3) {
+        throw new Error('Reload administrativo duplicou ciclo ou tentativas lógicas de inadimplência.');
+    }
+    console.log('Browser E2E sintético: após pagamento controlado, fixture administrativa materializa ACTIVE→PAST_DUE; painel mostra paidThrough/graceEnds e D0/D+3/D+6 após reload, com um ciclo e três identidades. Nenhum provider ou débito real foi chamado; tentativas visíveis não significam cobrança/aceite/pagamento. Checkout/webhook existentes preservam retry, dedupe e ordem.');
 
     await command('Network.clearBrowserCookies');
     await navigate('http://localhost:5173/admin', command, evaluate);

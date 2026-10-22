@@ -1,5 +1,16 @@
 # Evidências de validação — AGD-001
 
+## AGD-042 — validação local (22/10/2026)
+
+- Base local: branch `agd-042-inadimplencia-retries-suspensao`, derivada da main que contém merge AGD-041 `5be58533a84e16e07f598b6a5afc786c99bbd15b`; migrations publicadas V1–V34 preservadas, nova V35.
+- `TenantPersistenceIT`: `cd backend && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp -Dit.test=TenantPersistenceIT verify` — BUILD SUCCESS, 34 testes, PostgreSQL 16.13/Testcontainers; cobre instalação, upgrade V34→V35, Flyway validate/rerun e grants runtime mínimos.
+- Frontend: `cd frontend && PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH npm run format:check && npm run lint && npm test -- --run && npm run check` — passou; 23 testes Vitest, TypeScript e build.
+- `git diff --check`, `node --check scripts/dev/test-keycloak-browser.mjs` e `prettier --check docs/openapi/admin-subscription.yaml` passaram.
+- Primeira execução completa falhou apenas na expectativa rígida de versão na regressão pagamento–suspensão. Corrigido: ambos os resultados serializados válidos (`ACTIVE:v3` se pagamento preceder suspensão; `ACTIVE:v4` se suspensão efetivar primeiro) são conferidos com history/audit/outbox correspondentes. Também foi corrigido o pagamento de ciclo já suspenso para `PAID`.
+- Regressões dirigidas: `cd backend && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check -Dit.test=BillingWebhookIT,SubscriptionTrialIT,TenantPersistenceIT verify` — BUILD SUCCESS, 55 integrações PostgreSQL/Testcontainers. Suíte completa final: `cd backend && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify` — BUILD SUCCESS, 80 testes unitários/arquiteturais e 256 integrações PostgreSQL 16.13/Testcontainers.
+- Browser local não foi executado: o Compose local é compartilhado/persistente e não contém backend/frontend; não o reiniciar nem alterar. CI `oidc-browser-e2e` continuará sendo a prova de composição isolada. Nenhum provider/cobrança real foi acionado.
+- Intermitência histórica de remarcação AGD-022 permanece registrada com causa desconhecida; nenhum rerun é usado como explicação.
+
 ## AGD-041 — checkout e webhook financeiro (21/10/2026)
 
 ### Follow-up P2 do PR #23 — validação desta rodada

@@ -17,7 +17,7 @@ paths:
       security:
         - adminSession: []
       responses:
-        '200':
+        "200":
           description: Estado atual ou ausência de assinatura e ofertas sem preços inventados
           headers:
             Cache-Control:
@@ -26,26 +26,45 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [tenantContextId, subscription, plans, checkoutOffers, checkoutAvailable, trialEligibilityPending, commercialEligibility]
+                required:
+                  [
+                    tenantContextId,
+                    subscription,
+                    plans,
+                    checkoutOffers,
+                    checkoutAvailable,
+                    trialEligibilityPending,
+                    commercialEligibility,
+                    dunningAttempts,
+                  ]
                 properties:
-                  tenantContextId: { type: string, format: uuid, description: Contexto retornado pelo servidor; é apenas precondição e nunca autoridade. }
+                  tenantContextId:
+                    {
+                      type: string,
+                      format: uuid,
+                      description: Contexto retornado pelo servidor; é apenas precondição e nunca autoridade.,
+                    }
                   subscription:
                     oneOf:
-                      - $ref: '#/components/schemas/Subscription'
-                      - type: 'null'
+                      - $ref: "#/components/schemas/Subscription"
+                      - type: "null"
                   plans:
                     type: array
-                    items: { $ref: '#/components/schemas/Plan' }
+                    items: { $ref: "#/components/schemas/Plan" }
                   checkoutOffers:
                     type: array
-                    items: { $ref: '#/components/schemas/CheckoutOffer' }
+                    items: { $ref: "#/components/schemas/CheckoutOffer" }
                   checkoutAvailable: { type: boolean }
                   trialEligibilityPending: { type: boolean }
                   commercialEligibility:
                     type: string
                     enum: [VERIFICATION_UNAVAILABLE, VERIFIED]
-        '401': { description: Sessão ausente/expirada }
-        '403': { description: Associação administrativa inválida ou revogada }
+                  dunningAttempts:
+                    type: array
+                    description: Tentativas lógicas agendadas; não comprovam chamada, aceite ou pagamento.
+                    items: { $ref: "#/components/schemas/DunningAttempt" }
+        "401": { description: Sessão ausente/expirada }
+        "403": { description: Associação administrativa inválida ou revogada }
   /api/v1/admin/subscription/checkout:
     post:
       operationId: startAdminSubscriptionCheckout
@@ -81,18 +100,31 @@ paths:
                 planCode: { type: string, enum: [MONTHLY, ANNUAL] }
                 expectedVersion: { type: integer, minimum: 0 }
       responses:
-        '200':
+        "200":
           description: Estado da operação; CHECKOUT_READY não significa pagamento confirmado
           headers:
             Cache-Control: { schema: { type: string, const: no-store } }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/CheckoutOperation' }
-        '401': { description: Sessão ausente/expirada }
-        '403': { description: Associação inválida ou revogada }
-        '409': { description: Versão incompatível, checkout concorrente, chave divergente ou contexto de sessão alterado; códigos distinguem rejeições definitivas }
-        '408': { description: Resultado de transporte incerto; manter contexto, corpo e chave e recuperar a mesma operação }
-        '503': { description: Oferta, checkout hospedado ou integração não configurados }
+              schema: { $ref: "#/components/schemas/CheckoutOperation" }
+        "401": { description: Sessão ausente/expirada }
+        "403": { description: Associação inválida ou revogada }
+        "409":
+          {
+            description: Versão incompatível,
+            checkout concorrente,
+            chave divergente ou contexto de sessão alterado; códigos distinguem rejeições definitivas,
+          }
+        "408":
+          {
+            description: Resultado de transporte incerto; manter contexto,
+            corpo e chave e recuperar a mesma operação,
+          }
+        "503":
+          {
+            description: Oferta,
+            checkout hospedado ou integração não configurados,
+          }
   /api/v1/admin/subscription/payment-attempts:
     get:
       operationId: listAdminCheckoutOperations
@@ -106,7 +138,7 @@ paths:
           description: Precondição comparada à sessão autenticada; não seleciona nem autoriza tenant.
           schema: { type: string, format: uuid }
       responses:
-        '200':
+        "200":
           description: Operações sem dados de cartão nem payload bruto do provedor
           headers:
             Cache-Control: { schema: { type: string, const: no-store } }
@@ -114,9 +146,9 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/CheckoutAttempt' }
-        '401': { description: Sessão ausente/expirada }
-        '403': { description: Associação inválida ou revogada }
+                items: { $ref: "#/components/schemas/CheckoutAttempt" }
+        "401": { description: Sessão ausente/expirada }
+        "403": { description: Associação inválida ou revogada }
   /api/v1/admin/subscription/payment-attempts/{operationId}:
     get:
       operationId: getAdminCheckoutOperation
@@ -134,16 +166,19 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '200':
+        "200":
           description: Estado atual minimizado; consulta não cria nova cobrança
           headers:
             Cache-Control: { schema: { type: string, const: no-store } }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/CheckoutOperation' }
-        '404': { description: Operação inexistente ou não pertencente ao tenant autenticado }
-        '401': { description: Sessão ausente/expirada }
-        '403': { description: Associação inválida ou revogada }
+              schema: { $ref: "#/components/schemas/CheckoutOperation" }
+        "404":
+          {
+            description: Operação inexistente ou não pertencente ao tenant autenticado,
+          }
+        "401": { description: Sessão ausente/expirada }
+        "403": { description: Associação inválida ou revogada }
 components:
   securitySchemes:
     adminSession:
@@ -153,18 +188,56 @@ components:
   schemas:
     Subscription:
       type: object
-      required: [subscriptionId, status, trialStartedAt, trialEndsAt, planCode, paidThroughAt, version]
+      required:
+        [
+          subscriptionId,
+          status,
+          trialStartedAt,
+          trialEndsAt,
+          planCode,
+          paidThroughAt,
+          graceEndsAt,
+          version,
+        ]
       properties:
         subscriptionId: { type: string, format: uuid }
-        status: { type: string, enum: [TRIALING, SUSPENDED, ACTIVE] }
-        trialStartedAt: { type: [string, 'null'], format: date-time }
-        trialEndsAt: { type: [string, 'null'], format: date-time }
-        planCode: { type: [string, 'null'], enum: [MONTHLY, ANNUAL, null] }
-        paidThroughAt: { type: [string, 'null'], format: date-time }
+        status: { type: string, enum: [TRIALING, PAST_DUE, SUSPENDED, ACTIVE] }
+        trialStartedAt: { type: [string, "null"], format: date-time }
+        trialEndsAt: { type: [string, "null"], format: date-time }
+        planCode: { type: [string, "null"], enum: [MONTHLY, ANNUAL, null] }
+        paidThroughAt: { type: [string, "null"], format: date-time }
+        graceEndsAt:
+          {
+            type: [string, "null"],
+            format: date-time,
+            description: Fim persistido da tolerância; só é aplicável a PAST_DUE/assinatura suspensa por inadimplência.,
+          }
         version: { type: integer, minimum: 1 }
+    DunningAttempt:
+      type: object
+      additionalProperties: false
+      required: [logicalSequence, scheduledAt, state]
+      properties:
+        logicalSequence: { type: integer, enum: [0, 3, 6] }
+        scheduledAt: { type: string, format: date-time }
+        state:
+          {
+            type: string,
+            enum:
+              [
+                SCHEDULED,
+                BLOCKED_CONFIGURATION,
+                SUBMITTING,
+                OUTCOME_UNKNOWN,
+                ACCEPTED,
+                DECLINED,
+                CANCELLED,
+              ],
+          }
     Plan:
       type: object
-      required: [code, billingFrequency, recurring, annualEquivalentMonthlyPayments]
+      required:
+        [code, billingFrequency, recurring, annualEquivalentMonthlyPayments]
       properties:
         code: { type: string, enum: [MONTHLY, ANNUAL] }
         billingFrequency: { type: string, enum: [MONTHLY, ANNUAL] }
@@ -172,35 +245,72 @@ components:
         annualEquivalentMonthlyPayments:
           anyOf:
             - { type: integer, const: 10 }
-            - { type: 'null' }
+            - { type: "null" }
     CheckoutOffer:
       type: object
-      required: [planCode, amountMinorUnits, currency, termsVersion, offerVersion]
+      required:
+        [planCode, amountMinorUnits, currency, termsVersion, offerVersion]
       properties:
         planCode: { type: string, enum: [MONTHLY, ANNUAL] }
         amountMinorUnits: { type: integer, minimum: 1 }
-        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        currency: { type: string, pattern: "^[A-Z]{3}$" }
         termsVersion: { type: string }
         offerVersion: { type: string }
     CheckoutOperation:
       type: object
-      required: [operationId, planCode, state, amountMinorUnits, currency, termsVersion, createdAt, redirectUrl, replayed]
+      required:
+        [
+          operationId,
+          planCode,
+          state,
+          amountMinorUnits,
+          currency,
+          termsVersion,
+          createdAt,
+          redirectUrl,
+          replayed,
+        ]
       properties:
         operationId: { type: string, format: uuid }
         planCode: { type: string, enum: [MONTHLY, ANNUAL] }
-        state: { type: string, enum: [REQUESTED, SUBMITTING, CHECKOUT_READY, OUTCOME_UNKNOWN, CONFIRMED, DECLINED] }
+        state:
+          {
+            type: string,
+            enum:
+              [
+                REQUESTED,
+                SUBMITTING,
+                CHECKOUT_READY,
+                OUTCOME_UNKNOWN,
+                CONFIRMED,
+                DECLINED,
+              ],
+          }
         amountMinorUnits: { type: integer, minimum: 1 }
-        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        currency: { type: string, pattern: "^[A-Z]{3}$" }
         termsVersion: { type: string }
         createdAt: { type: string, format: date-time }
-        redirectUrl: { type: [string, 'null'], format: uri }
+        redirectUrl: { type: [string, "null"], format: uri }
         replayed: { type: boolean }
     CheckoutAttempt:
       type: object
-      required: [operationId, planCode, state, createdAt, expectedSubscriptionVersion]
+      required:
+        [operationId, planCode, state, createdAt, expectedSubscriptionVersion]
       properties:
         operationId: { type: string, format: uuid }
         planCode: { type: string, enum: [MONTHLY, ANNUAL] }
-        state: { type: string, enum: [REQUESTED, SUBMITTING, CHECKOUT_READY, OUTCOME_UNKNOWN, CONFIRMED, DECLINED] }
+        state:
+          {
+            type: string,
+            enum:
+              [
+                REQUESTED,
+                SUBMITTING,
+                CHECKOUT_READY,
+                OUTCOME_UNKNOWN,
+                CONFIRMED,
+                DECLINED,
+              ],
+          }
         createdAt: { type: string, format: date-time }
         expectedSubscriptionVersion: { type: integer, minimum: 0 }

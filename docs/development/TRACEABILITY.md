@@ -1,5 +1,13 @@
 # Rastreabilidade inicial
 
+## AGD-042 — inadimplência, tentativas lógicas e suspensão (22/10/2026)
+
+Branch `agd-042-inadimplencia-retries-suspensao`, base integrada AGD-041 `5be58533a84e16e07f598b6a5afc786c99bbd15b`. V35 acrescenta ciclo e identidades únicas de tentativa por assinatura/tenant/seq D0/D+3/D+6; `SubscriptionTrialLifecycle` materializa ACTIVE→PAST_DUE e PAST_DUE→SUSPENDED com lock tenant-scoped e CAS; pagamento autenticado encerra o ciclo inclusive quando suspenso e cancela tentativas ainda não iniciadas. Gate público é temporal e fechado após grace, preservando acesso aos compromissos existentes. UI administrativa exibe datas e tentativas explicitamente não equivalentes a cobranças.
+
+Evidência PostgreSQL: `TenantPersistenceIT` 34/34, upgrade V34→V35, Flyway validate/rerun e grants mínimos; testes dirigidos `BillingWebhookIT`, `SubscriptionTrialIT`, `TenantPersistenceIT` totalizaram 55 integrações aprovadas. Suíte final JDK 21/Spotless: 80 unitários/arquiteturais e 256 integrações aprovadas. Frontend format/lint + 23 Vitest + TypeScript/build passaram. A corrida pagamento/suspensão aceita ambas serializações e valida efeitos e ciclo final PAID. E2E local não rodado para proteger Compose compartilhado; o browser E2E sintético de CI aguardará o SHA publicado e não comprova provider ou pagamento real. PR/CI de AGD-042 ainda não publicados.
+
+Limites mantidos: igualdade no fim da tolerância e catch-up de tentativas após downtime continuam decisões de produto pendentes em OPEN-QUESTIONS; offsets atuais são persistidos como slots lógicos, sem transporte, retry técnico, claim/lease financeiro ou reconciliação. Provider/sandbox, preço/moeda/oferta, autorização de cobrança, segredos, retenção, homologação e gates legais/comerciais permanecem pendentes. A falha intermitente de remarcação AGD-022 segue com causa desconhecida.
+
 ## AGD-033 — identidade da reconciliação administrativa (PR #21 draft)
 
 No head-base `ab0efb24fb33f0cd40a0f7f79e602989f25d2e34`, `ClientNoShowFactsPanel` usava `commandKey` persistente por cliente/versão também para ações explícitas posteriores ao resultado conhecido. A reconciliação agora cria uma chave nova quando não existe intenção pendente e reutiliza somente a chave guardada na intenção enquanto o resultado estiver incerto. O helper global não mudou.

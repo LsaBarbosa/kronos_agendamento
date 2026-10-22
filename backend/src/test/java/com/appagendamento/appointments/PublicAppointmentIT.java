@@ -41,6 +41,7 @@ import com.appagendamento.publicpage.application.ChangePublicationStatus;
 import com.appagendamento.publicpage.application.PublicationEvidence;
 import com.appagendamento.publicpage.application.UpdatePublicContact;
 import com.appagendamento.subscriptions.api.PublicSubscriptionEligibility;
+import com.appagendamento.subscriptions.application.SubscriptionDunningRepository;
 import com.appagendamento.subscriptions.application.SubscriptionRepository;
 import com.appagendamento.subscriptions.application.SubscriptionTrialLifecycle;
 import com.appagendamento.support.PostgresTestEnvironment;
@@ -120,6 +121,7 @@ class PublicAppointmentIT {
   @Autowired private ClientNoShowRestrictionActivation noShowRestrictionActivation;
   @Autowired private AppointmentRepository appointmentRepository;
   @Autowired private SubscriptionRepository subscriptionRepository;
+  @Autowired private SubscriptionDunningRepository subscriptionDunningRepository;
   @Autowired private TenantAgendaLock tenantAgendaLock;
   @Autowired private PlatformTransactionManager transactionManager;
   @Autowired private UpdateService updateService;
@@ -403,7 +405,8 @@ class PublicAppointmentIT {
     var eligibilityTrialEnd = new AtomicReference<Instant>();
     var eligibilityStatus = new AtomicReference<String>();
     SubscriptionTrialLifecycle lifecycle =
-        new SubscriptionTrialLifecycle(subscriptionRepository, tenantAgendaLock, clock);
+        new SubscriptionTrialLifecycle(
+            subscriptionRepository, subscriptionDunningRepository, tenantAgendaLock, clock);
     org.mockito.Mockito.when(subscriptionEligibility.allowsNewPublicAppointments(tenantId))
         .thenAnswer(
             invocation -> {
