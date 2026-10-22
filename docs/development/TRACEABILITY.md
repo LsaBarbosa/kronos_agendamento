@@ -1,5 +1,11 @@
 # Rastreabilidade inicial
 
+## AGD-042 — revalidação entre autorização local e transporte (22/10/2026)
+
+Falha observada em App CI PR do head `18050fcc5ecee9afedee49d1a060cc0245e14bba`: `BillingWebhookIT.paymentAndSuspensionRaceAfterSendAuthorizationPreservesInFlightAttempt` chegou à asserção do receipt da tentativa, que não estava `ACCEPTED`. A janela do teste avançava `Clock` antes do latch de início externo, e o código usava o instante capturado antes da autorização local. Correção no código `33a30d9`: recapturar o instante e revalidar agenda/ciclo/assinatura/lease/elegibilidade sob lock antes do CAS persistido `SUBMITTING`; no limite `now >= graceEndsAt`, claim é cancelado e nenhuma chamada ocorre. A regressão de resultado em voo agora ordena início do transporte antes da mudança temporal; novo caso verifica exatamente igualdade e zero chamadas.
+
+Evidência local em PostgreSQL 16.13/Testcontainers: teste dirigido dos dois cenários passou; suíte `spotless:check verify` completa passou com 80 unitários/arquiteturais e 267 integrações. Frontend e script E2E passaram sem mudança funcional. Sem migration; V1–V36 preservadas. Browser E2E local não executado; App CI do novo head é a evidência browser pendente. Revisão somente sequencial por falta de revisor independente disponível. Resultado do CI anterior é mantido como histórico, não apagado por rerun; CodeQL do novo head e jobs finais ainda pendentes. Provider, autorização financeira confiável, credenciais e homologação permanecem pendentes.
+
 ## AGD-042 — worker persistido V36 (22/10/2026)
 
 Branch `agd-042-inadimplencia-retries-suspensao`, PR #24 permanece draft; base/head conferido antes das alterações: `2469a362b51391181b3b972c7263d08756f380f6`. V36 preserva V1–V35 e persiste external id estável, início irrevogável, lease/fencing, retomada técnica, estado incerto e motivo de late recovery. Worker lê um item por vez, revalida sob lock tenant-scoped antes de gravar autorização de início; chamada/reconciliação externa fica fora da transação. Uma falha ambígua não libera nova cobrança lógica. Pagamento fecha o ciclo e cancela apenas o que não iniciou; fatos de uma chamada iniciada continuam persistíveis após suspensão. Métricas agregadas Micrometer não incluem PII ou dimensões tenant.

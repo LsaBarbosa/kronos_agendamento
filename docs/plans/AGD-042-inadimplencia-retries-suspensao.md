@@ -1,5 +1,15 @@
 # AGD-042 — Inadimplência, retries e suspensão
 
+## Follow-up — revalidar elegibilidade após autorização (22/10/2026)
+
+O App CI do head `18050fcc5ecee9afedee49d1a060cc0245e14bba` falhou na asserção PostgreSQL de resultado aceito em voo. Revisão sequencial encontrou uma lacuna temporal: `authorizeAttemptSend` capturava `Clock.instant()` antes da leitura local de mandato. Mesmo que essa leitura retornasse depois de `graceEndsAt`, o instante antigo ainda permitia persistir `SUBMITTING`.
+
+Antes do CAS que registra o início irrevogável, o adapter agora captura novo `Clock.instant()` e sob os mesmos locks reavalia due, estado/ciclo/assinatura e `now < graceEndsAt`. Se inelegível, encerra o claim cujo token ainda está bloqueado, sem incremento de tentativa ou transporte. Se elegível, o UPDATE ainda exige lease válida nesse instante. Chamadas já iniciadas mantêm seus resultados graváveis por fencing, mesmo depois de pagamento/suspensão.
+
+Testes usam latches, não sleeps: (1) espera transporte realmente entrar antes de avançar Clock e executar pagamento/suspensão, comprovando aceite e referência preservados; (2) bloqueia autorização local, move Clock à igualdade do fim da tolerância e comprova cancelamento não iniciado, zero tentativas e nenhuma chamada. O comportamento em `now >= graceEndsAt` permanece conforme decisão aprovada; não se alterou retry, política, provider ou fixture de produção.
+
+Validação pós-correção: suíte JDK 21 `spotless:check verify`, 80 unitários/arquiteturais + 267 integrações PostgreSQL/Testcontainers, e gates frontend (23 Vitest, format/lint/typecheck/build) passaram localmente. Não houve mudança de schema. E2E browser local não foi executado para preservar Compose compartilhado; aguarda-se CI no head publicado. O gate de imagem Keycloak e integração financeira real continuam pendentes; conferir execução e status atualizados em `docs/development/VALIDATION.md`.
+
 ## Objetivo e origem
 
 Implementar o ciclo tenant-scoped de vencimento, tolerância, tentativas lógicas D0/D+3/D+6 e suspensão, preservando o gate de novas reservas e os dados/compromissos existentes. Requisitos: documento 01 §§12.3–12.4, documento 02 §7, documento 03 §§12–13 e jobs, documento 06 AGD-042; ADR-0003, ADR-0008, ADR-0025 e ADR-0026.
