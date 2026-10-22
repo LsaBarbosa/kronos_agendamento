@@ -19,6 +19,7 @@ import com.appagendamento.subscriptions.application.DunningAttemptReconciler;
 import com.appagendamento.subscriptions.application.DunningChargeAuthorization;
 import com.appagendamento.subscriptions.application.DunningChargeTransport;
 import com.appagendamento.subscriptions.application.StartSubscriptionCheckout;
+import com.appagendamento.subscriptions.application.SubscriptionDunningRepository;
 import com.appagendamento.subscriptions.application.SubscriptionDunningWorker;
 import com.appagendamento.subscriptions.application.SubscriptionTrialLifecycle;
 import com.appagendamento.subscriptions.domain.CheckoutOperation;
@@ -59,6 +60,7 @@ class BillingWebhookIT {
   @Autowired private JdbcTemplate jdbc;
   @Autowired private AdmitPaymentWebhook webhook;
   @Autowired private StartSubscriptionCheckout startCheckout;
+  @Autowired private SubscriptionDunningRepository dunning;
   @Autowired private SubscriptionTrialLifecycle lifecycle;
   @Autowired private SubscriptionDunningWorker dunningWorker;
   @MockitoBean private HostedCheckoutProvider checkoutProvider;
@@ -567,6 +569,117 @@ class BillingWebhookIT {
                 tenant.tenantId()))
         .isTrue();
     org.mockito.Mockito.verify(chargeTransport, org.mockito.Mockito.never()).submit(any());
+  }
+
+  @Test
+  void authorizationOneMicrosecondBeforeGraceEndStartsTheLogicalAttempt() {
+    Tenant tenant = tenant("dunning-authorization-before-grace-end");
+    UUID subscriptionId = UUID.randomUUID();
+    Instant paidThrough = NOW.minusSeconds(60);
+    jdbc.update(
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'MONTHLY', ?, 1)",
+        subscriptionId,
+        tenant.tenantId(),
+        java.sql.Timestamp.from(paidThrough));
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+
+    Instant graceEnd = paidThrough.plusSeconds(168 * 60 * 60L);
+    Instant justBeforeGraceEnd = graceEnd.minusNanos(1_000);
+    when(clock.instant()).thenReturn(justBeforeGraceEnd);
+    when(chargeAuthorization.isAuthorized(any(), any(), any(), any())).thenReturn(true);
+    when(chargeTransport.submit(any()))
+        .thenReturn(
+            new DunningChargeTransport.TransportResult(
+                DunningChargeTransport.Outcome.ACCEPTED,
+                PROVIDER,
+                "accepted-before-grace-end",
+                null));
+
+    assertThat(dunningWorker.processBatch()).isEqualTo(1);
+    String acceptedState =
+        jdbc.queryForObject(
+            "SELECT state || '|' || ever_started || '|' || technical_attempts || '|' || COALESCE(provider_reference, '') || '|' || COALESCE(last_error_code, '') FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND logical_sequence = 6",
+            String.class,
+            tenant.tenantId());
+    assertThat(acceptedState)
+        .as("attempt state immediately before grace end: %s", acceptedState)
+        .isEqualTo("ACCEPTED|true|1|accepted-before-grace-end|");
+    org.mockito.Mockito.verify(chargeAuthorization)
+        .isAuthorized(
+            org.mockito.ArgumentMatchers.eq(tenant.tenantId()),
+            org.mockito.ArgumentMatchers.eq(subscriptionId),
+            org.mockito.ArgumentMatchers.eq("MONTHLY"),
+            org.mockito.ArgumentMatchers.eq(justBeforeGraceEnd));
+    org.mockito.Mockito.verify(chargeTransport).submit(any());
+  }
+
+  @Test
+  void authorizationWaitingForTenantLockRechecksClockAfterGraceEnd() throws Exception {
+    Tenant tenant = tenant("dunning-authorization-lock-crosses-grace-end");
+    UUID subscriptionId = UUID.randomUUID();
+    Instant paidThrough = NOW.minusSeconds(60);
+    jdbc.update(
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'MONTHLY', ?, 1)",
+        subscriptionId,
+        tenant.tenantId(),
+        java.sql.Timestamp.from(paidThrough));
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+    Instant graceEnd = paidThrough.plusSeconds(168 * 60 * 60L);
+    AtomicReference<Instant> controlledNow = new AtomicReference<>(graceEnd.minusSeconds(5));
+    when(clock.instant()).thenAnswer(invocation -> controlledNow.get());
+    when(chargeAuthorization.isAuthorized(any(), any(), any(), any())).thenReturn(true);
+    var claim = dunning.claimNextAttempt(java.time.Duration.ofSeconds(60), false).orElseThrow();
+
+    try (var executor = Executors.newSingleThreadExecutor();
+        var lockConnection = PostgresTestEnvironment.migrationDataSource().getConnection()) {
+      lockConnection.setAutoCommit(false);
+      try (var lock =
+          lockConnection.prepareStatement(
+              "SELECT tenant_id FROM agendamento.tenant WHERE tenant_id = ? FOR UPDATE")) {
+        lock.setObject(1, tenant.tenantId());
+        try (var result = lock.executeQuery()) {
+          assertThat(result.next()).isTrue();
+        }
+      }
+
+      var authorization = executor.submit(() -> dunning.authorizeAttemptSend(claim));
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+      boolean waitingOnTenantLock = false;
+      while (System.nanoTime() < deadline) {
+        Boolean waiting =
+            jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE '%SELECT tenant_id FROM agendamento.tenant%' AND query ILIKE '%FOR UPDATE%')",
+                Boolean.class);
+        if (Boolean.TRUE.equals(waiting)) {
+          waitingOnTenantLock = true;
+          break;
+        }
+        Thread.yield();
+      }
+      assertThat(waitingOnTenantLock)
+          .as("authorization waits for the tenant lock before reading Clock")
+          .isTrue();
+
+      controlledNow.set(graceEnd);
+      lockConnection.commit();
+
+      assertThat(authorization.get(15, TimeUnit.SECONDS)).isFalse();
+    } finally {
+      org.mockito.Mockito.verify(chargeAuthorization, org.mockito.Mockito.never())
+          .isAuthorized(any(), any(), any(), any());
+      org.mockito.Mockito.verify(chargeTransport, org.mockito.Mockito.never()).submit(any());
+    }
+
+    String lockedAttemptState =
+        jdbc.queryForObject(
+            "SELECT state || '|' || ever_started || '|' || technical_attempts || '|' || COALESCE(last_error_code, '') FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND logical_sequence = 6",
+            String.class,
+            tenant.tenantId());
+    assertThat(lockedAttemptState)
+        .as(
+            "attempt state after eligibility expires while waiting for lock: %s",
+            lockedAttemptState)
+        .isEqualTo("CANCELLED|false|0|DUNNING_CYCLE_NOT_ELIGIBLE");
   }
 
   @Test
