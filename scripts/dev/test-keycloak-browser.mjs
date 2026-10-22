@@ -3116,7 +3116,8 @@ try {
     const dunningDom = await evaluate(`({
       section: document.querySelector('[aria-label="Estado do trial"]')?.innerText,
       attempts: document.querySelector('[aria-label="Tentativas lógicas de cobrança"]')?.innerText,
-      warning: document.body.innerText.includes('não significam que houve cobrança, aceite ou pagamento')
+      warning: document.body.innerText.includes('A agenda e o aceite do transporte não confirmam pagamento.')
+        && document.body.innerText.includes('Resultados incertos bloqueiam novas cobranças até reconciliação.')
     })`);
     const cycleRows = Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_dunning_cycle WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}' AND state = 'OPEN'`, appEnvironment));
     const logicalAttempts = Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_dunning_attempt a JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id) WHERE c.tenant_id = '${authenticatedSession.tenantId}' AND c.subscription_id = '${activeTrial.subscriptionId}'`, appEnvironment));
