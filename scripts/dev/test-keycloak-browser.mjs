@@ -3110,7 +3110,47 @@ try {
     if (checkoutRows !== 1 || paymentHistoryRows !== 1 || paymentAuditRows !== 1 || paymentOutboxRows !== 1 || currentSubscription?.status !== 'ACTIVE' || currentSubscription?.planCode !== 'MONTHLY') {
         throw new Error(`Confirmação de pagamento sintética não foi aplicada uma única vez: ${JSON.stringify({checkoutRows, paymentHistoryRows, paymentAuditRows, paymentOutboxRows, currentSubscription})}`);
     }
-    console.log('Browser E2E: CSRF pendente durante logout não enviou checkout e preservou a intenção; HTTP 408 substituindo resposta após commit manteve descarte bloqueado e retry idêntico; webhook inválido não alterou assinatura/inbox, evento autenticado duplicado/out-of-order manteve estado, histórico, auditoria e outbox únicos. Sem fornecedor ou cobrança real.');
+    queryPostgres(`UPDATE agendamento.subscription SET paid_through_at = clock_timestamp() - INTERVAL '6 days' WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}' AND status = 'ACTIVE'`, appEnvironment);
+    await command('Page.reload');
+    await waitForText('Pagamento pendente — em tolerância', evaluate);
+    const dunningDom = await evaluate(`({
+      section: document.querySelector('[aria-label="Estado do trial"]')?.innerText,
+      attempts: document.querySelector('[aria-label="Tentativas lógicas de cobrança"]')?.innerText,
+      warning: document.body.innerText.includes('A agenda e o aceite do transporte não confirmam pagamento.')
+        && document.body.innerText.includes('Resultados incertos bloqueiam novas cobranças até reconciliação.')
+    })`);
+    const cycleRows = Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_dunning_cycle WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}' AND state = 'OPEN'`, appEnvironment));
+    const logicalAttempts = Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_dunning_attempt a JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id) WHERE c.tenant_id = '${authenticatedSession.tenantId}' AND c.subscription_id = '${activeTrial.subscriptionId}'`, appEnvironment));
+    if (!dunningDom.section?.includes('Fim da tolerância') || !dunningDom.attempts?.includes('D+0:') || !dunningDom.attempts?.includes('D+3:') || !dunningDom.attempts?.includes('D+6:') || !dunningDom.warning || cycleRows !== 1 || logicalAttempts !== 3) {
+        throw new Error(`Estado de inadimplência não persistiu/apareceu corretamente após reload: ${JSON.stringify({dunningDom, cycleRows, logicalAttempts})}`);
+    }
+
+    // Test-only state fixture checks that persisted operational states are rendered after reload.
+    queryPostgres(`UPDATE agendamento.billing_dunning_attempt a SET state = 'SKIPPED_LATE_RECOVERY', skip_reason = 'LATE_RECOVERY_OLDER_DUE', last_error_code = 'LATE_RECOVERY_SKIPPED' FROM agendamento.billing_dunning_cycle c WHERE a.cycle_id = c.cycle_id AND a.tenant_id = c.tenant_id AND c.tenant_id = '${authenticatedSession.tenantId}' AND c.subscription_id = '${activeTrial.subscriptionId}' AND a.logical_sequence = 0`, appEnvironment);
+    queryPostgres(`UPDATE agendamento.billing_dunning_attempt a SET state = 'OUTCOME_UNKNOWN', ever_started = TRUE, technical_attempts = 1, last_error_code = 'PROVIDER_TIMEOUT' FROM agendamento.billing_dunning_cycle c WHERE a.cycle_id = c.cycle_id AND a.tenant_id = c.tenant_id AND c.tenant_id = '${authenticatedSession.tenantId}' AND c.subscription_id = '${activeTrial.subscriptionId}' AND a.logical_sequence = 3`, appEnvironment);
+    queryPostgres(`UPDATE agendamento.billing_dunning_attempt a SET state = 'SCHEDULED', ever_started = FALSE, skip_reason = NULL, next_attempt_at = NULL, last_error_code = NULL FROM agendamento.billing_dunning_cycle c WHERE a.cycle_id = c.cycle_id AND a.tenant_id = c.tenant_id AND c.tenant_id = '${authenticatedSession.tenantId}' AND c.subscription_id = '${activeTrial.subscriptionId}' AND a.logical_sequence = 6`, appEnvironment);
+    await command('Page.reload');
+    await waitForText('Ignorada por recuperação tardia', evaluate);
+    const lateRecoveryDom = await evaluate(`({
+      attempts: document.querySelector('[aria-label="Tentativas lógicas de cobrança"]')?.innerText,
+      unknown: document.body.innerText.includes('Resultado incerto; aguardando reconciliação, sem nova cobrança'),
+      scheduled: document.body.innerText.includes('D+6:') && document.body.innerText.includes('Agendada')
+    })`);
+    if (!lateRecoveryDom.attempts?.includes('Motivo: tentativa anterior vencida e nunca iniciada') || !lateRecoveryDom.unknown || !lateRecoveryDom.scheduled) {
+        throw new Error(`Estados persistidos de recuperação/ambiguidade não apareceram corretamente após reload: ${JSON.stringify(lateRecoveryDom)}`);
+    }
+    queryPostgres(`UPDATE agendamento.billing_dunning_attempt a SET state = 'ACCEPTED', provider_code = 'synthetic', provider_reference = 'transport-accepted-only', last_error_code = NULL FROM agendamento.billing_dunning_cycle c WHERE a.cycle_id = c.cycle_id AND a.tenant_id = c.tenant_id AND c.tenant_id = '${authenticatedSession.tenantId}' AND c.subscription_id = '${activeTrial.subscriptionId}' AND a.logical_sequence = 3`, appEnvironment);
+    await command('Page.reload');
+    await waitForText('Aceita pelo transporte; pagamento ainda não confirmado', evaluate);
+    if (!await evaluate("document.body.innerText.includes('pagamento ainda não confirmado')")) {
+        throw new Error('O painel confundiu aceite sintético do transporte com pagamento.');
+    }
+    await command('Page.reload');
+    await waitForText('Pagamento pendente — em tolerância', evaluate);
+    if (Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_dunning_cycle WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}'`, appEnvironment)) !== 1 || Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_dunning_attempt a JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id) WHERE c.tenant_id = '${authenticatedSession.tenantId}' AND c.subscription_id = '${activeTrial.subscriptionId}'`, appEnvironment)) !== 3) {
+        throw new Error('Reload administrativo duplicou ciclo ou tentativas lógicas de inadimplência.');
+    }
+    console.log('Browser E2E sintético: após pagamento controlado, fixture administrativa materializa ACTIVE→PAST_DUE; painel mostra paidThrough/graceEnds, D0/D+3/D+6, late-recovery skip, resultado incerto e aceite de transporte sem confundir com pagamento, com um ciclo e três identidades após reload. Estados posteriores são fixtures isoladas de teste; nenhum provider ou débito real foi chamado. Checkout/webhook existentes preservam retry, dedupe e ordem.');
 
     await command('Network.clearBrowserCookies');
     await navigate('http://localhost:5173/admin', command, evaluate);

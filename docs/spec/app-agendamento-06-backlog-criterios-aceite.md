@@ -369,6 +369,8 @@ Critérios de aceite:
 - Sem confirmação até o fim, assinatura passa a `SUSPENDED` por CAS.
 - Link público não aceita nova reserva; dados e reservas existentes permanecem.
 
+O ciclo de inadimplência não acrescenta sete dias ao trial de AGD-040. A API administrativa apresenta vencimento, início/fim da tolerância e tentativas minimizadas; agendamento, claim e aceite do transporte não equivalem a pagamento. **Decisão aprovada pelo usuário em 22/10/2026:** tolerância termina em `now >= graceEndsAt`, exatamente 168 horas após vencimento; D0/D+3/D+6 são offsets UTC de 0/72/144 horas. Em recuperação tardia durante a tolerância, somente a tentativa vencida mais recente nunca iniciada pode permanecer elegível; as anteriores nunca iniciadas são `SKIPPED_LATE_RECOVERY` com motivo, sem mover futuras ou criar novas. Tentativas iniciadas/em voo/ambíguas não são puladas e bloqueiam outra cobrança lógica até reconciliação. Após o fim da tolerância não se inicia chamada nova, mas resultados previamente iniciados são preservados inclusive após suspensão. Isso não amplia o trial. Provider, oferta, preço/moeda, autorização recorrente real, segredos e homologação permanecem pendentes e o transporte segue fail-closed.
+
 ### AGD-043 — Reativação e renovação
 
 **Prioridade:** P0 · **Tamanho:** M

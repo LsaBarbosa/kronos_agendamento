@@ -43,8 +43,13 @@ public record OutboxEvent(
         aggregateType.equals("CLIENT_RESTRICTION")
             && java.util.Set.of("ClientSelfBookingBlocked", "ClientSelfBookingUnblocked")
                 .contains(eventType);
-    boolean subscriptionReactivated =
-        aggregateType.equals("SUBSCRIPTION") && eventType.equals("SubscriptionReactivated");
+    boolean subscriptionLifecycle =
+        aggregateType.equals("SUBSCRIPTION")
+            && java.util.Set.of(
+                    "SubscriptionReactivated",
+                    "SubscriptionPastDue",
+                    "SubscriptionPaymentSuspended")
+                .contains(eventType);
     boolean allowed =
         aggregateType.equals("TENANT") && eventType.equals("TENANT_RENAMED")
             || aggregateType.equals("SERVICE") && eventType.equals("ServiceCreated")
@@ -55,7 +60,7 @@ public record OutboxEvent(
             || appointmentRescheduled
             || appointmentOutcome
             || clientRestriction
-            || subscriptionReactivated;
+            || subscriptionLifecycle;
     if (!allowed) {
       throw new IllegalArgumentException("Evento fora da allowlist desta integração");
     }
@@ -66,7 +71,7 @@ public record OutboxEvent(
                 ? "\\{\"clientId\":\"[0-9a-fA-F-]{36}\",\"restrictionId\":\"[0-9a-fA-F-]{36}\",\"count\":[1-9][0-9]*,\"threshold\":[1-5],\"policyVersion\":[1-9][0-9]*,\"version\":1\\}"
                 : eventType.equals("ClientSelfBookingUnblocked")
                     ? "\\{\"clientId\":\"[0-9a-fA-F-]{36}\",\"restrictionId\":\"[0-9a-fA-F-]{36}\",\"version\":(?:[2-9]|[1-9][0-9]+)\\}"
-                    : subscriptionReactivated
+                    : subscriptionLifecycle
                         ? "\\{\\\"subscriptionId\\\":\\\"[0-9a-fA-F-]{36}\\\",\\\"version\\\":[1-9][0-9]*\\}"
                         : aggregateType.equals("SERVICE")
                             ? "\\{\"serviceId\":\"[0-9a-fA-F-]{36}\",\"version\":[0-9]+\\}"

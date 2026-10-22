@@ -105,7 +105,8 @@ public class AdminSubscriptionController {
                 overview.checkoutOffers(),
                 !overview.checkoutOffers().isEmpty(),
                 overview.subscription() == null,
-                overview.eligibility()));
+                overview.eligibility(),
+                overview.dunningAttempts()));
   }
 
   record AdminSubscriptionResponse(
@@ -115,7 +116,8 @@ public class AdminSubscriptionController {
       List<BillingOffer> checkoutOffers,
       boolean checkoutAvailable,
       boolean trialEligibilityPending,
-      String commercialEligibility) {}
+      String commercialEligibility,
+      List<com.appagendamento.subscriptions.domain.DunningAttemptView> dunningAttempts) {}
 
   record SubscriptionView(
       java.util.UUID subscriptionId,
@@ -124,6 +126,7 @@ public class AdminSubscriptionController {
       java.time.Instant trialEndsAt,
       String planCode,
       java.time.Instant paidThroughAt,
+      java.time.Instant graceEndsAt,
       long version) {
 
     static SubscriptionView from(Subscription subscription) {
@@ -135,6 +138,7 @@ public class AdminSubscriptionController {
           subscription.trialEndsAt(),
           subscription.planCode(),
           subscription.paidThroughAt(),
+          subscription.graceEndsAt(),
           subscription.version());
     }
   }

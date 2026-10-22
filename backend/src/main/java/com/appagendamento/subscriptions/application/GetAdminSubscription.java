@@ -6,6 +6,7 @@ import com.appagendamento.subscriptions.api.BillingOffer;
 import com.appagendamento.subscriptions.api.BillingOfferCatalog;
 import com.appagendamento.subscriptions.api.HostedCheckoutProvider;
 import com.appagendamento.subscriptions.api.PublicSubscriptionEligibility;
+import com.appagendamento.subscriptions.domain.DunningAttemptView;
 import com.appagendamento.subscriptions.domain.PlanCatalog;
 import com.appagendamento.subscriptions.domain.Subscription;
 import com.appagendamento.subscriptions.domain.SubscriptionPlan;
@@ -21,18 +22,21 @@ public class GetAdminSubscription {
   private final PublicSubscriptionEligibility lifecycle;
   private final BillingOfferCatalog billingOffers;
   private final HostedCheckoutProvider checkoutProvider;
+  private final SubscriptionDunningRepository dunning;
 
   public GetAdminSubscription(
       AdminAccessPolicy access,
       SubscriptionRepository subscriptions,
       PublicSubscriptionEligibility lifecycle,
       BillingOfferCatalog billingOffers,
-      HostedCheckoutProvider checkoutProvider) {
+      HostedCheckoutProvider checkoutProvider,
+      SubscriptionDunningRepository dunning) {
     this.access = access;
     this.subscriptions = subscriptions;
     this.lifecycle = lifecycle;
     this.billingOffers = billingOffers;
     this.checkoutProvider = checkoutProvider;
+    this.dunning = dunning;
   }
 
   public Overview execute(AuthenticatedAdmin admin) {
@@ -51,6 +55,7 @@ public class GetAdminSubscription {
                 .filter(java.util.Objects::nonNull)
                 .toList()
             : List.of(),
+        dunning.listAttempts(admin.tenantId()),
         subscription.isEmpty() ? "VERIFICATION_UNAVAILABLE" : "VERIFIED");
   }
 
@@ -59,5 +64,6 @@ public class GetAdminSubscription {
       Subscription subscription,
       List<SubscriptionPlan> plans,
       List<BillingOffer> checkoutOffers,
+      List<DunningAttemptView> dunningAttempts,
       String eligibility) {}
 }

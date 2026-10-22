@@ -11,4 +11,5 @@ public record Subscription(
     Instant trialEndsAt,
     String planCode,
     Instant paidThroughAt,
+    Instant graceEndsAt,
     long version) {}
