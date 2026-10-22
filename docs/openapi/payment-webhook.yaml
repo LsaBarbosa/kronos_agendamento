@@ -1,0 +1,67 @@
+openapi: 3.1.0
+info:
+  title: App Agendamento — admissão de eventos financeiros (AGD-041)
+  version: 1.0.0
+  description: >-
+    Contrato estrutural interno. O formato de bytes, cabeçalhos de assinatura,
+    timestamp e replay são definidos exclusivamente pelo adapter do provedor
+    aprovado. Não há protocolo genérico habilitado em produção. Sem autenticador
+    de provedor configurado, a rota retorna indisponibilidade e não persiste evento.
+servers:
+  - url: /
+paths:
+  /api/v1/webhooks/payments/{providerCode}:
+    post:
+      operationId: admitAuthenticatedProviderPaymentEvent
+      summary: Admitir evidência financeira autenticada por adapter específico
+      description: >-
+        A implementação autentica o corpo bruto antes de normalizar/admitir. O
+        tenant e a operação são correlacionados por referências persistidas no
+        servidor; campos de tenant do payload nunca autorizam mutação. A rota não
+        aceita confirmação do frontend. O perfil E2E possui protocolo sintético
+        isolado e ele não é um contrato de produção.
+      security: []
+      parameters:
+        - in: path
+          name: providerCode
+          required: true
+          schema: { type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,47}$' }
+        - in: header
+          name: X-Payment-Signature
+          required: false
+          description: Cabeçalho somente do adapter de teste; headers reais são específicos do provedor.
+          schema: { type: string, maxLength: 2048 }
+      requestBody:
+        required: true
+        description: Corpo opaco específico do provedor configurado; máximo de 65536 bytes.
+        content:
+          application/json:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '202':
+          description: Evidência autenticada admitida e persistida antes da resposta
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdmissionResult' }
+        '200':
+          description: Evidência duplicada; nenhum efeito lógico repetido
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdmissionResult' }
+        '401': { description: Evidência inválida ou assinatura não autenticada }
+        '413': { description: Corpo excede o limite permitido }
+        '503': { description: Adapter de produção não configurado; evento não persistido }
+components:
+  schemas:
+    AdmissionResult:
+      type: object
+      additionalProperties: false
+      required: [result]
+      properties:
+        result: { type: string, enum: [ADMITTED, DUPLICATE] }

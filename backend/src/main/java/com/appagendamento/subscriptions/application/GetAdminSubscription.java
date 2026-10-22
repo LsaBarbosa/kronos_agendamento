@@ -2,6 +2,9 @@ package com.appagendamento.subscriptions.application;
 
 import com.appagendamento.identityaccess.api.AdminAccessPolicy;
 import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
+import com.appagendamento.subscriptions.api.BillingOffer;
+import com.appagendamento.subscriptions.api.BillingOfferCatalog;
+import com.appagendamento.subscriptions.api.HostedCheckoutProvider;
 import com.appagendamento.subscriptions.api.PublicSubscriptionEligibility;
 import com.appagendamento.subscriptions.domain.PlanCatalog;
 import com.appagendamento.subscriptions.domain.Subscription;
@@ -16,14 +19,20 @@ public class GetAdminSubscription {
   private final AdminAccessPolicy access;
   private final SubscriptionRepository subscriptions;
   private final PublicSubscriptionEligibility lifecycle;
+  private final BillingOfferCatalog billingOffers;
+  private final HostedCheckoutProvider checkoutProvider;
 
   public GetAdminSubscription(
       AdminAccessPolicy access,
       SubscriptionRepository subscriptions,
-      PublicSubscriptionEligibility lifecycle) {
+      PublicSubscriptionEligibility lifecycle,
+      BillingOfferCatalog billingOffers,
+      HostedCheckoutProvider checkoutProvider) {
     this.access = access;
     this.subscriptions = subscriptions;
     this.lifecycle = lifecycle;
+    this.billingOffers = billingOffers;
+    this.checkoutProvider = checkoutProvider;
   }
 
   public Overview execute(AuthenticatedAdmin admin) {
@@ -33,11 +42,22 @@ public class GetAdminSubscription {
     lifecycle.allowsNewPublicAppointments(admin.tenantId());
     Optional<Subscription> subscription = subscriptions.findCurrent(admin.tenantId());
     return new Overview(
+        admin.tenantId(),
         subscription.orElse(null),
         PlanCatalog.plans(),
+        checkoutProvider.isConfigured()
+            ? PlanCatalog.plans().stream()
+                .map(plan -> billingOffers.findApprovedOffer(plan.code()).orElse(null))
+                .filter(java.util.Objects::nonNull)
+                .toList()
+            : List.of(),
         subscription.isEmpty() ? "VERIFICATION_UNAVAILABLE" : "VERIFIED");
   }
 
   public record Overview(
-      Subscription subscription, List<SubscriptionPlan> plans, String eligibility) {}
+      java.util.UUID tenantContextId,
+      Subscription subscription,
+      List<SubscriptionPlan> plans,
+      List<BillingOffer> checkoutOffers,
+      String eligibility) {}
 }

@@ -2,10 +2,14 @@ package com.appagendamento.platform.infrastructure.security;
 
 import com.appagendamento.platform.api.ApiErrorResponse;
 import com.appagendamento.platform.infrastructure.web.CorrelationIdFilter;
+import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.sql.SQLException;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
@@ -17,6 +21,8 @@ import tools.jackson.databind.ObjectMapper;
 @Component
 public class SecurityErrorWriter implements AuthenticationEntryPoint, AccessDeniedHandler {
 
+  private static final Logger LOGGER = LoggerFactory.getLogger(SecurityErrorWriter.class);
+
   private final ObjectMapper objectMapper;
 
   public SecurityErrorWriter(ObjectMapper objectMapper) {
@@ -27,6 +33,7 @@ public class SecurityErrorWriter implements AuthenticationEntryPoint, AccessDeni
   public void commence(
       HttpServletRequest request, HttpServletResponse response, AuthenticationException exception)
       throws IOException {
+    logPaymentWebhookSecurityFailure(request, 401, exception);
     write(request, response, 401, "AUTHENTICATION_REQUIRED", "Autenticação necessária.");
   }
 
@@ -34,7 +41,48 @@ public class SecurityErrorWriter implements AuthenticationEntryPoint, AccessDeni
   public void handle(
       HttpServletRequest request, HttpServletResponse response, AccessDeniedException exception)
       throws IOException {
+    logPaymentWebhookSecurityFailure(request, 403, exception);
     write(request, response, 403, "ACTION_NOT_ALLOWED", "Ação não permitida.");
+  }
+
+  private void logPaymentWebhookSecurityFailure(
+      HttpServletRequest request, int status, RuntimeException exception) {
+    String requestUri = request.getRequestURI();
+    Object errorUriAttribute = request.getAttribute(RequestDispatcher.ERROR_REQUEST_URI);
+    String errorUri = errorUriAttribute instanceof String value ? value : "";
+    Object errorExceptionAttribute = request.getAttribute(RequestDispatcher.ERROR_EXCEPTION);
+    Throwable originalException = rootCause(errorExceptionAttribute);
+    String errorExceptionType =
+        originalException == null ? "unavailable" : originalException.getClass().getSimpleName();
+    String sqlState =
+        originalException instanceof SQLException sql ? sql.getSQLState() : "unavailable";
+    int sqlErrorCode = originalException instanceof SQLException sql ? sql.getErrorCode() : 0;
+    boolean webhookRequest = isPaymentWebhookUri(requestUri);
+    boolean webhookErrorDispatch = !webhookRequest && isPaymentWebhookUri(errorUri);
+    if (webhookRequest || webhookErrorDispatch) {
+      LOGGER.warn(
+          "payment_webhook_security_failure status={} dispatch={} error_target={} exception_type={} original_exception_type={} original_sql_state={} original_sql_error_code={}",
+          status,
+          request.getDispatcherType().name(),
+          webhookErrorDispatch,
+          exception.getClass().getSimpleName(),
+          errorExceptionType,
+          sqlState == null ? "unavailable" : sqlState,
+          sqlErrorCode);
+    }
+  }
+
+  private Throwable rootCause(Object value) {
+    if (!(value instanceof Throwable failure)) return null;
+    Throwable root = failure;
+    for (int depth = 0; depth < 8 && root.getCause() != null && root.getCause() != root; depth++) {
+      root = root.getCause();
+    }
+    return root;
+  }
+
+  private boolean isPaymentWebhookUri(String uri) {
+    return uri.matches(".*/api/v1/webhooks/payments/[a-z0-9][a-z0-9._-]{0,47}");
   }
 
   private void write(
