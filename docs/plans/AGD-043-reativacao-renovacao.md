@@ -95,7 +95,7 @@
 | Schema V37 | `TenantPersistenceIT` | Fresh, V36→V37, validate/rerun/grants mínimos e legado sem snapshot falha sem reparo | 39 integrações PostgreSQL passaram, incluindo upgrade, validate/rerun, grant por coluna e preflight fail-closed |
 | Corridas temporais de AGD-042 | `BillingWebhookIT` | Igualdade e espera do lock não iniciam envio; instante anterior permite uma chamada | 14 integrações passaram; fixtures incluem snapshot/conta/ref e isolam ciclo de outros tenants sem reduzir estado/transport assertions |
 | Suíte completa backend | `env JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify`, JDK 21 | Todos os testes unitários e Testcontainers passam | Passou: 80 unitários/arquiteturais e 277 integrações PostgreSQL; 0 falhas, erros ou skips |
-| CI sobre base PR #24 | App CI/CodeQL push e PR | Jobs concluídos; falha de segurança herdada do pin Keycloak explicitamente separada | Pendente de publicação do SHA dependente; não considerar o scan da imagem aprovado |
+| CI sobre base PR #24 | App CI/CodeQL push e PR | Jobs concluídos; falha de segurança herdada do pin Keycloak explicitamente separada | No SHA inicial `d306db1`, CodeQL, frontend e secret scans passaram; security falhou no scan Keycloak herdado. Browser E2E encontrou fixture SQL sem `provider_account_id`, corrigida no script; novo CI pendente para confirmar. Não considerar o scan da imagem aprovado |
 
 ## Retomada
 

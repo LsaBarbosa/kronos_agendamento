@@ -3139,7 +3139,7 @@ try {
     if (!lateRecoveryDom.attempts?.includes('Motivo: tentativa anterior vencida e nunca iniciada') || !lateRecoveryDom.unknown || !lateRecoveryDom.scheduled) {
         throw new Error(`Estados persistidos de recuperação/ambiguidade não apareceram corretamente após reload: ${JSON.stringify(lateRecoveryDom)}`);
     }
-    queryPostgres(`UPDATE agendamento.billing_dunning_attempt a SET state = 'ACCEPTED', provider_code = 'synthetic', provider_reference = 'transport-accepted-only', last_error_code = NULL FROM agendamento.billing_dunning_cycle c WHERE a.cycle_id = c.cycle_id AND a.tenant_id = c.tenant_id AND c.tenant_id = '${authenticatedSession.tenantId}' AND c.subscription_id = '${activeTrial.subscriptionId}' AND a.logical_sequence = 3`, appEnvironment);
+    queryPostgres(`UPDATE agendamento.billing_dunning_attempt a SET state = 'ACCEPTED', provider_code = 'synthetic', provider_account_id = 'e2e-only', provider_reference = 'transport-accepted-only', last_error_code = NULL FROM agendamento.billing_dunning_cycle c WHERE a.cycle_id = c.cycle_id AND a.tenant_id = c.tenant_id AND c.tenant_id = '${authenticatedSession.tenantId}' AND c.subscription_id = '${activeTrial.subscriptionId}' AND a.logical_sequence = 3`, appEnvironment);
     await command('Page.reload');
     await waitForText('Aceita pelo transporte; pagamento ainda não confirmado', evaluate);
     if (!await evaluate("document.body.innerText.includes('pagamento ainda não confirmado')")) {
