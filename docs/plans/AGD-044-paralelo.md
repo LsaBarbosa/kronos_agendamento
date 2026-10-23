@@ -104,6 +104,13 @@ Qualquer divergência de contrato precisa ser comunicada em novo commit e descri
 - E2E OIDC compartilhado ainda não foi alterado nem executado. Será atualizado após a entrega UI, com ambiente descartável e adapter controlado apenas no perfil de teste; não usar o Compose compartilhado.
 - No head documental `bc19d98d2d6d783fb79b4e56594acb78097f4ec0`, App CI push/PR concluiu todos os jobs: verify, frontend, E2E OIDC e secret scans passaram; security falhou somente no scan Keycloak conhecido. CodeQL push/PR passou com analisadores concluídos. O E2E atual não cobre o módulo de exportação. A worktree frontend ainda não tem alterações e os checks do SHA final integrado continuam pendentes.
 
+### Continuação de coordenação — CI do head 05c4d11
+
+- Estado confirmado via GitHub: PR #26 está aberto/draft, `agd-044-exportacoes` → `agd-043-reativacao-renovacao`, head `05c4d1154ab2623eb9ae49e837731a68aa164216`, base SHA `78921069f97e0b590511c99a1e0154e926d88d16`, mergeable e sem reviews/comentários pendentes. Não houve integração dos PRs anteriores.
+- A worktree `/tmp/kronos-agd044-ui` continua limpa no commit contratual `60c55b57bed37f7c45644ac7c0b4ece32f2b117a`; o GitHub ainda não possui ref remota `agd-044-exportacoes-ui`. Os quatro caminhos exclusivos do implementador frontend não foram alterados. Aguardamos handoff explícito para integrar; não presumir entrega a partir do CI frontend genérico.
+- No head atual, todos os workflows/jobs/check-runs terminaram: App CI push [39963379453](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39963379453) e PR [39963386217](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39963386217) passaram verify, frontend, E2E OIDC geral e secret scans; ambos falharam exclusivamente no scan Keycloak conhecido. CodeQL push [39963379375](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39963379375) e PR [39963386377](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39963386377) passaram. E2E de exportação e CI do conjunto integrado permanecem pendentes.
+- Revisores independentes não puderam iniciar porque o ambiente atingiu o limite de threads. A revisão final disponível é sequencial e não equivale à aprovação humana do GitHub.
+
 ## Retomada
 
 Trabalho backend continua em `/tmp/kronos-agd044`, branch `agd-044-exportacoes`. Não trocar a branch nem editar os arquivos de frontend do acordo. Base e PRs predecessores permanecem sem merge.

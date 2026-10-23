@@ -982,3 +982,16 @@ No SHA funcional `0fa225ac92dbc46233993bc578787b230c1c0115`, App CI push [393364
 - App CI push [39962375090](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39962375090) e PR [39962383284](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39962383284) concluíram todos os jobs/check-runs. `verify`, `frontend`, `oidc-browser-e2e` e secret scans passaram; `security` falhou exclusivamente no scan Keycloak conhecido. O E2E browser executado ainda não cobre o componente de exportações.
 - CodeQL push [39962375112](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39962375112) e PR [39962383298](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39962383298) concluíram success nos dois analisadores. O resumo funcional passa, mas App CI integral continua bloqueado por security.
 - Este head difere do código funcional `04c0530` apenas pelos registros documentais. A combinação final após a integração UI exigirá nova validação e workflows.
+
+#### CI do head documental `05c4d1154ab2623eb9ae49e837731a68aa164216`
+
+- App CI push [39963379453](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39963379453) e PR [39963386217](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39963386217) concluíram todos os jobs/check-runs. `verify`, `frontend`, E2E OIDC geral e secret scans passaram; `security` falhou somente no step `Scan pinned Keycloak image`, pelo bloqueio herdado já documentado. O E2E OIDC não exerce o módulo de exportação ainda ausente.
+- CodeQL push [39963379375](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39963379375) e PR [39963386377](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39963386377) concluíram success nos analisadores Java/Kotlin e JavaScript/TypeScript. O App CI integral não está verde.
+- Este SHA altera somente documentação em relação ao código `04c0530`; CI de conteúdo com UI integrada permanece pendente.
+
+#### CI terminal no head `05c4d1154ab2623eb9ae49e837731a68aa164216`
+
+- App CI push [39963379453](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39963379453) e PR [39963386217](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39963386217) terminaram com falha exclusivamente no job `security`, step `Scan pinned Keycloak image`. Todos os outros jobs/check-runs terminaram: verify PostgreSQL, frontend, OIDC browser E2E geral e secret scans passaram. Esse E2E não inclui a interface de exportações.
+- CodeQL push [39963379375](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39963379375) e PR [39963386377](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39963386377) concluíram `success`; os analisadores Java/Kotlin e JavaScript/TypeScript estão completos.
+- O workflow `App CI` não está integralmente verde por causa do bloqueio Keycloak conhecido, preservado sem alteração de pin, scanner, severidade ou suppressions. O PR #26 permanece draft. A validação combinada de App/E2E de exportação aguarda a branch UI; o E2E OIDC existente não deve ser contado como cobertura do componente.
+- Limite de revisão: os agentes independentes não puderam ser iniciados porque o ambiente atingiu o limite de threads. Revisão sequencial do backend está registrada; não representa aprovação humana.
