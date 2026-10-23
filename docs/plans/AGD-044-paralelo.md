@@ -28,7 +28,7 @@ Inclui filtros documentados de período, status, serviço e categoria disponíve
 
 OpenAPI em `docs/openapi/admin-exports.yaml`:
 
-- `POST /api/v1/admin/exports`: body `format`, `category`, `filters`; `Idempotency-Key` obrigatória e escopada pelo tenant autenticado. Mesmo corpo/chave recupera `exportId` original; digest divergente retorna `IDEMPOTENCY_KEY_REUSED`; outra exportação ativa retorna `EXPORT_ALREADY_ACTIVE`.
+- `POST /api/v1/admin/exports`: body `format`, `category`, `filters`; `Idempotency-Key` obrigatória e escopada pelo tenant autenticado. Mesmo corpo/chave recupera `exportId` original; digest divergente retorna `IDEMPOTENCY_KEY_REUSED`; outra exportação ativa retorna `EXPORT_ALREADY_ACTIVE`. Filtros usam datas locais inclusivas, janela máxima 366, lista de status única com no máximo cinco valores.
 - `GET /api/v1/admin/exports/{exportId}`: estado minimizado e critérios aceitos; IDs inexistentes/alheios retornam resposta não reveladora.
 - `POST /api/v1/admin/exports/{exportId}/download-token`: emite handle opaco em corpo `no-store`, vinculado a export/tenant e até `expiresAt`; o handle não substitui sessão/associação atual.
 - `GET /api/v1/admin/exports/{exportId}/content`: exige sessão administrativa atual, associação ativa, tenant correspondente, handle válido, estado `AVAILABLE` e `now < expiresAt`. Resposta privada `no-store`; sem acesso após expiração, mesmo se remoção física atrasar.
@@ -93,7 +93,7 @@ Qualquer divergência de contrato precisa ser comunicada em novo commit e descri
 
 ## Validações e integração paralela
 
-- Testes unitários cobrem quoting RFC 4180, neutralização de fórmula após whitespace e legibilidade/texto do PDF.
+- Testes unitários cobrem quoting RFC 4180, neutralização de fórmula após whitespace, controles, espaço Unicode e caracteres de formatação invisíveis; datas cobrem limite de 366 e janela invertida/excessiva. PDF é validado quanto à legibilidade/texto.
 - Testes PostgreSQL/Testcontainers cobrem isolamento, associação revogada, corrida de um job ativo, idempotência/replay, download, expiração, rollback, grants, retry transitório, indisponibilidade de storage e limpeza concorrente com escrita de worker obsoleto. O filtro local considera interseção da ocupação `[startsAt, occupiedUntil)` com a janela pedida, inclusive quando o atendimento começou antes dela.
 - A execução Testcontainers inicial foi bloqueada pelo socket no sandbox. Execuções autorizadas alcançaram PostgreSQL 16.13 e aplicaram V1–V41. `TenantPersistenceIT` passou 43 testes e a execução focada final de `ExportLifecycleIT` passou 16 testes, incluindo a concorrência sincronizada do fencing de limpeza. A suíte completa precisa ser repetida após integrar a UI.
 - A worktree UI permanece separada em `/tmp/kronos-agd044-ui`, branch `agd-044-exportacoes-ui`; não editar seus quatro arquivos exclusivos. O coordenador só integrará após receber commits e relatório explícito.

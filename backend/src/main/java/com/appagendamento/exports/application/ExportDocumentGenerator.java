@@ -75,7 +75,11 @@ public class ExportDocumentGenerator {
     int index = 0;
     while (index < value.length()) {
       int codePoint = value.codePointAt(index);
-      if (!Character.isWhitespace(codePoint) && !Character.isISOControl(codePoint)) break;
+      int type = Character.getType(codePoint);
+      if (!Character.isWhitespace(codePoint)
+          && !Character.isSpaceChar(codePoint)
+          && !Character.isISOControl(codePoint)
+          && type != Character.FORMAT) break;
       index += Character.charCount(codePoint);
     }
     if (index < value.length() && "=+-@".indexOf(value.charAt(index)) >= 0) {

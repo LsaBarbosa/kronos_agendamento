@@ -47,6 +47,11 @@ class ExportDocumentGeneratorTest {
   }
 
   @Test
+  void csvNeutralizesFormulaAfterUnicodeSpaceAndFormatCharacters() {
+    assertThat(ExportDocumentGenerator.csvSafe("\u00a0\ufeff=1+1")).isEqualTo("'\u00a0\ufeff=1+1");
+  }
+
+  @Test
   void pdfIsReadableAndContainsTenantScopedAppointmentSummary() throws Exception {
     var snapshot =
         new ExportSnapshot(
