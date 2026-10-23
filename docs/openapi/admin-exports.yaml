@@ -54,6 +54,35 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ApiError' }
+  /api/v1/admin/exports/active:
+    get:
+      operationId: getActiveAdminExport
+      summary: Recuperar a exportação ativa do tenant autenticado
+      description: >-
+        Resolve tenant e ator da sessão administrativa atual e revalida associação
+        ativa. Retorna REQUESTED, PROCESSING, RETRY_WAIT ou AVAILABLE ainda não
+        expirado. Retorna 204 sem corpo se não houver job ativo; o job pode terminar
+        entre chamadas independentes. A consulta é somente leitura e não inicia
+        outra exportação. Cache é proibido.
+      security:
+        - adminSession: []
+      responses:
+        '200':
+          description: Job ativo minimizado do tenant autenticado
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+            ETag:
+              description: ETag forte de versão do job, decimal entre aspas (ex. "4"); não é o ETag do artefato.
+              schema: { type: string, pattern: '^"[0-9]+"$', example: '"4"' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExportJob' }
+        '204':
+          description: Nenhuma exportação ativa; resposta sem corpo
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/admin/exports/{exportId}:
     get:
       operationId: getAdminExport
@@ -67,6 +96,9 @@ paths:
           description: Estado e snapshot do próprio tenant, sem conteúdo do arquivo
           headers:
             Cache-Control: { schema: { type: string, const: no-store } }
+            ETag:
+              description: ETag forte da versão do job, decimal entre aspas (ex. "4"); use em If-Match para DELETE.
+              schema: { type: string, pattern: '^"[0-9]+"$', example: '"4"' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ExportJob' }
@@ -89,9 +121,14 @@ paths:
           name: If-Match
           required: true
           description: Versão ETag do job consultado; uma repetição já terminal é idempotente.
-          schema: { type: string }
+          schema: { type: string, pattern: '^"[0-9]+"$', example: '"4"' }
       responses:
         '204': { description: Exportação expirada ou já expirada pelo mesmo tenant }
+        '400':
+          description: If-Match ausente ou inválido; weak tag, wildcard e lista são rejeitados.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
