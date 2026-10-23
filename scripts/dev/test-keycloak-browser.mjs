@@ -775,8 +775,41 @@ try {
     if (exportRows !== 1 || exportEffects !== '1:1:1:1') {
         throw new Error(`Retry duplicou exportação ou efeitos transacionais: ${JSON.stringify({exportRows, exportEffects})}`);
     }
+    const exportReloadScript = await command('Page.addScriptToEvaluateOnNewDocument', {
+        source: `(() => {
+          const originalFetch = window.fetch.bind(window);
+          window.__agd044ExportReloadTrace = [];
+          window.fetch = async (input, init = {}) => {
+            const response = await originalFetch(input, init);
+            const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+            if (url.pathname.startsWith('/api/v1/admin/exports')) {
+              const entry = {method:(init.method || (input instanceof Request ? input.method : 'GET')).toUpperCase(), path:url.pathname, status:response.status, state:null};
+              if (entry.method === 'GET' && response.ok && /\\/api\\/v1\\/admin\\/exports\\/[^/]+$/.test(url.pathname)) {
+                const body = await response.clone().json().catch(() => null);
+                entry.state = body?.state ?? null;
+              }
+              window.__agd044ExportReloadTrace.push(entry);
+            }
+            return response;
+          };
+        })();`,
+    });
     await command('Page.reload', {ignoreCache: true});
-    await waitForText('Arquivo disponível', evaluate);
+    try {
+        await waitForText('Arquivo disponível', evaluate);
+    } catch (cause) {
+        const reloadDiagnostic = await evaluate(`({
+          url:location.pathname,
+          authenticated:document.body.innerText.includes('Sessão administrativa ativa.'),
+          exportContext:JSON.parse(sessionStorage.getItem('agd044.export-context.v1:' + encodeURIComponent(${JSON.stringify(authenticatedSession.tenantId)})) || 'null'),
+          exportCard:document.querySelector('.export-center__job')?.innerText ?? null,
+          buttons:[...document.querySelectorAll('.export-center__job button')].map(button => button.innerText.trim()),
+          trace:window.__agd044ExportReloadTrace ?? []
+        })`);
+        throw new Error(`Reload não recuperou a exportação AVAILABLE no DOM: ${JSON.stringify(reloadDiagnostic)}`, {cause});
+    }
+    await command('Page.removeScriptToEvaluateOnNewDocument', {identifier: exportReloadScript.identifier});
+    console.log('Browser: reload recuperou o mesmo job disponível no DOM com contexto de sessão e GET tenant-scoped.');
     const recoveredExportId = await evaluate(`JSON.parse(sessionStorage.getItem('agd044.export-context.v1:' + encodeURIComponent(${JSON.stringify(authenticatedSession.tenantId)}))).exportId`);
     const recoveredExportContext = await evaluate(`sessionStorage.getItem('agd044.export-context.v1:' + encodeURIComponent(${JSON.stringify(authenticatedSession.tenantId)}))`);
     if (
