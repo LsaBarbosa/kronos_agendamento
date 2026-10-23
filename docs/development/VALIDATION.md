@@ -1012,3 +1012,9 @@ No SHA funcional `0fa225ac92dbc46233993bc578787b230c1c0115`, App CI push [393364
 
 - App CI push [39966184039](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39966184039) e PR [39966190600](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39966190600) concluíram todos os jobs/check-runs. Verify/Testcontainers, frontend, E2E OIDC geral e secret scans passaram; `security` falhou exclusivamente em `Scan pinned Keycloak image`. CodeQL push [39966183959](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39966183959) e PR [39966190655](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39966190655) concluíram success nos dois analisadores.
 - O E2E OIDC executado não inclui a tela/fluxo de exportação. Os resultados são de CI funcional da base e não substituem os testes frontend/browser do incremento.
+
+#### CI terminal no head documental `e810d82d6c0c43626ae41d7b5d5d13c23745df6c`
+
+- App CI push [39967196980](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39967196980) e PR [39967206406](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39967206406) concluíram `completed/failure`, com todos os jobs/check-runs terminais. Verify/Testcontainers, frontend, OIDC E2E geral e secret scans passaram; `security` falhou só em `Scan pinned Keycloak image` (bloqueio conhecido).
+- CodeQL push [39967197028](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39967197028) e PR [39967205297](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39967205297) concluíram success com os dois analisadores.
+- E2E OIDC geral não exerce exportações. A worktree foi liberada ao implementador UI com contrato/agreement commitado; teste do componente, composição em App e E2E de exportação aguardam entrega `FRONTEND PRONTO PARA INTEGRAÇÃO`.
