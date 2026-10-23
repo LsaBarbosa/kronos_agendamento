@@ -73,7 +73,7 @@ paths:
             Cache-Control: { schema: { type: string, const: no-store } }
             ETag:
               description: ETag forte de versão do job, decimal entre aspas (ex. "4"); não é o ETag do artefato.
-              schema: { type: string, pattern: '^"[0-9]+"$', example: '"4"' }
+              schema: { type: string, pattern: '^"[1-9][0-9]*"$', example: '"4"' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ExportJob' }
@@ -97,8 +97,8 @@ paths:
           headers:
             Cache-Control: { schema: { type: string, const: no-store } }
             ETag:
-              description: ETag forte da versão do job, decimal entre aspas (ex. "4"); use em If-Match para DELETE.
-              schema: { type: string, pattern: '^"[0-9]+"$', example: '"4"' }
+              description: ETag forte da versão do job, decimal positivo canônico entre aspas (ex. "4"); use literalmente em If-Match para DELETE.
+              schema: { type: string, pattern: '^"[1-9][0-9]*"$', example: '"4"' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ExportJob' }
@@ -120,12 +120,12 @@ paths:
         - in: header
           name: If-Match
           required: true
-          description: Versão ETag do job consultado; uma repetição já terminal é idempotente.
-          schema: { type: string, pattern: '^"[0-9]+"$', example: '"4"' }
+          description: Copie literalmente o ETag forte do GET individual ou /active. Somente decimal positivo canônico entre aspas é aceito; weak tag, wildcard, lista, ausente e formato inválido retornam INVALID_IF_MATCH. Uma repetição já terminal continua idempotente após autorização atual.
+          schema: { type: string, pattern: '^"[1-9][0-9]*"$', example: '"4"' }
       responses:
         '204': { description: Exportação expirada ou já expirada pelo mesmo tenant }
         '400':
-          description: If-Match ausente ou inválido; weak tag, wildcard e lista são rejeitados.
+          description: If-Match ausente ou inválido; responde INVALID_IF_MATCH. weak tag, wildcard, lista e formato não canônico são rejeitados.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ApiError' }
