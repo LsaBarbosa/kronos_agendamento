@@ -75,6 +75,23 @@ public class AdminExportController {
         .body(ExportJobResponse.from(job));
   }
 
+  @GetMapping("/api/v1/admin/exports/active")
+  ResponseEntity<ExportJobResponse> active(@AuthenticationPrincipal AuthenticatedAdmin actor) {
+    return getExport
+        .active(actor)
+        .map(
+            job ->
+                ResponseEntity.ok()
+                    .header("Cache-Control", "no-store")
+                    .eTag('"' + Long.toString(job.version()) + '"')
+                    .body(ExportJobResponse.from(job)))
+        .orElseGet(
+            () ->
+                ResponseEntity.<ExportJobResponse>noContent()
+                    .header("Cache-Control", "no-store")
+                    .build());
+  }
+
   @PostMapping("/api/v1/admin/exports/{exportId}/download-token")
   ResponseEntity<DownloadHandleResponse> issueHandle(
       @AuthenticationPrincipal AuthenticatedAdmin actor, @PathVariable UUID exportId) {
@@ -109,7 +126,7 @@ public class AdminExportController {
   ResponseEntity<Void> expire(
       @AuthenticationPrincipal AuthenticatedAdmin actor,
       @PathVariable UUID exportId,
-      @RequestHeader("If-Match") String ifMatch) {
+      @RequestHeader(value = "If-Match", required = false) String ifMatch) {
     long expectedVersion = parseVersion(ifMatch);
     expireExport.execute(actor, exportId, expectedVersion);
     return ResponseEntity.noContent().header("Cache-Control", "no-store").build();
@@ -136,14 +153,13 @@ public class AdminExportController {
   }
 
   private static long parseVersion(String header) {
+    if (header == null || !header.matches("\\\"[1-9][0-9]*\\\"")) {
+      throw new InvalidIfMatchException();
+    }
     try {
-      String value = header.trim();
-      if (value.startsWith("\"")) value = value.substring(1, value.length() - 1);
-      long parsed = Long.parseLong(value);
-      if (parsed < 1) throw new NumberFormatException();
-      return parsed;
+      return Long.parseLong(header.substring(1, header.length() - 1));
     } catch (RuntimeException exception) {
-      throw new com.appagendamento.exports.domain.InvalidExportRequestException();
+      throw new InvalidIfMatchException();
     }
   }
 }

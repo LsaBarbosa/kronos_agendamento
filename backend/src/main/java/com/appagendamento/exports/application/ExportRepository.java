@@ -24,6 +24,8 @@ public interface ExportRepository {
 
   Optional<ExportJobView> find(UUID tenantId, UUID exportId);
 
+  Optional<ExportJobView> findActive(UUID tenantId, Instant now);
+
   Optional<ExportDownloadArtifact> authorizeDownload(
       UUID tenantId, UUID actorId, UUID exportId, String handleDigest, Instant now);
 

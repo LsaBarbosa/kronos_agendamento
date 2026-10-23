@@ -34,6 +34,7 @@ public class RequestExport {
   private final ExportCryptography cryptography;
   private final ExportArtifactStore artifactStore;
   private final ExportConfiguration configuration;
+  private final ExpireExports expirations;
   private final AuditEventRecorder audit;
   private final OutboxEventRecorder outbox;
   private final AuditCorrelationId correlationId;
@@ -49,6 +50,7 @@ public class RequestExport {
       ExportCryptography cryptography,
       ExportArtifactStore artifactStore,
       ExportConfiguration configuration,
+      ExpireExports expirations,
       AuditEventRecorder audit,
       OutboxEventRecorder outbox,
       AuditCorrelationId correlationId,
@@ -61,6 +63,7 @@ public class RequestExport {
     this.cryptography = cryptography;
     this.artifactStore = artifactStore;
     this.configuration = configuration;
+    this.expirations = expirations;
     this.audit = audit;
     this.outbox = outbox;
     this.correlationId = correlationId;
@@ -111,6 +114,7 @@ public class RequestExport {
       throw new ExportUnavailableException();
     }
     java.time.Instant snapshotAt = clock.instant().truncatedTo(ChronoUnit.MICROS);
+    expirations.expireDue(actor.tenantId(), snapshotAt, 50);
     UUID exportId = UUID.randomUUID();
     var snapshot = snapshots.capture(actor.tenantId(), filters);
     if (snapshot.rows().size() > configuration.maximumRows()) {

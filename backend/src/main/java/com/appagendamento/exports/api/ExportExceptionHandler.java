@@ -41,6 +41,12 @@ public class ExportExceptionHandler {
         HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "Confira formato, categoria e filtros.");
   }
 
+  @ExceptionHandler(InvalidIfMatchException.class)
+  ResponseEntity<ApiErrorResponse> invalidIfMatch(InvalidIfMatchException exception) {
+    return error(
+        HttpStatus.BAD_REQUEST, "INVALID_IF_MATCH", "If-Match deve conter o ETag forte do job.");
+  }
+
   @ExceptionHandler(ExportAlreadyActiveException.class)
   ResponseEntity<ApiErrorResponse> active(ExportAlreadyActiveException exception) {
     return error(HttpStatus.CONFLICT, "EXPORT_ALREADY_ACTIVE", "Já existe uma exportação ativa.");

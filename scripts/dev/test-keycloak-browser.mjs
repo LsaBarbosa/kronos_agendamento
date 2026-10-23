@@ -610,6 +610,160 @@ try {
     );
     await navigate('http://localhost:5173/admin', command, evaluate);
     await waitForText('Estado: Publicado', evaluate);
+    await waitForText('Exportar agendamentos', evaluate);
+    await setFieldByLabel('Data inicial', publicDate, evaluate);
+    await setFieldByLabel('Data final', publicDate, evaluate);
+    await setFieldByLabel('ID do serviço (opcional)', publicService.serviceId, evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__exportPostAttempts = [];
+      window.fetch = async (input, init = {}) => {
+        const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+        const method = (init.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+        if (url.pathname === '/api/v1/admin/exports' && method === 'POST') {
+          const headers = new Headers(input instanceof Request ? input.headers : undefined);
+          new Headers(init.headers).forEach((value, name) => headers.set(name, value));
+          window.__exportPostAttempts.push({body: init.body, key: headers.get('Idempotency-Key')});
+          const response = await originalFetch(input, init);
+          if (window.__exportPostAttempts.length === 1 && response.status === 202) {
+            window.__exportFirstResponseLost = true;
+            throw new TypeError('Simulated export response loss after commit');
+          }
+          return response;
+        }
+        const response = await originalFetch(input, init);
+        if (url.pathname.endsWith('/download-token') && response.ok) {
+          window.__exportDownloadHandle = (await response.clone().json()).downloadHandle;
+        }
+        if (url.pathname.endsWith('/content')) {
+          window.__exportContentStatus = response.status;
+          if (response.ok) window.__exportContentText = await response.clone().text();
+        }
+        if (method === 'DELETE' && /\\/api\\/v1\\/admin\\/exports\\//.test(url.pathname)) {
+          window.__exportIfMatch = new Headers(init.headers).get('If-Match');
+          window.__exportExpireStatus = response.status;
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Solicitar exportação', evaluate);
+    await waitUntil(() => evaluate('window.__exportFirstResponseLost === true'));
+    await waitForText('O resultado da solicitação é incerto.', evaluate);
+    const firstExportAttempt = await evaluate('window.__exportPostAttempts[0]');
+    if (!firstExportAttempt?.key || !firstExportAttempt.body) {
+        throw new Error('A primeira intenção de exportação não preservou corpo e chave.');
+    }
+    await clickButtonByText('Recuperar solicitação pendente', evaluate);
+    await waitForText('Solicitação aceita.', evaluate);
+    await waitUntil(async () => evaluate('window.__exportPostAttempts.length === 2'));
+    const exportAttempts = await evaluate('window.__exportPostAttempts');
+    if (
+        exportAttempts[1].key !== firstExportAttempt.key ||
+        exportAttempts[1].body !== firstExportAttempt.body ||
+        JSON.parse(exportAttempts[1].body).filters.from !== publicDate ||
+        JSON.parse(exportAttempts[1].body).filters.to !== publicDate
+    ) {
+        throw new Error(`Retry de exportação mudou a intenção original: ${JSON.stringify(exportAttempts)}`);
+    }
+    await waitForText('Arquivo disponível', evaluate);
+    const activeExport = await evaluate(`(async () => {
+      const response = await fetch('/api/v1/admin/exports/active', {credentials:'same-origin', cache:'no-store'});
+      const body = response.status === 204 ? null : await response.json();
+      if (body) {
+        const individual = await fetch('/api/v1/admin/exports/' + body.exportId, {credentials:'same-origin', cache:'no-store'});
+        return {status:response.status, cache:response.headers.get('Cache-Control'), etag:response.headers.get('ETag'), body, individualStatus:individual.status, individualEtag:individual.headers.get('ETag'), individualBody:await individual.json()};
+      }
+      return {status:response.status, cache:response.headers.get('Cache-Control'), body};
+    })()`);
+    if (
+        activeExport.status !== 200 ||
+        !activeExport.cache?.includes('no-store') ||
+        !/^"[1-9][0-9]*"$/.test(activeExport.etag ?? '') ||
+        activeExport.individualStatus !== 200 ||
+        activeExport.etag !== activeExport.individualEtag ||
+        activeExport.body.exportId !== activeExport.individualBody.exportId ||
+        activeExport.body.state !== 'AVAILABLE' ||
+        'tenantId' in activeExport.body ||
+        'requestedByAdminId' in activeExport.body ||
+        'snapshotCiphertext' in activeExport.body
+    ) {
+        throw new Error(`GET /active divergiu do contrato minimizado/ETag: ${JSON.stringify(activeExport)}`);
+    }
+    const exportRows = Number(queryPostgres(
+        `SELECT count(*) FROM agendamento.export_job WHERE tenant_id = '${authenticatedSession.tenantId}' AND export_id = '${activeExport.body.exportId}' AND state = 'AVAILABLE' AND category = 'APPOINTMENTS'`,
+        appEnvironment,
+    ));
+    const exportEffects = queryPostgres(
+        `SELECT (SELECT count(*) FROM agendamento.audit_event WHERE target_id = '${activeExport.body.exportId}' AND action = 'EXPORT_REQUESTED') || ':' || (SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = '${activeExport.body.exportId}' AND event_type = 'ExportRequested') || ':' || (SELECT count(*) FROM agendamento.audit_event WHERE target_id = '${activeExport.body.exportId}' AND action = 'EXPORT_AVAILABLE') || ':' || (SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = '${activeExport.body.exportId}' AND event_type = 'ExportAvailable')`,
+        appEnvironment,
+    );
+    if (exportRows !== 1 || exportEffects !== '1:1:1:1') {
+        throw new Error(`Retry duplicou exportação ou efeitos transacionais: ${JSON.stringify({exportRows, exportEffects})}`);
+    }
+    await command('Page.reload', {ignoreCache: true});
+    await waitForText('Arquivo disponível', evaluate);
+    const recoveredExportId = await evaluate(`JSON.parse(sessionStorage.getItem('agd044.export-context.v1:' + encodeURIComponent(${JSON.stringify(authenticatedSession.tenantId)}))).exportId`);
+    const recoveredExportContext = await evaluate(`sessionStorage.getItem('agd044.export-context.v1:' + encodeURIComponent(${JSON.stringify(authenticatedSession.tenantId)}))`);
+    if (
+        recoveredExportId !== activeExport.body.exportId ||
+        recoveredExportContext.includes('Visitante de demonstração') ||
+        recoveredExportContext.includes('+5511999991234')
+    ) {
+        throw new Error('Reload não recuperou o mesmo job persistido da exportação.');
+    }
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (input, init = {}) => {
+        const response = await originalFetch(input, init);
+        const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+        if (url.pathname.endsWith('/download-token') && response.ok) window.__exportDownloadHandle = (await response.clone().json()).downloadHandle;
+        if (url.pathname.endsWith('/content')) {
+          window.__exportContentStatus = response.status;
+          if (response.ok) window.__exportContentText = await response.clone().text();
+        }
+        if (init.method === 'DELETE' && /\\/api\\/v1\\/admin\\/exports\\//.test(url.pathname)) {
+          window.__exportIfMatch = new Headers(init.headers).get('If-Match');
+          window.__exportExpireStatus = response.status;
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Baixar arquivo', evaluate);
+    await waitForText('Download iniciado.', evaluate);
+    const exportContent = await evaluate(`({text:window.__exportContentText, status:window.__exportContentStatus, handle:window.__exportDownloadHandle})`);
+    if (
+        exportContent.status !== 200 ||
+        typeof exportContent.handle !== 'string' ||
+        !exportContent.text?.includes('appointment_id') ||
+        !exportContent.text.includes(publicService.name) ||
+        !exportContent.text.includes(appointmentIdInEachTab[0]) ||
+        exportContent.text.includes('Visitante de demonstração') ||
+        exportContent.text.includes('+5511999991234')
+    ) {
+        throw new Error('CSV baixado não corresponde ao snapshot autorizado ou contém PII.');
+    }
+    await clickButtonByText('Encerrar acesso agora', evaluate);
+    await waitForText('O acesso a esta exportação foi encerrado.', evaluate);
+    const afterEarlyExpiry = await evaluate(`fetch('/api/v1/admin/exports/${activeExport.body.exportId}/content', {credentials:'same-origin', headers:{'X-Export-Download-Handle':window.__exportDownloadHandle}, cache:'no-store'}).then(async response => ({status:response.status, cache:response.headers.get('Cache-Control')}))`);
+    const noActiveAfterExpiry = await evaluate(`fetch('/api/v1/admin/exports/active', {credentials:'same-origin', cache:'no-store'}).then(async response => ({status:response.status, body:await response.text(), cache:response.headers.get('Cache-Control')}))`);
+    const expiredExportAudit = queryPostgres(
+        `SELECT (SELECT count(*) FROM agendamento.audit_event WHERE target_id = '${activeExport.body.exportId}' AND action = 'EXPORT_EXPIRED') || ':' || (SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = '${activeExport.body.exportId}' AND event_type = 'ExportExpired')`,
+        appEnvironment,
+    );
+    const expiryDom = await evaluate(`({ifMatch:window.__exportIfMatch, status:window.__exportExpireStatus, state:document.querySelector('.export-center__job h3')?.innerText})`);
+    if (
+        expiryDom.ifMatch !== activeExport.etag ||
+        expiryDom.status !== 204 ||
+        expiryDom.state !== 'Acesso expirado' ||
+        afterEarlyExpiry.status !== 410 ||
+        noActiveAfterExpiry.status !== 204 ||
+        noActiveAfterExpiry.body !== '' ||
+        !noActiveAfterExpiry.cache?.includes('no-store') ||
+        expiredExportAudit !== '1:1'
+    ) {
+        throw new Error(`Expiração antecipada/negação posterior não respeitou ETag e efeitos únicos: ${JSON.stringify({expiryDom, afterEarlyExpiry, noActiveAfterExpiry, expiredExportAudit})}`);
+    }
+    console.log('Browser E2E sintético: exportação solicitada pelo DOM; resposta perdida após commit recuperada com corpo/chave idênticos; worker gerou CSV AVAILABLE; reload recuperou o mesmo ID; GET /active e GET individual compartilharam ETag forte e DTO minimizado; download correspondeu ao snapshot sem PII; expiração usou If-Match literal e bloqueou conteúdo posterior. PostgreSQL confirmou job e efeitos únicos.');
     const adminAppointment = await evaluate(
         `fetch('/api/v1/admin/appointments?from=${publicDate}&to=${publicDate}&serviceId=${encodeURIComponent(publicService.serviceId)}', {credentials:'same-origin'}).then(response => response.json()).then(page => page.items.find(item => item.appointmentId === ${JSON.stringify(appointmentIdInEachTab[0])}))`,
     );

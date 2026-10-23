@@ -24,36 +24,36 @@ paths:
       security:
         - adminSession: []
       parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ExportRequest' }
+            schema: { $ref: "#/components/schemas/ExportRequest" }
       responses:
-        '202':
+        "202":
           description: Exportação aceita ou retry idempotente recuperado
           headers:
             Cache-Control: { schema: { type: string, const: no-store } }
             Location: { schema: { type: string } }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ExportJob' }
-        '400': { $ref: '#/components/responses/InvalidExportRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '409':
+              schema: { $ref: "#/components/schemas/ExportJob" }
+        "400": { $ref: "#/components/responses/InvalidExportRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
           description: >-
             EXPORT_ALREADY_ACTIVE ou IDEMPOTENCY_KEY_REUSED; a resposta contém um
             código estável e não revela job de outro tenant.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiError' }
-        '503':
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "503":
           description: Armazenamento criptografado/chave de exportação indisponível; nenhum job foi aceito.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiError' }
+              schema: { $ref: "#/components/schemas/ApiError" }
   /api/v1/admin/exports/active:
     get:
       operationId: getActiveAdminExport
@@ -67,22 +67,23 @@ paths:
       security:
         - adminSession: []
       responses:
-        '200':
+        "200":
           description: Job ativo minimizado do tenant autenticado
           headers:
             Cache-Control: { schema: { type: string, const: no-store } }
             ETag:
               description: ETag forte de versão do job, decimal entre aspas (ex. "4"); não é o ETag do artefato.
-              schema: { type: string, pattern: '^"[1-9][0-9]*"$', example: '"4"' }
+              schema:
+                { type: string, pattern: '^"[1-9][0-9]*"$', example: '"4"' }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ExportJob' }
-        '204':
+              schema: { $ref: "#/components/schemas/ExportJob" }
+        "204":
           description: Nenhuma exportação ativa; resposta sem corpo
           headers:
             Cache-Control: { schema: { type: string, const: no-store } }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
   /api/v1/admin/exports/{exportId}:
     get:
       operationId: getAdminExport
@@ -90,21 +91,22 @@ paths:
       security:
         - adminSession: []
       parameters:
-        - $ref: '#/components/parameters/ExportId'
+        - $ref: "#/components/parameters/ExportId"
       responses:
-        '200':
+        "200":
           description: Estado e snapshot do próprio tenant, sem conteúdo do arquivo
           headers:
             Cache-Control: { schema: { type: string, const: no-store } }
             ETag:
               description: ETag forte da versão do job, decimal positivo canônico entre aspas (ex. "4"); use literalmente em If-Match para DELETE.
-              schema: { type: string, pattern: '^"[1-9][0-9]*"$', example: '"4"' }
+              schema:
+                { type: string, pattern: '^"[1-9][0-9]*"$', example: '"4"' }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ExportJob' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
+              schema: { $ref: "#/components/schemas/ExportJob" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
     delete:
       operationId: expireAdminExportEarly
       summary: Expirar antecipadamente arquivo disponível do próprio tenant
@@ -116,32 +118,33 @@ paths:
       security:
         - adminSession: []
       parameters:
-        - $ref: '#/components/parameters/ExportId'
+        - $ref: "#/components/parameters/ExportId"
         - in: header
           name: If-Match
           required: true
           description: Copie literalmente o ETag forte do GET individual ou /active. Somente decimal positivo canônico entre aspas é aceito; weak tag, wildcard, lista, ausente e formato inválido retornam INVALID_IF_MATCH. Uma repetição já terminal continua idempotente após autorização atual.
           schema: { type: string, pattern: '^"[1-9][0-9]*"$', example: '"4"' }
       responses:
-        '204': { description: Exportação expirada ou já expirada pelo mesmo tenant }
-        '400':
+        "204":
+          { description: Exportação expirada ou já expirada pelo mesmo tenant }
+        "400":
           description: If-Match ausente ou inválido; responde INVALID_IF_MATCH. weak tag, wildcard, lista e formato não canônico são rejeitados.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiError' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409':
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
           description: Estado não pode ser expirado antecipadamente.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiError' }
-        '412':
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "412":
           description: Versão do job mudou; consultar novamente.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiError' }
+              schema: { $ref: "#/components/schemas/ApiError" }
   /api/v1/admin/exports/{exportId}/download-token:
     post:
       operationId: issueAdminExportDownloadHandle
@@ -154,28 +157,28 @@ paths:
       security:
         - adminSession: []
       parameters:
-        - $ref: '#/components/parameters/ExportId'
+        - $ref: "#/components/parameters/ExportId"
       responses:
-        '200':
+        "200":
           description: Handle de uso no header X-Export-Download-Handle
           headers:
             Cache-Control: { schema: { type: string, const: no-store } }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/DownloadHandle' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409':
+              schema: { $ref: "#/components/schemas/DownloadHandle" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
           description: Job ainda não está AVAILABLE.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiError' }
-        '410':
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "410":
           description: Arquivo expirado; não pode ser reativado.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiError' }
+              schema: { $ref: "#/components/schemas/ApiError" }
   /api/v1/admin/exports/{exportId}/content:
     get:
       operationId: downloadAdminExportContent
@@ -187,41 +190,50 @@ paths:
       security:
         - adminSession: []
       parameters:
-        - $ref: '#/components/parameters/ExportId'
+        - $ref: "#/components/parameters/ExportId"
         - in: header
           name: X-Export-Download-Handle
           required: true
           schema: { type: string, minLength: 32, maxLength: 128 }
       responses:
-        '200':
+        "200":
           description: Conteúdo descriptografado somente durante streaming autorizado
           headers:
-            Cache-Control: { schema: { type: string, const: 'no-store, private' } }
+            Cache-Control:
+              { schema: { type: string, const: "no-store, private" } }
             Content-Disposition: { schema: { type: string } }
-            ETag: { schema: { type: string, description: SHA-256 da representação em claro, sem autorização implícita. } }
+            ETag:
+              {
+                schema:
+                  {
+                    type: string,
+                    description: SHA-256 da representação em claro,
+                    sem autorização implícita.,
+                  },
+              }
           content:
             text/csv:
               schema: { type: string, format: binary }
             application/pdf:
               schema: { type: string, format: binary }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409':
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
           description: Handle inválido ou job não disponível.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiError' }
-        '410':
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "410":
           description: Arquivo expirado, mesmo se objeto físico ainda existir.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiError' }
-        '503':
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "503":
           description: Objeto ou chave de descriptografia indisponível; nenhum byte é servido.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiError' }
+              schema: { $ref: "#/components/schemas/ApiError" }
 components:
   securitySchemes:
     adminSession:
@@ -253,7 +265,7 @@ components:
             APPOINTMENTS é a única categoria citada no exemplo canônico. Outras
             categorias/colunas aguardam allowlist aprovada; a API rejeita valores desconhecidos.
         filters:
-          $ref: '#/components/schemas/AppointmentFilters'
+          $ref: "#/components/schemas/AppointmentFilters"
     AppointmentFilters:
       type: object
       additionalProperties: false
@@ -273,11 +285,29 @@ components:
           maxItems: 5
           items:
             type: string
-            enum: [CONFIRMED, CANCELLED_BY_PROVIDER, CANCELLED_BY_CLIENT, COMPLETED, NO_SHOW]
+            enum:
+              [
+                CONFIRMED,
+                CANCELLED_BY_PROVIDER,
+                CANCELLED_BY_CLIENT,
+                COMPLETED,
+                NO_SHOW,
+              ]
         serviceId: { type: string, format: uuid }
     ExportJob:
       type: object
-      required: [exportId, operationId, format, category, state, filters, snapshotAt, version, createdAt]
+      required:
+        [
+          exportId,
+          operationId,
+          format,
+          category,
+          state,
+          filters,
+          snapshotAt,
+          version,
+          createdAt,
+        ]
       properties:
         exportId: { type: string, format: uuid }
         operationId: { type: string, format: uuid }
@@ -285,8 +315,16 @@ components:
         category: { type: string, enum: [APPOINTMENTS] }
         state:
           type: string
-          enum: [REQUESTED, PROCESSING, RETRY_WAIT, AVAILABLE, FAILED_FINAL, EXPIRED]
-        filters: { $ref: '#/components/schemas/AppointmentFilters' }
+          enum:
+            [
+              REQUESTED,
+              PROCESSING,
+              RETRY_WAIT,
+              AVAILABLE,
+              FAILED_FINAL,
+              EXPIRED,
+            ]
+        filters: { $ref: "#/components/schemas/AppointmentFilters" }
         snapshotAt: { type: string, format: date-time, nullable: true }
         retryNumber: { type: integer, minimum: 0, maximum: 3 }
         nextAttemptAt: { type: string, format: date-time, nullable: true }
@@ -294,8 +332,20 @@ components:
         expiresAt: { type: string, format: date-time, nullable: true }
         rowCount: { type: integer, minimum: 0, nullable: true }
         artifactSize: { type: integer, minimum: 0, nullable: true }
-        artifactDigest: { type: string, nullable: true, description: SHA-256 do conteúdo cifrado, sem expor campos do arquivo. }
-        failureCode: { type: string, nullable: true, description: Código normalizado, sem mensagem externa ou PII. }
+        artifactDigest:
+          {
+            type: string,
+            nullable: true,
+            description: SHA-256 do conteúdo cifrado,
+            sem expor campos do arquivo.,
+          }
+        failureCode:
+          {
+            type: string,
+            nullable: true,
+            description: Código normalizado,
+            sem mensagem externa ou PII.,
+          }
         version: { type: integer, minimum: 1 }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
@@ -304,7 +354,12 @@ components:
       required: [downloadHandle, expiresAt]
       properties:
         downloadHandle: { type: string, minLength: 32, maxLength: 128 }
-        expiresAt: { type: string, format: date-time, description: Igual à expiração do arquivo; no máximo 30 minutos após AVAILABLE. }
+        expiresAt:
+          {
+            type: string,
+            format: date-time,
+            description: Igual à expiração do arquivo; no máximo 30 minutos após AVAILABLE.,
+          }
     ApiError:
       type: object
       required: [error]
@@ -323,19 +378,19 @@ components:
       description: Filtro inválido, categoria/formato não suportados ou limite seguro excedido.
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ApiError' }
+          schema: { $ref: "#/components/schemas/ApiError" }
     Unauthorized:
       description: Sessão OIDC ausente/expirada.
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ApiError' }
+          schema: { $ref: "#/components/schemas/ApiError" }
     Forbidden:
       description: Papel ou associação administrativa atual inválida/revogada.
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ApiError' }
+          schema: { $ref: "#/components/schemas/ApiError" }
     NotFound:
       description: Export inexistente ou não pertencente ao tenant atual; resposta não reveladora.
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ApiError' }
+          schema: { $ref: "#/components/schemas/ApiError" }

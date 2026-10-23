@@ -24,6 +24,8 @@ public interface ExportWorkerRepository {
 
   List<ExportTransition> expireDue(Instant now, int limit);
 
+  List<ExportTransition> expireDue(UUID tenantId, Instant now, int limit);
+
   List<CleanupTarget> cleanupTargets(int limit);
 
   boolean markArtifactDeleted(UUID tenantId, UUID exportId, long expectedVersion, Instant now);

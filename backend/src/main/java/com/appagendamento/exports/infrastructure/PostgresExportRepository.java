@@ -51,7 +51,7 @@ public class PostgresExportRepository implements ExportRepository, ExportWorkerR
         tenantId);
     Boolean active =
         jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM agendamento.export_job WHERE tenant_id = ? AND state IN ('REQUESTED','PROCESSING','RETRY_WAIT'))",
+            "SELECT EXISTS (SELECT 1 FROM agendamento.export_job WHERE tenant_id = ? AND state IN ('REQUESTED','PROCESSING','RETRY_WAIT','AVAILABLE'))",
             Boolean.class,
             tenantId);
     if (Boolean.TRUE.equals(active)) {
@@ -91,6 +91,22 @@ public class PostgresExportRepository implements ExportRepository, ExportWorkerR
             (row, index) -> mapJob(row),
             tenantId,
             exportId)
+        .stream()
+        .findFirst();
+  }
+
+  @Override
+  public Optional<ExportJobView> findActive(UUID tenantId, Instant now) {
+    return jdbc
+        .query(
+            "SELECT "
+                + JOB_COLUMNS
+                + " FROM agendamento.export_job WHERE tenant_id = ? AND "
+                + "(state IN ('REQUESTED','PROCESSING','RETRY_WAIT') OR "
+                + "(state = 'AVAILABLE' AND expires_at > ?)) ORDER BY created_at DESC, export_id DESC LIMIT 1",
+            (row, index) -> mapJob(row),
+            tenantId,
+            Timestamp.from(now))
         .stream()
         .findFirst();
   }
@@ -299,16 +315,29 @@ public class PostgresExportRepository implements ExportRepository, ExportWorkerR
   @Override
   @Transactional
   public List<ExportTransition> expireDue(Instant now, int limit) {
+    return expireDue(null, now, limit);
+  }
+
+  @Override
+  @Transactional
+  public List<ExportTransition> expireDue(UUID tenantId, Instant now, int limit) {
+    String tenantFilter = tenantId == null ? "" : " AND tenant_id = ? ";
+    var parameters = new java.util.ArrayList<Object>();
+    parameters.add(Timestamp.from(now));
+    if (tenantId != null) parameters.add(tenantId);
+    parameters.add(limit);
     List<UUID> ids =
         jdbc.query(
             """
             SELECT export_id FROM agendamento.export_job
             WHERE state = 'AVAILABLE' AND expires_at <= ?
+            """
+                + tenantFilter
+                + """
             ORDER BY expires_at, export_id LIMIT ? FOR UPDATE SKIP LOCKED
             """,
             (row, index) -> row.getObject("export_id", UUID.class),
-            Timestamp.from(now),
-            limit);
+            parameters.toArray());
     return ids.stream().map(id -> expireSystem(id, now)).flatMap(Optional::stream).toList();
   }
 

@@ -10,8 +10,10 @@ import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -52,6 +54,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -96,6 +99,7 @@ class ExportLifecycleIT {
   private final Map<String, Long> tombstones = new ConcurrentHashMap<>();
   private final Map<String, Object> objectLocks = new ConcurrentHashMap<>();
   @Autowired private JdbcTemplate appJdbc;
+  @Autowired private Flyway flyway;
   @Autowired private RequestExport requestExport;
   @Autowired private GetExport getExport;
   @Autowired private IssueExportDownloadHandle issueHandle;
@@ -301,10 +305,253 @@ class ExportLifecycleIT {
     }
     assertThat(
             appJdbc.queryForObject(
-                "SELECT count(*) FROM agendamento.export_job WHERE tenant_id = ? AND state IN ('REQUESTED','PROCESSING','RETRY_WAIT')",
+                "SELECT count(*) FROM agendamento.export_job WHERE tenant_id = ? AND state IN ('REQUESTED','PROCESSING','RETRY_WAIT','AVAILABLE')",
                 Integer.class,
                 fixture.tenantId()))
         .isEqualTo(1);
+  }
+
+  @Test
+  void availableJobParticipatesInUniqueTenantLimitAndRuntimeGrantsStayMinimal() {
+    Fixture fixture = fixture("available-unique");
+    var first =
+        requestExport.execute(
+            fixture.admin(),
+            "available-one-" + UUID.randomUUID(),
+            ExportFormat.CSV,
+            "APPOINTMENTS",
+            filters());
+    assertThat(worker.processOne()).isTrue();
+    migrationJdbc.update(
+        "UPDATE agendamento.export_job SET state = 'EXPIRED' WHERE export_id = ?",
+        first.job().exportId());
+    var second =
+        requestExport.execute(
+            fixture.admin(),
+            "available-two-" + UUID.randomUUID(),
+            ExportFormat.CSV,
+            "APPOINTMENTS",
+            filters());
+    assertThat(worker.processOne()).isTrue();
+
+    assertThatThrownBy(
+            () ->
+                migrationJdbc.update(
+                    "UPDATE agendamento.export_job SET state = 'AVAILABLE' WHERE export_id = ?",
+                    first.job().exportId()))
+        .hasMessageContaining("uq_export_one_active_per_tenant");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT has_table_privilege('agendamento_runtime','agendamento.export_job','SELECT')",
+                Boolean.class))
+        .isTrue();
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT has_table_privilege('agendamento_runtime','agendamento.export_job','DELETE')",
+                Boolean.class))
+        .isFalse();
+    assertThat(count("export_job", fixture.tenantId())).isEqualTo(2);
+    assertThat(getExport.execute(fixture.admin(), second.job().exportId()).state())
+        .isEqualTo(ExportState.AVAILABLE);
+  }
+
+  @Test
+  void v42FreshInstallValidatesAndFlywayRerunIsIdempotent() {
+    assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("42");
+    flyway.validate();
+    assertThat(flyway.migrate().migrationsExecuted).isZero();
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = 'agendamento' AND indexname = 'uq_export_one_active_per_tenant'",
+                String.class))
+        .contains("'AVAILABLE'");
+    assertThat(
+            appJdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM agendamento.export_job WHERE state IN ('REQUESTED','PROCESSING','RETRY_WAIT','AVAILABLE') GROUP BY tenant_id HAVING count(*) > 1)",
+                Boolean.class))
+        .isFalse();
+  }
+
+  @Test
+  void v42UpgradeFailsClosedOnLegacyAvailableAndRequestedJobsWithoutChangingRows() {
+    String schema = "exports_v42_" + UUID.randomUUID().toString().replace("-", "");
+    Flyway v41 = isolatedFlyway(schema, org.flywaydb.core.api.MigrationVersion.fromVersion("41"));
+    assertThat(v41.migrate().migrationsExecuted).isEqualTo(41);
+    JdbcTemplate isolated = new JdbcTemplate(PostgresTestEnvironment.migrationDataSource());
+    UUID tenantId = UUID.randomUUID();
+    UUID adminId = UUID.randomUUID();
+    UUID availableId = UUID.randomUUID();
+    UUID requestedId = UUID.randomUUID();
+    UUID availableOperation = UUID.randomUUID();
+    UUID requestedOperation = UUID.randomUUID();
+    migrationJdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".tenant(tenant_id,name,slug,timezone,status) VALUES (?, 'V42 legacy', ?, 'UTC', 'ACTIVE')",
+        tenantId,
+        "v42-" + tenantId.toString().substring(0, 8));
+    migrationJdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".admin_user(user_id,identity_issuer,identity_subject) VALUES (?, ?, ?)",
+        adminId,
+        ISSUER,
+        "v42-" + UUID.randomUUID());
+    insertV42Idempotency(schema, tenantId, availableOperation);
+    insertV42Idempotency(schema, tenantId, requestedOperation);
+    migrationJdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".export_job(export_id,tenant_id,requested_by_admin_id,operation_id,format,category,filters,snapshot_at,snapshot_ciphertext,snapshot_key_id,snapshot_digest,row_count,state,attempt_count,next_attempt_at,artifact_key,artifact_key_id,artifact_digest,artifact_size,available_at,expires_at) "
+            + "VALUES (?, ?, ?, ?, 'CSV', 'APPOINTMENTS', '{}'::jsonb, TIMESTAMPTZ '2026-10-23 12:00:00Z', decode(repeat('ab', 30),'hex'), 'test-v1', repeat('a',64), 0, 'AVAILABLE', 1, TIMESTAMPTZ '2026-10-23 12:00:00Z', ?, 'test-v1', repeat('b',64), 60, TIMESTAMPTZ '2026-10-23 12:00:00Z', TIMESTAMPTZ '2026-10-23 12:30:00Z')",
+        availableId,
+        tenantId,
+        adminId,
+        availableOperation,
+        tenantId + "/exports/" + availableId);
+    migrationJdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".export_job(export_id,tenant_id,requested_by_admin_id,operation_id,format,category,filters,snapshot_at,snapshot_ciphertext,snapshot_key_id,snapshot_digest,row_count,state,attempt_count,next_attempt_at,artifact_key) "
+            + "VALUES (?, ?, ?, ?, 'CSV', 'APPOINTMENTS', '{}'::jsonb, TIMESTAMPTZ '2026-10-23 12:00:00Z', decode(repeat('cd', 30),'hex'), 'test-v1', repeat('c',64), 0, 'REQUESTED', 0, TIMESTAMPTZ '2026-10-23 12:00:00Z', ?)",
+        requestedId,
+        tenantId,
+        adminId,
+        requestedOperation,
+        tenantId + "/exports/" + requestedId);
+
+    Flyway upgrade = isolatedFlyway(schema);
+    assertThatThrownBy(upgrade::migrate)
+        .hasStackTraceContaining(
+            "V42 cannot apply: multiple active export jobs exist for a tenant");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("41");
+    assertThat(
+            isolated.queryForObject(
+                "SELECT count(*) FROM " + schema + ".export_job WHERE tenant_id = ?",
+                Integer.class,
+                tenantId))
+        .isEqualTo(2);
+    assertThat(
+            isolated.queryForObject(
+                "SELECT state FROM " + schema + ".export_job WHERE export_id = ?",
+                String.class,
+                availableId))
+        .isEqualTo("AVAILABLE");
+    assertThat(
+            isolated.queryForObject(
+                "SELECT state FROM " + schema + ".export_job WHERE export_id = ?",
+                String.class,
+                requestedId))
+        .isEqualTo("REQUESTED");
+    assertThat(
+            isolated.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = ? AND indexname = 'uq_export_one_active_per_tenant'",
+                String.class,
+                schema))
+        .contains("'REQUESTED'", "'PROCESSING'", "'RETRY_WAIT'")
+        .doesNotContain("'AVAILABLE'");
+  }
+
+  @Test
+  void v42SuccessfulUpgradeKeepsSingleAvailableJobAndRuntimePrivilegesMinimal() {
+    String schema = "exports_v42_ok_" + UUID.randomUUID().toString().replace("-", "");
+    Flyway v41 = isolatedFlyway(schema, org.flywaydb.core.api.MigrationVersion.fromVersion("41"));
+    assertThat(v41.migrate().migrationsExecuted).isEqualTo(41);
+    UUID tenantId = UUID.randomUUID();
+    UUID adminId = UUID.randomUUID();
+    UUID exportId = UUID.randomUUID();
+    UUID operationId = UUID.randomUUID();
+    migrationJdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".tenant(tenant_id,name,slug,timezone,status) VALUES (?, 'V42 upgrade', ?, 'UTC', 'ACTIVE')",
+        tenantId,
+        "v42-ok-" + tenantId.toString().substring(0, 8));
+    migrationJdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".admin_user(user_id,identity_issuer,identity_subject) VALUES (?, ?, ?)",
+        adminId,
+        ISSUER,
+        "v42-ok-" + UUID.randomUUID());
+    insertV42Idempotency(schema, tenantId, operationId);
+    migrationJdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".export_job(export_id,tenant_id,requested_by_admin_id,operation_id,format,category,filters,snapshot_at,snapshot_ciphertext,snapshot_key_id,snapshot_digest,row_count,state,attempt_count,next_attempt_at,artifact_key,artifact_key_id,artifact_digest,artifact_size,available_at,expires_at) "
+            + "VALUES (?, ?, ?, ?, 'CSV', 'APPOINTMENTS', '{}'::jsonb, TIMESTAMPTZ '2026-10-23 12:00:00Z', decode(repeat('ab', 30),'hex'), 'test-v1', repeat('a',64), 0, 'AVAILABLE', 1, TIMESTAMPTZ '2026-10-23 12:00:00Z', ?, 'test-v1', repeat('b',64), 60, TIMESTAMPTZ '2026-10-23 12:00:00Z', TIMESTAMPTZ '2026-10-23 12:30:00Z')",
+        exportId,
+        tenantId,
+        adminId,
+        operationId,
+        tenantId + "/exports/" + exportId);
+
+    Flyway upgrade = isolatedFlyway(schema);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(1);
+    upgrade.validate();
+    assertThat(upgrade.migrate().migrationsExecuted).isZero();
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("42");
+    assertThat(
+            migrationJdbc.queryForObject(
+                "SELECT count(*) FROM "
+                    + schema
+                    + ".export_job WHERE tenant_id = ? AND state = 'AVAILABLE'",
+                Integer.class,
+                tenantId))
+        .isEqualTo(1);
+    assertThat(
+            migrationJdbc.queryForObject(
+                "SELECT has_table_privilege('agendamento_runtime', ?, 'SELECT') AND NOT has_table_privilege('agendamento_runtime', ?, 'DELETE') AND NOT has_table_privilege('agendamento_runtime', ?, 'TRUNCATE')",
+                Boolean.class,
+                schema + ".export_job",
+                schema + ".export_job",
+                schema + ".export_job"))
+        .isTrue();
+    assertThat(
+            migrationJdbc.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = ? AND indexname = 'uq_export_one_active_per_tenant'",
+                String.class,
+                schema))
+        .contains("'AVAILABLE'");
+  }
+
+  private void insertV42Idempotency(String schema, UUID tenantId, UUID operationId) {
+    migrationJdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".idempotency_record(tenant_id,command_scope,key_digest,request_digest,operation_id,state,result,completed_at) "
+            + "VALUES (?, 'admin.export.v1', ?, ?, ?, 'COMPLETED', '{}'::jsonb, TIMESTAMPTZ '2026-10-23 12:00:00Z')",
+        tenantId,
+        digest(operationId + "key"),
+        digest(operationId + "request"),
+        operationId);
+  }
+
+  private static String digest(String value) {
+    try {
+      return java.util.HexFormat.of()
+          .formatHex(
+              java.security.MessageDigest.getInstance("SHA-256")
+                  .digest(value.getBytes(StandardCharsets.UTF_8)));
+    } catch (java.security.NoSuchAlgorithmException impossible) {
+      throw new IllegalStateException(impossible);
+    }
+  }
+
+  private Flyway isolatedFlyway(String schema) {
+    return isolatedFlyway(schema, org.flywaydb.core.api.MigrationVersion.LATEST);
+  }
+
+  private Flyway isolatedFlyway(String schema, org.flywaydb.core.api.MigrationVersion target) {
+    return Flyway.configure()
+        .dataSource(PostgresTestEnvironment.migrationDataSource())
+        .locations("classpath:db/migration")
+        .schemas(schema)
+        .defaultSchema(schema)
+        .target(target)
+        .createSchemas(true)
+        .cleanDisabled(true)
+        .load();
   }
 
   @Test
@@ -615,13 +862,36 @@ class ExportLifecycleIT {
                 .readTree(created.getResponse().getContentAsString())
                 .get("exportId")
                 .asString());
+    mvc.perform(get("/api/v1/admin/exports/active").with(authentication(auth(fixture.admin()))))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Cache-Control", "no-store"))
+        .andExpect(header().string("ETag", "\"1\""))
+        .andExpect(jsonPath("$.exportId").value(exportId.toString()))
+        .andExpect(jsonPath("$.version").value(1))
+        .andExpect(jsonPath("$.failureCode").doesNotExist())
+        .andExpect(jsonPath("$.snapshotCiphertext").doesNotExist())
+        .andExpect(jsonPath("$.tenantId").doesNotExist())
+        .andExpect(jsonPath("$.actorId").doesNotExist());
+    Fixture foreign = fixture("http-active-foreign");
+    mvc.perform(get("/api/v1/admin/exports/active").with(authentication(auth(foreign.admin()))))
+        .andExpect(status().isNoContent())
+        .andExpect(header().string("Cache-Control", "no-store"))
+        .andExpect(content().string(""));
     mvc.perform(
             get("/api/v1/admin/exports/{id}", exportId).with(authentication(auth(fixture.admin()))))
         .andExpect(status().isOk())
         .andExpect(header().string("Cache-Control", "no-store"))
+        .andExpect(header().string("ETag", "\"1\""))
         .andExpect(jsonPath("$.category").value("APPOINTMENTS"));
 
     assertThat(worker.processOne()).isTrue();
+    mvc.perform(
+            get("/api/v1/admin/exports/{id}", exportId).with(authentication(auth(fixture.admin()))))
+        .andExpect(status().isOk())
+        .andExpect(header().string("ETag", "\"3\""));
+    mvc.perform(get("/api/v1/admin/exports/active").with(authentication(auth(fixture.admin()))))
+        .andExpect(status().isOk())
+        .andExpect(header().string("ETag", "\"3\""));
     String handleResponse =
         mvc.perform(
                 post("/api/v1/admin/exports/{id}/download-token", exportId)
@@ -660,6 +930,169 @@ class ExportLifecycleIT {
                         + "\"statuses\":[\"NOT_A_STATUS\"]}}"))
         .andExpect(status().isBadRequest())
         .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
+  }
+
+  @Test
+  void activeReadRevalidatesMembershipAndOmitsExpiredAvailableJob() throws Exception {
+    Fixture fixture = fixture("active-expiry");
+    var requested =
+        requestExport.execute(
+            fixture.admin(),
+            "active-expiry-" + UUID.randomUUID(),
+            ExportFormat.CSV,
+            "APPOINTMENTS",
+            filters());
+    assertThat(worker.processOne()).isTrue();
+    Instant expiresAt = getExport.execute(fixture.admin(), requested.job().exportId()).expiresAt();
+    when(clock.instant()).thenReturn(expiresAt);
+
+    mvc.perform(get("/api/v1/admin/exports/active").with(authentication(auth(fixture.admin()))))
+        .andExpect(status().isNoContent())
+        .andExpect(header().string("Cache-Control", "no-store"));
+    mvc.perform(get("/api/v1/admin/exports/active")).andExpect(status().isUnauthorized());
+
+    migrationJdbc.update(
+        "UPDATE agendamento.admin_tenant_membership SET status = 'DISABLED' WHERE user_id = ?",
+        fixture.admin().adminUserId());
+    mvc.perform(get("/api/v1/admin/exports/active").with(authentication(auth(fixture.admin()))))
+        .andExpect(status().isForbidden());
+  }
+
+  @Test
+  void ifMatchRequiresExactStrongQuotedEtagAndTerminalRetryIsIdempotent() throws Exception {
+    Fixture fixture = fixture("if-match");
+    var requested =
+        requestExport.execute(
+            fixture.admin(),
+            "if-match-" + UUID.randomUUID(),
+            ExportFormat.CSV,
+            "APPOINTMENTS",
+            filters());
+    assertThat(worker.processOne()).isTrue();
+    UUID id = requested.job().exportId();
+    for (String malformed :
+        List.of(
+            "3",
+            "W/\"3\"",
+            "*",
+            "\"2",
+            "3\"",
+            "\"0\"",
+            "\"03\"",
+            "\"+3\"",
+            " \"3\"",
+            "\"1\", \"2\"",
+            "\"3\", \"4\"")) {
+      mvc.perform(
+              delete("/api/v1/admin/exports/{id}", id)
+                  .with(authentication(auth(fixture.admin())))
+                  .with(csrf())
+                  .header("If-Match", malformed))
+          .andExpect(status().isBadRequest())
+          .andExpect(jsonPath("$.error.code").value("INVALID_IF_MATCH"));
+    }
+    mvc.perform(
+            delete("/api/v1/admin/exports/{id}", id)
+                .with(authentication(auth(fixture.admin())))
+                .with(csrf()))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.error.code").value("INVALID_IF_MATCH"));
+    mvc.perform(
+            delete("/api/v1/admin/exports/{id}", id)
+                .with(authentication(auth(fixture.admin())))
+                .with(csrf())
+                .header("If-Match", "\"1\""))
+        .andExpect(status().isPreconditionFailed())
+        .andExpect(jsonPath("$.error.code").value("VERSION_CONFLICT"));
+    mvc.perform(
+            delete("/api/v1/admin/exports/{id}", id)
+                .with(authentication(auth(fixture.admin())))
+                .with(csrf())
+                .header("If-Match", "\"3\""))
+        .andExpect(status().isNoContent());
+    int auditAfterFirst = countAction("EXPORT_EXPIRED", fixture.tenantId());
+    int outboxAfterFirst = countOutbox("ExportExpired", fixture.tenantId());
+    mvc.perform(
+            delete("/api/v1/admin/exports/{id}", id)
+                .with(authentication(auth(fixture.admin())))
+                .with(csrf())
+                .header("If-Match", "\"1\""))
+        .andExpect(status().isNoContent());
+    assertThat(countAction("EXPORT_EXPIRED", fixture.tenantId()))
+        .isEqualTo(auditAfterFirst)
+        .isEqualTo(1);
+    assertThat(countOutbox("ExportExpired", fixture.tenantId()))
+        .isEqualTo(outboxAfterFirst)
+        .isEqualTo(1);
+  }
+
+  @Test
+  void activeRecoveryMayReturnNoContentAfterConflictingPostJobTerminates() throws Exception {
+    Fixture fixture = fixture("active-race");
+    mvc.perform(
+            post("/api/v1/admin/exports")
+                .with(authentication(auth(fixture.admin())))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Idempotency-Key", "active-race-first-" + UUID.randomUUID())
+                .content(requestBody()))
+        .andExpect(status().isAccepted());
+    mvc.perform(
+            post("/api/v1/admin/exports")
+                .with(authentication(auth(fixture.admin())))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Idempotency-Key", "active-race-second-" + UUID.randomUUID())
+                .content(requestBody()))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.error.code").value("EXPORT_ALREADY_ACTIVE"));
+
+    assertThat(worker.processOne()).isTrue();
+    UUID id =
+        appJdbc.queryForObject(
+            "SELECT export_id FROM agendamento.export_job WHERE tenant_id = ?",
+            UUID.class,
+            fixture.tenantId());
+    when(clock.instant()).thenReturn(getExport.execute(fixture.admin(), id).expiresAt());
+    worker.expireAndClean();
+
+    mvc.perform(get("/api/v1/admin/exports/active").with(authentication(auth(fixture.admin()))))
+        .andExpect(status().isNoContent())
+        .andExpect(header().string("Cache-Control", "no-store"));
+    assertThat(count("export_job", fixture.tenantId())).isEqualTo(1);
+    assertThat(countOutbox("ExportRequested", fixture.tenantId())).isEqualTo(1);
+  }
+
+  @Test
+  void newExplicitRequestMaterializesDueExpiryBeforeClaimingTenantSlot() {
+    Fixture fixture = fixture("request-after-expiry");
+    var first =
+        requestExport.execute(
+            fixture.admin(),
+            "expiry-first-" + UUID.randomUUID(),
+            ExportFormat.CSV,
+            "APPOINTMENTS",
+            filters());
+    assertThat(worker.processOne()).isTrue();
+    Instant expiresAt = getExport.execute(fixture.admin(), first.job().exportId()).expiresAt();
+    when(clock.instant()).thenReturn(expiresAt);
+
+    var second =
+        requestExport.execute(
+            fixture.admin(),
+            "expiry-second-" + UUID.randomUUID(),
+            ExportFormat.PDF,
+            "APPOINTMENTS",
+            filters());
+
+    assertThat(getExport.execute(fixture.admin(), first.job().exportId()).state())
+        .isEqualTo(ExportState.EXPIRED);
+    assertThat(second.job().state()).isEqualTo(ExportState.REQUESTED);
+    assertThat(count("export_job", fixture.tenantId())).isEqualTo(2);
+    assertThat(countAction("EXPORT_EXPIRED", fixture.tenantId())).isEqualTo(1);
+    assertThat(countAction("EXPORT_REQUESTED", fixture.tenantId())).isEqualTo(2);
+    assertThat(countOutbox("ExportExpired", fixture.tenantId())).isEqualTo(1);
+    assertThat(countOutbox("ExportRequested", fixture.tenantId())).isEqualTo(2);
   }
 
   @Test
@@ -869,6 +1302,14 @@ class ExportLifecycleIT {
         Integer.class,
         tenant,
         action);
+  }
+
+  private int countOutbox(String eventType, UUID tenant) {
+    return appJdbc.queryForObject(
+        "SELECT count(*) FROM agendamento.outbox_event WHERE tenant_id = ? AND event_type = ?",
+        Integer.class,
+        tenant,
+        eventType);
   }
 
   private static ExportFilters filters() {

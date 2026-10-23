@@ -6,7 +6,7 @@
 - Base exata: head do PR #25/branch `agd-043-reativacao-renovacao`, `78921069f97e0b590511c99a1e0154e926d88d16`.
 - PR #25 continua draft e depende de #24; ambos permanecem sem merge. AGD-044 também dependerá de AGD-043 e terá base `agd-043-reativacao-renovacao`, não `main`.
 - Branch de integração: `agd-044-exportacoes`; worktree isolada `/tmp/kronos-agd044`.
-- Migração remota mais recente verificada: V40; primeira livre prevista V41. Confirmar novamente antes de criar.
+- Migração remota mais recente na base: V41; V1–V41 permanecem imutáveis. A implementação acrescenta V42 após conferência da numeração da branch.
 - Contrato inicial: `docs/openapi/admin-exports.yaml`, commit publicado antes de liberar a UI.
 
 ## Objetivo, referências e limites
@@ -34,8 +34,8 @@ OpenAPI em `docs/openapi/admin-exports.yaml`:
 - `POST /api/v1/admin/exports/{exportId}/download-token`: emite handle opaco em corpo `no-store`, vinculado a export/tenant e até `expiresAt`; o handle não substitui sessão/associação atual.
 - `GET /api/v1/admin/exports/{exportId}/content`: exige sessão administrativa atual, associação ativa, tenant correspondente, handle válido, estado `AVAILABLE` e `now < expiresAt`. Resposta privada `no-store`; sem acesso após expiração, mesmo se remoção física atrasar.
 - O ETag de `/content` é o SHA-256 da representação em claro para validação HTTP; não autentica, não substitui o handle nem a autorização atual.
-- GET individual e `/active` retornam ETag forte da versão como decimal entre aspas (por exemplo `"4"`). A UI preserva literalmente o ETag consultado e o envia como `If-Match`; ETag de `/content` é digest do artefato e não é versão do job.
-- `DELETE /api/v1/admin/exports/{exportId}`: expiração antecipada somente de `AVAILABLE`, CAS por `If-Match` forte exatamente no formato `"<versão decimal>"`; headers ausente/malformado, fraco, wildcard ou lista não contornam CAS e são rejeitados. Versão obsoleta retorna 412; retry terminal conserva a semântica idempotente acordada. Não cancela job em processamento.
+- GET individual e `/active` retornam ETag forte da versão como decimal positivo canônico entre aspas (por exemplo `"4"`). A UI preserva literalmente o valor recebido e o envia como `If-Match`; ETag de `/content` é digest do artefato e não é versão do job.
+- `DELETE /api/v1/admin/exports/{exportId}`: expiração antecipada somente de `AVAILABLE`, CAS por `If-Match` forte exatamente no formato `"<versão decimal positiva canônica>"`; header ausente, malformado, fraco, wildcard, lista, zero, sinal, zeros à esquerda ou whitespace não contornam CAS e são rejeitados como `INVALID_IF_MATCH`. Versão obsoleta retorna 412; retry terminal conserva a semântica idempotente acordada. Não cancela job em processamento.
 - Estados externos: `REQUESTED`, `PROCESSING`, `RETRY_WAIT`, `AVAILABLE`, `FAILED_FINAL`, `EXPIRED`. Erros expostos são códigos normalizados, sem payload do storage/PII.
 - Em timeout/5xx/resposta inválida de criação, a UI preserva body, tenant-context e chave; retry usa a mesma intenção. Rejeições definitivas não prendem o formulário.
 - Job registra snapshot de filtros, `snapshotAt`, row count, digest SHA-256 do artefato cifrado, tamanho, estados/retries e expiração; nunca inclui tenant/ator do request como autoridade.
@@ -44,7 +44,7 @@ OpenAPI em `docs/openapi/admin-exports.yaml`:
 
 **Coordenador/backend — este terminal:**
 
-- `backend/**`, V41+, integrações PostgreSQL e testes.
+- `backend/**`, V42+, integrações PostgreSQL e testes.
 - `docs/openapi/admin-exports.yaml`, `docs/plans/AGD-044-paralelo.md`, `docs/development/OPEN-QUESTIONS.md`, `STATUS.md`, `VALIDATION.md`, `TRACEABILITY.md` e contratos/ADR quando necessários.
 - `frontend/src/App.tsx` somente para montar o componente entregue.
 - `scripts/dev/test-keycloak-browser.mjs` para E2E compartilhado.
@@ -129,3 +129,14 @@ Trabalho backend continua em `/tmp/kronos-agd044`, branch `agd-044-exportacoes`.
 - A suíte completa local repetida em JDK 21 passou: 85 testes unitários/arquiteturais e 310 integrações PostgreSQL 16.13/Testcontainers.
 - App CI push [39969591995](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39969591995) e PR [39969600408](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39969600408) estão terminais: verify, frontend, OIDC E2E geral e secret scans passaram; security falhou somente no scan Keycloak conhecido. CodeQL push [39969591967](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39969591967) e PR [39969600389](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39969600389) passaram.
 - A branch/worktree UI está separada e continua sob ownership do outro terminal; o head observado avançou para `86add0b0a5e4d4a4c1738e086f2cd42f666e7478`, mas o handoff para integração ainda não foi recebido. Este registro não presume integração: aguardar `FRONTEND PRONTO PARA INTEGRAÇÃO`; a prova E2E de exportação permanece pendente.
+
+### Retomada atual — recuperação ativa, CAS e V42 (23/10/2026)
+
+- Estado confirmado: coordenador em `/tmp/kronos-agd044`, branch `agd-044-exportacoes`, PR #26 aberto/draft para `agd-043-reativacao-renovacao`; a branch UI permanece em `/tmp/kronos-agd044-ui`, sem alterações locais do coordenador. O commit UI formalmente entregue `86add0b0a5e4d4a4c1738e086f2cd42f666e7478` foi integrado por merge local `802b007`; commits UI posteriores aguardam o handoff formal de continuação.
+- Contrato atualizado em `ac0c86a181d330914f24559e8a536cbe8b47c85c`: `/active` é tenant-scoped, `200` com DTO minimizado + ETag forte/`no-store` ou `204` vazio/`no-store`; GET individual e `/active` usam versão positiva decimal canônica entre aspas; `DELETE` rejeita If-Match ausente/não canônico e retorna 412 para versão obsoleta. A resposta 204 após conflito não inicia novo comando.
+- V42 substitui o índice de um job ativo/tenant para incluir `AVAILABLE`. Preflight somente leitura lista possíveis tenants/IDs para resolução explícita; migration falha em duplicidade e não apaga nem reescreve histórico. POST materializa expirações vencidas do tenant sob a transação do comando antes de tentar ocupar o slot; GET `/active` continua somente leitura e filtra `expires_at > now`.
+- E2E isolado usa artifact store de filesystem apenas no profile `e2e`, persistindo bytes cifrados e metadata de fencing; produção continua com storage indisponível/fail-closed. O roteiro usa worker real, retry após resposta perdida e verifica job/efeitos, conteúdo CSV sem nome/telefone, ETag, expiração e negação posterior.
+- Validação direcionada: `spotless:check verify` com `-Dit.test=TenantPersistenceIT` passou (43 integrações PostgreSQL 16.13, 86 unitários/arquiteturais); `-Dtest=ExportDocumentGeneratorTest,E2eFileExportArtifactStoreTest -Dit.test=ExportLifecycleIT` passou (4 unitários + 24 integrações PostgreSQL). Suíte final `spotless:check verify` passou com 86 unitários/arquiteturais + 318 integrações PostgreSQL 16.13, sem falhas/erros/skips.
+- Frontend integrado no SHA inicialmente entregue: Node 24.14.1, `npm run format:check`, `npm run lint`, `npm test` (5 arquivos/30 testes, incluindo DOM em happy-dom), `npm run check` (TypeScript + Vite build) passou. Esse resultado não cobre commits UI posteriores nem browser E2E do componente.
+- `node --check scripts/dev/test-keycloak-browser.mjs`, Prettier de `docs/openapi/admin-exports.yaml` e `git diff --check` passaram. Browser E2E de exportação ainda depende do workflow descartável após publicar a branch; o Compose compartilhado não foi iniciado localmente.
+- Revisão de código foi sequencial; dois revisores independentes foram solicitados, mas o ambiente recusou novas threads. Isto não equivale a revisão independente nem aprovação humana.

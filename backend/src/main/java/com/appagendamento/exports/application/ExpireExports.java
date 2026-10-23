@@ -37,6 +37,14 @@ public class ExpireExports {
     return transitions;
   }
 
+  @Transactional
+  public List<ExportWorkerRepository.ExportTransition> expireDue(
+      UUID tenantId, Instant now, int limit) {
+    var transitions = repository.expireDue(tenantId, now, limit);
+    for (var transition : transitions) record(transition);
+    return transitions;
+  }
+
   private void record(ExportWorkerRepository.ExportTransition transition) {
     UUID trace = correlationId.currentTraceId();
     audit.record(
