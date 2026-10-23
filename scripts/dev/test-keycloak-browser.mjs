@@ -120,10 +120,13 @@ try {
     const subscriptionHoldScript = await command('Page.addScriptToEvaluateOnNewDocument', {
         source: `(() => {
           const originalFetch = window.fetch.bind(window);
+          window.__adminSessionFetches = 0;
           window.fetch = async (input, init) => {
             const response = await originalFetch(input, init);
             const requestUrl = typeof input === 'string' ? input : input.url;
-            if (new URL(requestUrl, location.href).pathname === '/api/v1/admin/subscription' && !window.__subscriptionHoldUsed) {
+            const path = new URL(requestUrl, location.href).pathname;
+            if (path === '/api/v1/admin/session') window.__adminSessionFetches += 1;
+            if (path === '/api/v1/admin/subscription' && !window.__subscriptionHoldUsed) {
               window.__subscriptionHoldUsed = true;
               const originalJson = response.json.bind(response);
               response.json = async (...args) => {
@@ -150,7 +153,14 @@ try {
       loggedOut: document.body.innerText.includes('Sessão local encerrada.'),
       subscriptionPanel: Boolean(document.querySelector('#subscription-heading')),
       trialRestored: document.body.innerText.includes('Trial ativo'),
+      loginLink: Boolean(document.querySelector('.login-link')),
+      logoutButton: [...document.querySelectorAll('button')].some(button => button.innerText.trim() === 'Sair'),
+      adminSessionFetches: window.__adminSessionFetches,
     })`);
+    const stateBeforeRelease = await subscriptionLogoutState();
+    if (!stateBeforeRelease.loggedOut || stateBeforeRelease.loginLink || stateBeforeRelease.logoutButton) {
+        throw new Error(`Logout visual não foi aplicado antes de liberar GET atrasado: ${JSON.stringify(stateBeforeRelease)}`);
+    }
     try {
         await waitUntil(async () => {
             const state = await subscriptionLogoutState();
