@@ -3172,7 +3172,9 @@ try {
     console.log('Browser E2E sintético: o worker de AGD-042 materializa a intenção anual no período corrente; PostgreSQL confirma READY sem entrega, e a UI mantém estado/versão após reload. A assinatura foi preparada por fixture isolada; nenhum fornecedor/notificação real.');
 
     await command('Network.clearBrowserCookies');
-    await navigate('http://localhost:5173/admin', command, evaluate);
+    // A página já está em /admin. Recarregá-la após limpar os cookies valida
+    // a sessão anônima sem emitir Page.navigate para a mesma URL.
+    await command('Page.reload');
     await waitForText('Entrar como administrador', evaluate);
     await evaluate("document.querySelector('a[href*=oauth2]').click()");
     await waitForText('username', evaluate, true);
