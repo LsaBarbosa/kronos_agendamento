@@ -140,3 +140,10 @@ Trabalho backend continua em `/tmp/kronos-agd044`, branch `agd-044-exportacoes`.
 - Frontend integrado no SHA inicialmente entregue: Node 24.14.1, `npm run format:check`, `npm run lint`, `npm test` (5 arquivos/30 testes, incluindo DOM em happy-dom), `npm run check` (TypeScript + Vite build) passou. Esse resultado não cobre commits UI posteriores nem browser E2E do componente.
 - `node --check scripts/dev/test-keycloak-browser.mjs`, Prettier de `docs/openapi/admin-exports.yaml` e `git diff --check` passaram. Browser E2E de exportação ainda depende do workflow descartável após publicar a branch; o Compose compartilhado não foi iniciado localmente.
 - Revisão de código foi sequencial; dois revisores independentes foram solicitados, mas o ambiente recusou novas threads. Isto não equivale a revisão independente nem aprovação humana.
+
+#### CI do head `cf7308c2554d4557997f4ea6c6722fca7afff1f1`
+
+- App CI push [40008192649](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40008192649) e PR [40008201019](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40008201019) tiveram todos os jobs terminais. Verify/PostgreSQL, frontend e secret scans passaram; security falhou somente no scanner Keycloak conhecido.
+- E2E push e PR falharam no cenário já existente de GET da assinatura após logout, no `waitUntil` antes do fluxo de exportação. Evidência: OIDC autenticado, timeout após 60s, artifact só com log Vite. Causa do estado DOM ainda desconhecida. O roteiro foi instrumentado com estado minimizado ao falhar; essa mudança serve ao diagnóstico, não comprova correção. Não foi repetida execução idêntica.
+- CodeQL push [40008192761](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40008192761) e PR [40008201614](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40008201614) terminaram success nos dois analisadores.
+- Consequentemente, o browser E2E de AGD-044 não foi alcançado e permanece sem evidência remota. O bloqueio de segurança, esta falha OIDC e a antiga intermitência de remarcação são registros separados.

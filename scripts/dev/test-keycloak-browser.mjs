@@ -146,16 +146,24 @@ try {
     await clickButtonByText('Sair', evaluate);
     await waitForText('Sessão local encerrada.', evaluate);
     await evaluate('window.__releaseSubscriptionBody?.()');
-    await waitUntil(() => evaluate(`({
-      loggedOut: document.body.innerText.includes('Sessão local encerrada.'),
-      subscriptionPanel: Boolean(document.querySelector('#subscription-heading')),
-      trialRestored: document.body.innerText.includes('Trial ativo'),
-    })`).then((state) => state.loggedOut && !state.subscriptionPanel && !state.trialRestored));
-    const staleSubscriptionAfterLogout = await evaluate(`({
+    const subscriptionLogoutState = () => evaluate(`({
       loggedOut: document.body.innerText.includes('Sessão local encerrada.'),
       subscriptionPanel: Boolean(document.querySelector('#subscription-heading')),
       trialRestored: document.body.innerText.includes('Trial ativo'),
     })`);
+    try {
+        await waitUntil(async () => {
+            const state = await subscriptionLogoutState();
+            return state.loggedOut && !state.subscriptionPanel && !state.trialRestored;
+        });
+    } catch (cause) {
+        const finalState = await subscriptionLogoutState();
+        throw new Error(
+            `GET comercial atrasado não atingiu o estado protegido após logout: ${JSON.stringify(finalState)}`,
+            { cause },
+        );
+    }
+    const staleSubscriptionAfterLogout = await subscriptionLogoutState();
     if (!staleSubscriptionAfterLogout.loggedOut || staleSubscriptionAfterLogout.subscriptionPanel || staleSubscriptionAfterLogout.trialRestored) {
         throw new Error(`GET comercial atrasado restaurou estado após logout: ${JSON.stringify(staleSubscriptionAfterLogout)}`);
     }
