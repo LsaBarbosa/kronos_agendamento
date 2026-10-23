@@ -158,7 +158,7 @@ try {
       adminSessionFetches: window.__adminSessionFetches,
     })`);
     const stateBeforeRelease = await subscriptionLogoutState();
-    if (!stateBeforeRelease.loggedOut || stateBeforeRelease.loginLink || stateBeforeRelease.logoutButton) {
+    if (!stateBeforeRelease.loggedOut || !stateBeforeRelease.loginLink || stateBeforeRelease.logoutButton) {
         throw new Error(`Logout visual não foi aplicado antes de liberar GET atrasado: ${JSON.stringify(stateBeforeRelease)}`);
     }
     try {
