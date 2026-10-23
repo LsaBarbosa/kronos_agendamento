@@ -786,6 +786,16 @@ try {
     ) {
         throw new Error('Reload não recuperou o mesmo job persistido da exportação.');
     }
+    const exportReloadUi = await evaluate(`({
+      url: location.pathname,
+      jobHeading: document.querySelector('.export-center__job h3')?.innerText ?? null,
+      jobCard: document.querySelector('.export-center__job')?.innerText ?? null,
+      buttons: [...document.querySelectorAll('.export-center__job button')].map(button => ({label:button.innerText.trim(), disabled:button.disabled})),
+      storedExportId: JSON.parse(sessionStorage.getItem('agd044.export-context.v1:' + encodeURIComponent(${JSON.stringify(authenticatedSession.tenantId)})))?.exportId ?? null
+    })`);
+    if (!exportReloadUi.buttons.some(button => button.label === 'Baixar arquivo')) {
+        throw new Error(`Reload exibiu o estado disponível sem controles de download: ${JSON.stringify(exportReloadUi)}`);
+    }
     await evaluate(`(() => {
       const originalFetch = window.fetch.bind(window);
       window.fetch = async (input, init = {}) => {
