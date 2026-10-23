@@ -3223,7 +3223,8 @@ async function connectToCdp(webSocketDebuggerUrl, responseHistory = null) {
             } catch {}
         }
         if (!message.id || !pending.has(message.id)) return;
-        const { resolve, reject } = pending.get(message.id);
+        const { resolve, reject, timeout } = pending.get(message.id);
+        clearTimeout(timeout);
         pending.delete(message.id);
         if (message.error) reject(new Error(message.error.message));
         else resolve(message.result);
@@ -3231,8 +3232,18 @@ async function connectToCdp(webSocketDebuggerUrl, responseHistory = null) {
     const command = (method, params = {}) =>
         new Promise((resolve, reject) => {
             const id = ++commandId;
-            pending.set(id, { resolve, reject });
-            cdpSocket.send(JSON.stringify({ id, method, params }));
+            const timeout = setTimeout(() => {
+                pending.delete(id);
+                reject(new Error(`CDP command ${method} did not respond within 30 seconds.`));
+            }, 30_000);
+            pending.set(id, { resolve, reject, timeout });
+            try {
+                cdpSocket.send(JSON.stringify({ id, method, params }));
+            } catch (error) {
+                clearTimeout(timeout);
+                pending.delete(id);
+                reject(error);
+            }
         });
     const evaluate = async (expression) => {
         const result = await command('Runtime.evaluate', {
