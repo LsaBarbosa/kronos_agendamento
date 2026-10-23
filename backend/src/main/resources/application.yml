@@ -91,6 +91,18 @@ app:
       lease-seconds: ${OUTBOX_WORKER_LEASE_SECONDS:60}
       max-attempts: ${OUTBOX_WORKER_MAX_ATTEMPTS:8}
       poll-delay-ms: ${OUTBOX_WORKER_POLL_DELAY_MS:1000}
+  exports:
+    enabled: ${EXPORTS_ENABLED:false}
+    e2e-storage-root: ${EXPORTS_E2E_STORAGE_ROOT:/tmp/agendamento-e2e-exports}
+    maximum-rows: ${EXPORTS_MAX_ROWS:0}
+    maximum-snapshot-bytes: ${EXPORTS_MAX_SNAPSHOT_BYTES:0}
+    lease-seconds: ${EXPORTS_LEASE_SECONDS:60}
+    encryption:
+      active-key-id: ${EXPORTS_ENCRYPTION_ACTIVE_KEY_ID:}
+      keys: ${EXPORTS_ENCRYPTION_KEYS:}
+    worker:
+      enabled: ${EXPORTS_WORKER_ENABLED:false}
+      poll-delay-ms: ${EXPORTS_WORKER_POLL_DELAY_MS:1000}
   subscriptions:
     trial-expiry-worker:
       enabled: ${SUBSCRIPTION_TRIAL_EXPIRY_WORKER_ENABLED:true}

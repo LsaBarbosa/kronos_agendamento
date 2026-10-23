@@ -120,10 +120,13 @@ try {
     const subscriptionHoldScript = await command('Page.addScriptToEvaluateOnNewDocument', {
         source: `(() => {
           const originalFetch = window.fetch.bind(window);
+          window.__adminSessionFetches = 0;
           window.fetch = async (input, init) => {
             const response = await originalFetch(input, init);
             const requestUrl = typeof input === 'string' ? input : input.url;
-            if (new URL(requestUrl, location.href).pathname === '/api/v1/admin/subscription' && !window.__subscriptionHoldUsed) {
+            const path = new URL(requestUrl, location.href).pathname;
+            if (path === '/api/v1/admin/session') window.__adminSessionFetches += 1;
+            if (path === '/api/v1/admin/subscription' && !window.__subscriptionHoldUsed) {
               window.__subscriptionHoldUsed = true;
               const originalJson = response.json.bind(response);
               response.json = async (...args) => {
@@ -146,17 +149,33 @@ try {
     await clickButtonByText('Sair', evaluate);
     await waitForText('Sessão local encerrada.', evaluate);
     await evaluate('window.__releaseSubscriptionBody?.()');
-    await waitUntil(() => evaluate(`({
+    const subscriptionLogoutState = () => evaluate(`({
       loggedOut: document.body.innerText.includes('Sessão local encerrada.'),
       subscriptionPanel: Boolean(document.querySelector('#subscription-heading')),
       trialRestored: document.body.innerText.includes('Trial ativo'),
-    })`).then((state) => state.loggedOut && !state.subscriptionPanel && !state.trialRestored));
-    const staleSubscriptionAfterLogout = await evaluate(`({
-      loggedOut: document.body.innerText.includes('Sessão local encerrada.'),
-      subscriptionPanel: Boolean(document.querySelector('#subscription-heading')),
-      trialRestored: document.body.innerText.includes('Trial ativo'),
+      loginLink: Boolean(document.querySelector('.login-link')),
+      logoutButton: [...document.querySelectorAll('button')].some(button => button.innerText.trim() === 'Sair'),
+      subscriptionPrivateData: ['Trial ativo', 'Assinatura ativa', 'Pagamento pendente', 'Assinatura suspensa', 'Trial encerrado', 'Plano:', 'Pago até:', 'Fim da tolerância:'].some(text => document.body.innerText.includes(text)),
+      adminSessionFetches: window.__adminSessionFetches,
     })`);
-    if (!staleSubscriptionAfterLogout.loggedOut || staleSubscriptionAfterLogout.subscriptionPanel || staleSubscriptionAfterLogout.trialRestored) {
+    const stateBeforeRelease = await subscriptionLogoutState();
+    if (!stateBeforeRelease.loginLink || stateBeforeRelease.logoutButton) {
+        throw new Error(`Logout visual não foi aplicado antes de liberar GET atrasado: ${JSON.stringify(stateBeforeRelease)}`);
+    }
+    try {
+        await waitUntil(async () => {
+            const state = await subscriptionLogoutState();
+            return state.loginLink && !state.logoutButton && !state.subscriptionPrivateData;
+        });
+    } catch (cause) {
+        const finalState = await subscriptionLogoutState();
+        throw new Error(
+            `GET comercial atrasado não atingiu o estado protegido após logout: ${JSON.stringify(finalState)}`,
+            { cause },
+        );
+    }
+    const staleSubscriptionAfterLogout = await subscriptionLogoutState();
+    if (!staleSubscriptionAfterLogout.loginLink || staleSubscriptionAfterLogout.logoutButton || staleSubscriptionAfterLogout.subscriptionPrivateData) {
         throw new Error(`GET comercial atrasado restaurou estado após logout: ${JSON.stringify(staleSubscriptionAfterLogout)}`);
     }
     console.log('Browser: GET administrativo de assinatura liberado após logout não restaura dados comerciais privados no DOM.');
@@ -610,6 +629,287 @@ try {
     );
     await navigate('http://localhost:5173/admin', command, evaluate);
     await waitForText('Estado: Publicado', evaluate);
+    await waitForText('Exportar agendamentos', evaluate);
+    await setFieldByLabel('Data inicial', publicDate, evaluate);
+    await setFieldByLabel('Data final', publicDate, evaluate);
+    await setFieldByLabel('ID do serviço (opcional)', publicService.serviceId, evaluate);
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__exportPostAttempts = [];
+      window.__exportApiTrace = [];
+      window.fetch = async (input, init = {}) => {
+        const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+        const method = (init.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+        if (url.pathname === '/api/v1/admin/exports' && method === 'POST') {
+          const headers = new Headers(input instanceof Request ? input.headers : undefined);
+          new Headers(init.headers).forEach((value, name) => headers.set(name, value));
+          const attempt = {body: init.body, key: headers.get('Idempotency-Key'), committedStatus: null, returnedStatus: null, responseState: null, exportId: null};
+          window.__exportPostAttempts.push(attempt);
+          const response = await originalFetch(input, init);
+          attempt.committedStatus = response.status;
+          if (response.ok) {
+            const body = await response.clone().json().catch(() => null);
+            attempt.responseState = body?.state ?? null;
+            attempt.exportId = body?.exportId ?? null;
+          }
+          window.__exportApiTrace.push({method, path:url.pathname, status:response.status, state:attempt.responseState});
+          if (window.__exportPostAttempts.length === 1 && response.status === 202) {
+            window.__exportFirstResponseLost = true;
+            const gatewayResponse = new Response(JSON.stringify({error:{code:'GATEWAY_UNAVAILABLE',message:'Resposta substituída pelo gateway E2E'}}), {status:503, headers:{'Content-Type':'application/json'}});
+            attempt.returnedStatus = gatewayResponse.status;
+            return gatewayResponse;
+          }
+          attempt.returnedStatus = response.status;
+          return response;
+        }
+        const response = await originalFetch(input, init);
+        if (url.pathname.startsWith('/api/v1/admin/exports/')) {
+          const entry = {method, path:url.pathname, status:response.status, state:null};
+          if (method === 'GET' && response.ok && /\\/api\\/v1\\/admin\\/exports\\/[^/]+$/.test(url.pathname)) {
+            const body = await response.clone().json().catch(() => null);
+            entry.state = body?.state ?? null;
+          }
+          window.__exportApiTrace.push(entry);
+        }
+        if (url.pathname.endsWith('/download-token') && response.ok) {
+          window.__exportDownloadHandle = (await response.clone().json()).downloadHandle;
+        }
+        if (url.pathname.endsWith('/content')) {
+          window.__exportContentStatus = response.status;
+          if (response.ok) window.__exportContentText = await response.clone().text();
+        }
+        if (method === 'DELETE' && /\\/api\\/v1\\/admin\\/exports\\//.test(url.pathname)) {
+          window.__exportIfMatch = new Headers(init.headers).get('If-Match');
+          window.__exportExpireStatus = response.status;
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Solicitar exportação', evaluate);
+    await waitUntil(() => evaluate('window.__exportFirstResponseLost === true'));
+    await waitForText('O resultado da solicitação é incerto.', evaluate);
+    const firstExportAttempt = await evaluate('window.__exportPostAttempts[0]');
+    const uncertainExportUi = await evaluate(`({
+      intent: JSON.parse(sessionStorage.getItem('agd044.export-context.v1:' + encodeURIComponent(${JSON.stringify(authenticatedSession.tenantId)}))).intent,
+      fromDisabled: document.querySelector('.export-center__form input[type=date]')?.disabled,
+      retryDisabled: [...document.querySelectorAll('button')].find(button => button.innerText.includes('Recuperar solicitação pendente'))?.disabled,
+      submitDisabled: [...document.querySelectorAll('button')].find(button => button.innerText.includes('Solicitar exportação'))?.disabled
+    })`);
+    const committedExportsBeforeRetry = Number(queryPostgres(
+        `SELECT count(*) FROM agendamento.export_job WHERE tenant_id = '${authenticatedSession.tenantId}' AND category = 'APPOINTMENTS'`,
+        appEnvironment,
+    ));
+    if (
+        !firstExportAttempt?.key ||
+        !firstExportAttempt.body ||
+        firstExportAttempt.committedStatus !== 202 ||
+        firstExportAttempt.returnedStatus !== 503 ||
+        uncertainExportUi.intent?.phase !== 'UNCERTAIN' ||
+        !uncertainExportUi.fromDisabled ||
+        uncertainExportUi.retryDisabled ||
+        !uncertainExportUi.submitDisabled ||
+        committedExportsBeforeRetry !== 1
+    ) {
+        throw new Error(`POST aceito com commit seguido de 503 não preservou intenção/controles no DOM: ${JSON.stringify({firstExportAttempt, uncertainExportUi, committedExportsBeforeRetry})}`);
+    }
+    await clickButtonByText('Recuperar solicitação pendente', evaluate);
+    await waitForText('Solicitação aceita.', evaluate);
+    await waitUntil(async () => evaluate('window.__exportPostAttempts.length === 2'));
+    const exportAttempts = await evaluate('window.__exportPostAttempts');
+    if (
+        exportAttempts[1].key !== firstExportAttempt.key ||
+        exportAttempts[1].body !== firstExportAttempt.body ||
+        exportAttempts[1].committedStatus !== 202 ||
+        exportAttempts[1].returnedStatus !== 202 ||
+        JSON.parse(exportAttempts[1].body).filters.from !== publicDate ||
+        JSON.parse(exportAttempts[1].body).filters.to !== publicDate
+    ) {
+        throw new Error(`Retry de exportação mudou a intenção original: ${JSON.stringify(exportAttempts)}`);
+    }
+    try {
+        await waitForText('Arquivo disponível', evaluate);
+    } catch (cause) {
+        const diagnostic = await evaluate(`({
+          attempts: window.__exportPostAttempts.map(({committedStatus, returnedStatus, responseState, exportId}) => ({committedStatus, returnedStatus, responseState, exportId})),
+          apiTrace: window.__exportApiTrace,
+          exportCard: document.querySelector('.export-center__job')?.innerText ?? null,
+          exportButtons: [...document.querySelectorAll('.export-center__actions button')].map(button => ({label:button.innerText.trim(), disabled:button.disabled}))
+        })`);
+        const persistedStates = queryPostgres(
+            `SELECT COALESCE(string_agg(state || ':' || amount, ',' ORDER BY state), '') FROM (SELECT state, count(*) AS amount FROM agendamento.export_job WHERE tenant_id = '${authenticatedSession.tenantId}' AND category = 'APPOINTMENTS' GROUP BY state) jobs`,
+            appEnvironment,
+        );
+        throw new Error(`Worker não tornou a exportação disponível no DOM: ${JSON.stringify({diagnostic, persistedStates})}`, {cause});
+    }
+    const activeExport = await evaluate(`(async () => {
+      const response = await fetch('/api/v1/admin/exports/active', {credentials:'same-origin', cache:'no-store'});
+      const body = response.status === 204 ? null : await response.json();
+      if (body) {
+        const individual = await fetch('/api/v1/admin/exports/' + body.exportId, {credentials:'same-origin', cache:'no-store'});
+        return {status:response.status, cache:response.headers.get('Cache-Control'), etag:response.headers.get('ETag'), body, individualStatus:individual.status, individualEtag:individual.headers.get('ETag'), individualBody:await individual.json()};
+      }
+      return {status:response.status, cache:response.headers.get('Cache-Control'), body};
+    })()`);
+    if (
+        activeExport.status !== 200 ||
+        !activeExport.cache?.includes('no-store') ||
+        !/^"[1-9][0-9]*"$/.test(activeExport.etag ?? '') ||
+        activeExport.individualStatus !== 200 ||
+        activeExport.etag !== activeExport.individualEtag ||
+        activeExport.body.exportId !== activeExport.individualBody.exportId ||
+        activeExport.body.state !== 'AVAILABLE' ||
+        'tenantId' in activeExport.body ||
+        'requestedByAdminId' in activeExport.body ||
+        'snapshotCiphertext' in activeExport.body
+    ) {
+        throw new Error(`GET /active divergiu do contrato minimizado/ETag: ${JSON.stringify(activeExport)}`);
+    }
+    const exportRows = Number(queryPostgres(
+        `SELECT count(*) FROM agendamento.export_job WHERE tenant_id = '${authenticatedSession.tenantId}' AND export_id = '${activeExport.body.exportId}' AND state = 'AVAILABLE' AND category = 'APPOINTMENTS'`,
+        appEnvironment,
+    ));
+    const exportEffects = queryPostgres(
+        `SELECT (SELECT count(*) FROM agendamento.audit_event WHERE target_id = '${activeExport.body.exportId}' AND action = 'EXPORT_REQUESTED') || ':' || (SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = '${activeExport.body.exportId}' AND event_type = 'ExportRequested') || ':' || (SELECT count(*) FROM agendamento.audit_event WHERE target_id = '${activeExport.body.exportId}' AND action = 'EXPORT_AVAILABLE') || ':' || (SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = '${activeExport.body.exportId}' AND event_type = 'ExportAvailable')`,
+        appEnvironment,
+    );
+    if (exportRows !== 1 || exportEffects !== '1:1:1:1') {
+        throw new Error(`Retry duplicou exportação ou efeitos transacionais: ${JSON.stringify({exportRows, exportEffects})}`);
+    }
+    await command('Page.addScriptToEvaluateOnNewDocument', {
+        source: `(() => {
+          const originalFetch = window.fetch.bind(window);
+          window.__agd044ExportReloadTrace = [];
+          window.fetch = async (input, init = {}) => {
+            const response = await originalFetch(input, init);
+            const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+            if (url.pathname.startsWith('/api/v1/admin/exports')) {
+              const entry = {method:(init.method || (input instanceof Request ? input.method : 'GET')).toUpperCase(), path:url.pathname, status:response.status, state:null};
+              if (entry.method === 'GET' && response.ok && /\\/api\\/v1\\/admin\\/exports\\/[^/]+$/.test(url.pathname)) {
+                const body = await response.clone().json().catch(() => null);
+                entry.state = body?.state ?? null;
+              }
+              window.__agd044ExportReloadTrace.push(entry);
+            }
+            return response;
+          };
+        })();`,
+    });
+    await command('Page.reload', {ignoreCache: true});
+    await waitUntil(
+        () =>
+            evaluate(
+                "document.readyState === 'complete' && location.pathname === '/admin' && performance.getEntriesByType('navigation')[0]?.type === 'reload'",
+            ),
+        60_000,
+    );
+    try {
+        await waitUntil(
+            () =>
+                evaluate(
+                    "(() => { const card = document.querySelector('.export-center__job'); return card?.querySelector('h3')?.innerText === 'Arquivo disponível' && [...card.querySelectorAll('button')].some(button => button.innerText.trim() === 'Baixar arquivo'); })()",
+                ),
+            60_000,
+        );
+    } catch (cause) {
+        const reloadDiagnostic = await evaluate(`({
+          url:location.pathname,
+          readyState:document.readyState,
+          navigationType:performance.getEntriesByType('navigation')[0]?.type ?? null,
+          authenticated:document.body.innerText.includes('Sessão administrativa ativa.'),
+          exportContext:JSON.parse(sessionStorage.getItem('agd044.export-context.v1:' + encodeURIComponent(${JSON.stringify(authenticatedSession.tenantId)})) || 'null'),
+          exportCard:document.querySelector('.export-center__job')?.innerText ?? null,
+          buttons:[...document.querySelectorAll('.export-center__job button')].map(button => button.innerText.trim()),
+          trace:window.__agd044ExportReloadTrace ?? []
+        })`);
+        throw new Error(`Reload não recuperou job AVAILABLE e controles de download no DOM: ${JSON.stringify(reloadDiagnostic)}`, {cause});
+    }
+    const reloadTrace = await evaluate('window.__agd044ExportReloadTrace ?? []');
+    if (
+        !reloadTrace.some(
+            (entry) =>
+                entry.method === 'GET' &&
+                entry.path === `/api/v1/admin/exports/${activeExport.body.exportId}` &&
+                entry.status === 200 &&
+                entry.state === 'AVAILABLE',
+        )
+    ) {
+        throw new Error(
+            `Reload mostrou job disponível sem GET tenant-scoped correspondente: ${JSON.stringify(reloadTrace)}`,
+        );
+    }
+    console.log('Browser: reload concluiu a navegação, consultou o mesmo job tenant-scoped e exibiu estado e controle de download no DOM.');
+    const recoveredExportId = await evaluate(`JSON.parse(sessionStorage.getItem('agd044.export-context.v1:' + encodeURIComponent(${JSON.stringify(authenticatedSession.tenantId)}))).exportId`);
+    const recoveredExportContext = await evaluate(`sessionStorage.getItem('agd044.export-context.v1:' + encodeURIComponent(${JSON.stringify(authenticatedSession.tenantId)}))`);
+    if (
+        recoveredExportId !== activeExport.body.exportId ||
+        recoveredExportContext.includes('Visitante de demonstração') ||
+        recoveredExportContext.includes('+5511999991234')
+    ) {
+        throw new Error('Reload não recuperou o mesmo job persistido da exportação.');
+    }
+    const exportReloadUi = await evaluate(`({
+      url: location.pathname,
+      jobHeading: document.querySelector('.export-center__job h3')?.innerText ?? null,
+      jobCard: document.querySelector('.export-center__job')?.innerText ?? null,
+      buttons: [...document.querySelectorAll('.export-center__job button')].map(button => ({label:button.innerText.trim(), disabled:button.disabled})),
+      storedExportId: JSON.parse(sessionStorage.getItem('agd044.export-context.v1:' + encodeURIComponent(${JSON.stringify(authenticatedSession.tenantId)})))?.exportId ?? null
+    })`);
+    if (!exportReloadUi.buttons.some(button => button.label === 'Baixar arquivo')) {
+        throw new Error(`Reload exibiu o estado disponível sem controles de download: ${JSON.stringify(exportReloadUi)}`);
+    }
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (input, init = {}) => {
+        const response = await originalFetch(input, init);
+        const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+        if (url.pathname.endsWith('/download-token') && response.ok) window.__exportDownloadHandle = (await response.clone().json()).downloadHandle;
+        if (url.pathname.endsWith('/content')) {
+          window.__exportContentStatus = response.status;
+          if (response.ok) window.__exportContentText = await response.clone().text();
+        }
+        if (init.method === 'DELETE' && /\\/api\\/v1\\/admin\\/exports\\//.test(url.pathname)) {
+          window.__exportIfMatch = new Headers(init.headers).get('If-Match');
+          window.__exportExpireStatus = response.status;
+        }
+        return response;
+      };
+    })()`);
+    await clickButtonByText('Baixar arquivo', evaluate);
+    await waitForText('Download iniciado.', evaluate);
+    const exportContent = await evaluate(`({text:window.__exportContentText, status:window.__exportContentStatus, handle:window.__exportDownloadHandle})`);
+    if (
+        exportContent.status !== 200 ||
+        typeof exportContent.handle !== 'string' ||
+        !exportContent.text?.includes('appointment_id') ||
+        !exportContent.text.includes(publicService.name) ||
+        !exportContent.text.includes(appointmentIdInEachTab[0]) ||
+        exportContent.text.includes('Visitante de demonstração') ||
+        exportContent.text.includes('+5511999991234')
+    ) {
+        throw new Error('CSV baixado não corresponde ao snapshot autorizado ou contém PII.');
+    }
+    await clickButtonByText('Encerrar acesso agora', evaluate);
+    await waitForText('O acesso a esta exportação foi encerrado.', evaluate);
+    const afterEarlyExpiry = await evaluate(`fetch('/api/v1/admin/exports/${activeExport.body.exportId}/content', {credentials:'same-origin', headers:{'X-Export-Download-Handle':window.__exportDownloadHandle}, cache:'no-store'}).then(async response => ({status:response.status, cache:response.headers.get('Cache-Control')}))`);
+    const noActiveAfterExpiry = await evaluate(`fetch('/api/v1/admin/exports/active', {credentials:'same-origin', cache:'no-store'}).then(async response => ({status:response.status, body:await response.text(), cache:response.headers.get('Cache-Control')}))`);
+    const expiredExportAudit = queryPostgres(
+        `SELECT (SELECT count(*) FROM agendamento.audit_event WHERE target_id = '${activeExport.body.exportId}' AND action = 'EXPORT_EXPIRED') || ':' || (SELECT count(*) FROM agendamento.outbox_event WHERE aggregate_id = '${activeExport.body.exportId}' AND event_type = 'ExportExpired')`,
+        appEnvironment,
+    );
+    const expiryDom = await evaluate(`({ifMatch:window.__exportIfMatch, status:window.__exportExpireStatus, state:document.querySelector('.export-center__job h3')?.innerText})`);
+    if (
+        expiryDom.ifMatch !== activeExport.etag ||
+        expiryDom.status !== 204 ||
+        expiryDom.state !== 'Acesso expirado' ||
+        afterEarlyExpiry.status !== 410 ||
+        noActiveAfterExpiry.status !== 204 ||
+        noActiveAfterExpiry.body !== '' ||
+        !noActiveAfterExpiry.cache?.includes('no-store') ||
+        expiredExportAudit !== '1:1'
+    ) {
+        throw new Error(`Expiração antecipada/negação posterior não respeitou ETag e efeitos únicos: ${JSON.stringify({expiryDom, afterEarlyExpiry, noActiveAfterExpiry, expiredExportAudit})}`);
+    }
+    console.log('Browser E2E sintético: exportação solicitada pelo DOM; resposta perdida após commit recuperada com corpo/chave idênticos; worker gerou CSV AVAILABLE; reload recuperou o mesmo ID; GET /active e GET individual compartilharam ETag forte e DTO minimizado; download correspondeu ao snapshot sem PII; expiração usou If-Match literal e bloqueou conteúdo posterior. PostgreSQL confirmou job e efeitos únicos.');
     const adminAppointment = await evaluate(
         `fetch('/api/v1/admin/appointments?from=${publicDate}&to=${publicDate}&serviceId=${encodeURIComponent(publicService.serviceId)}', {credentials:'same-origin'}).then(response => response.json()).then(page => page.items.find(item => item.appointmentId === ${JSON.stringify(appointmentIdInEachTab[0])}))`,
     );
