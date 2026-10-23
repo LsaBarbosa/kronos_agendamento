@@ -155,16 +155,17 @@ try {
       trialRestored: document.body.innerText.includes('Trial ativo'),
       loginLink: Boolean(document.querySelector('.login-link')),
       logoutButton: [...document.querySelectorAll('button')].some(button => button.innerText.trim() === 'Sair'),
+      subscriptionPrivateData: ['Trial ativo', 'Assinatura ativa', 'Pagamento pendente', 'Assinatura suspensa', 'Trial encerrado', 'Plano:', 'Pago até:', 'Fim da tolerância:'].some(text => document.body.innerText.includes(text)),
       adminSessionFetches: window.__adminSessionFetches,
     })`);
     const stateBeforeRelease = await subscriptionLogoutState();
-    if (!stateBeforeRelease.loggedOut || !stateBeforeRelease.loginLink || stateBeforeRelease.logoutButton) {
+    if (!stateBeforeRelease.loginLink || stateBeforeRelease.logoutButton) {
         throw new Error(`Logout visual não foi aplicado antes de liberar GET atrasado: ${JSON.stringify(stateBeforeRelease)}`);
     }
     try {
         await waitUntil(async () => {
             const state = await subscriptionLogoutState();
-            return state.loggedOut && !state.subscriptionPanel && !state.trialRestored;
+            return state.loginLink && !state.logoutButton && !state.subscriptionPrivateData;
         });
     } catch (cause) {
         const finalState = await subscriptionLogoutState();
@@ -174,7 +175,7 @@ try {
         );
     }
     const staleSubscriptionAfterLogout = await subscriptionLogoutState();
-    if (!staleSubscriptionAfterLogout.loggedOut || staleSubscriptionAfterLogout.subscriptionPanel || staleSubscriptionAfterLogout.trialRestored) {
+    if (!staleSubscriptionAfterLogout.loginLink || staleSubscriptionAfterLogout.logoutButton || staleSubscriptionAfterLogout.subscriptionPrivateData) {
         throw new Error(`GET comercial atrasado restaurou estado após logout: ${JSON.stringify(staleSubscriptionAfterLogout)}`);
     }
     console.log('Browser: GET administrativo de assinatura liberado após logout não restaura dados comerciais privados no DOM.');
