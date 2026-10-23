@@ -11,6 +11,7 @@ import { ClientAccessPage } from './ClientAccessPage';
 import { ClientNoShowPolicyPanel } from './ClientNoShowPolicyPanel';
 import { ClientNoShowFactsPanel } from './ClientNoShowFactsPanel';
 import { AdminSubscriptionPanel } from './AdminSubscriptionPanel';
+import { ExportCenter } from './exports/ExportCenter';
 
 type Session = { authenticated: boolean; tenantId: string; role: string };
 type Csrf = { headerName: string; token: string };
@@ -556,6 +557,14 @@ function AdminApp() {
                         key={`${session.tenantId}:${session.role}`}
                         enabled
                         tenantContextId={session.tenantId}
+                        onSessionInvalid={handleNoShowPolicySessionInvalid}
+                    />
+                )}
+                {session && (
+                    <ExportCenter
+                        key={`${session.tenantId}:${session.role}`}
+                        tenantId={session.tenantId}
+                        csrf={csrf}
                         onSessionInvalid={handleNoShowPolicySessionInvalid}
                     />
                 )}
