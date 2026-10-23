@@ -70,6 +70,14 @@ As quatro decisões foram aprovadas e implementadas no PR #21; a reconciliação
 
 Estas pendências não exigem reabrir a especificação inteira. Continuar a fundação e bloquear somente o comportamento que dependa de decisão ainda não tomada.
 
+### AGD-044 — allowlist PII de exportação
+
+| Tema | Referência | Efeito | Proposta para decisão |
+|---|---|---|---|
+| Categorias e campos exatos de CSV/PDF; especialmente nome/telefone de cliente, dados de assinatura/cobrança e auditoria | Documento 01 §13, documento 03 exemplo `APPOINTMENTS` e documento 06 AGD-044 | Define quais dados pessoais/sensíveis deixam o sistema e quais categorias podem ser solicitadas | O exemplo canônico nomeia `APPOINTMENTS`; sugiro primeira allowlist somente dos campos administrativos já publicados por `AdminAppointmentResponse`, sem telefone, auditoria integral ou dados financeiros. Não disponibilizar outras categorias até aprovação. A pergunta ao produto está em aberto; o contrato inicial rejeita categorias não aprovadas. |
+
+Para exportação administrativa normal, documento 01 §13 exige autorização atual e documento 04 §10 cita reautenticação para exportação excepcional. Este incremento aplicará sessão OIDC e associação atual em cada download; aprovação dupla/capability da exportação excepcional permanece em AGD-045. Se produto exigir step-up também para export normal, isso altera o fluxo e deverá ser decidido antes de habilitação.
+
 ### AGD-043 — fronteira técnica revisada sem fechar decisões comerciais
 
 A revisão independente do snapshot de attempt e do UPDATE amplo da inbox foi encerrada com correções em V37 e regressões PostgreSQL. Timing do aviso anual está aprovado e registrado em ADR-0028; continuam abertas âncora/duração comercial, pagamentos antecipados/atrasados, crédito/prorrogação, autorização anual, canal/destinatário/template, fornecedor/preço/moeda/termos, retenção e homologação. PR #24 permanece draft e dependente do scan Keycloak bloqueado; AGD-043 permanece em PR dependente dele, sem habilitação real de cobrança/notificação.

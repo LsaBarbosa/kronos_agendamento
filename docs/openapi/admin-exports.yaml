@@ -1,0 +1,240 @@
+openapi: 3.1.0
+info:
+  title: App Agendamento — exportações administrativas (AGD-044)
+  version: 1.0.0
+  description: >-
+    Export jobs são tenant-scoped à associação administrativa OIDC atual. O servidor
+    resolve tenant e ator. Filtros/critério aceitos são imutáveis. O handle de download
+    não é credencial: todas as leituras do conteúdo revalidam sessão, associação,
+    tenant, estado, versão e expiração. Export excepcional de suporte é AGD-045.
+servers:
+  - url: /
+paths:
+  /api/v1/admin/exports:
+    post:
+      operationId: requestAdminExport
+      summary: Solicitar uma exportação CSV ou PDF
+      description: >-
+        Cria um snapshot e retorna 202. Idempotency-Key é escopada ao tenant
+        autenticado; método, rota, versão do contrato e corpo canônico compõem o
+        digest. Retry com mesma chave/corpo recupera o mesmo exportId e estado atual.
+        Corpo diferente com a mesma chave resulta em IDEMPOTENCY_KEY_REUSED. Uma
+        resposta de transporte incerta deve ser recuperada com a mesma chave e corpo;
+        não iniciar uma nova exportação lógica. Tenant e ator nunca vêm do request.
+      security:
+        - adminSession: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExportRequest' }
+      responses:
+        '202':
+          description: Exportação aceita ou retry idempotente recuperado
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExportJob' }
+        '400': { $ref: '#/components/responses/InvalidExportRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: >-
+            EXPORT_ALREADY_ACTIVE ou IDEMPOTENCY_KEY_REUSED; a resposta contém um
+            código estável e não revela job de outro tenant.
+        '503':
+          description: Armazenamento criptografado/chave de exportação indisponível; nenhum job foi aceito.
+  /api/v1/admin/exports/{exportId}:
+    get:
+      operationId: getAdminExport
+      summary: Consultar estado minimizado de uma exportação
+      security:
+        - adminSession: []
+      parameters:
+        - $ref: '#/components/parameters/ExportId'
+      responses:
+        '200':
+          description: Estado e snapshot do próprio tenant, sem conteúdo do arquivo
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExportJob' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: expireAdminExportEarly
+      summary: Expirar antecipadamente arquivo disponível do próprio tenant
+      description: >-
+        Apenas AVAILABLE pode ser expirado antecipadamente. A transição para EXPIRED,
+        auditoria e agendamento de remoção são atômicos. Retry depois do commit é
+        idempotente e não duplica auditoria. REQUESTED/PROCESSING/RETRY_WAIT não são
+        cancelados por esta rota. AGD-045 não é coberta.
+      security:
+        - adminSession: []
+      parameters:
+        - $ref: '#/components/parameters/ExportId'
+        - in: header
+          name: If-Match
+          required: true
+          description: Versão ETag do job consultado; uma repetição já terminal é idempotente.
+          schema: { type: string }
+      responses:
+        '204': { description: Exportação expirada ou já expirada pelo mesmo tenant }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Estado não pode ser expirado antecipadamente }
+        '412': { description: Versão do job mudou; consultar novamente }
+  /api/v1/admin/exports/{exportId}/download-token:
+    post:
+      operationId: issueAdminExportDownloadHandle
+      summary: Emitir handle auxiliar de download para exportação disponível
+      description: >-
+        O handle é vinculado ao exportId/tenant/expiração e não substitui autorização.
+        Ele é devolvido apenas no corpo no-store, não em URL; pode ser renovado pela
+        sessão administrativa atual até a expiração do arquivo. Não é capability de
+        suporte ou autenticação independente.
+      security:
+        - adminSession: []
+      parameters:
+        - $ref: '#/components/parameters/ExportId'
+      responses:
+        '200':
+          description: Handle de uso no header X-Export-Download-Handle
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DownloadHandle' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Job ainda não está AVAILABLE }
+        '410': { description: Arquivo expirado; não pode ser reativado }
+  /api/v1/admin/exports/{exportId}/content:
+    get:
+      operationId: downloadAdminExportContent
+      summary: Baixar arquivo após revalidar autorização atual
+      description: >-
+        Exige OIDC admin atual, associação ativa, mesmo tenant, handle vinculado,
+        status AVAILABLE e now < expiresAt. Handle ou URL não autoriza acesso por si.
+        Não aceita tenantId, actorId, capability AGD-016 nem suporte AGD-045.
+      security:
+        - adminSession: []
+      parameters:
+        - $ref: '#/components/parameters/ExportId'
+        - in: header
+          name: X-Export-Download-Handle
+          required: true
+          schema: { type: string, minLength: 32, maxLength: 128 }
+      responses:
+        '200':
+          description: Conteúdo descriptografado somente durante streaming autorizado
+          headers:
+            Cache-Control: { schema: { type: string, const: 'no-store, private' } }
+            Content-Disposition: { schema: { type: string } }
+            ETag: { schema: { type: string, description: Digest do artefato cifrado } }
+          content:
+            text/csv:
+              schema: { type: string, format: binary }
+            application/pdf:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Handle inválido, revogado ou job não disponível }
+        '410': { description: Arquivo expirado, mesmo se objeto físico ainda existir }
+        '503': { description: Objeto ou chave de descriptografia indisponível; nenhum byte é servido }
+components:
+  securitySchemes:
+    adminSession:
+      type: apiKey
+      in: cookie
+      name: AGDSESSION
+  parameters:
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: true
+      schema: { type: string, minLength: 16, maxLength: 128 }
+    ExportId:
+      in: path
+      name: exportId
+      required: true
+      schema: { type: string, format: uuid }
+  schemas:
+    ExportRequest:
+      type: object
+      additionalProperties: false
+      required: [format, category, filters]
+      properties:
+        format: { type: string, enum: [CSV, PDF] }
+        category:
+          type: string
+          enum: [APPOINTMENTS]
+          description: >-
+            APPOINTMENTS é a única categoria citada no exemplo canônico. Outras
+            categorias/colunas aguardam allowlist aprovada; a API rejeita valores desconhecidos.
+        filters:
+          $ref: '#/components/schemas/AppointmentFilters'
+    AppointmentFilters:
+      type: object
+      additionalProperties: false
+      required: [from, to]
+      properties:
+        from:
+          type: string
+          format: date
+          description: Data local inclusiva no timezone IANA do tenant.
+        to:
+          type: string
+          format: date
+          description: Data local inclusiva no timezone IANA do tenant.
+        statuses:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum: [CONFIRMED, CANCELLED_BY_PROVIDER, CANCELLED_BY_CLIENT, COMPLETED, NO_SHOW]
+        serviceId: { type: string, format: uuid }
+    ExportJob:
+      type: object
+      required: [exportId, operationId, format, category, state, filters, snapshotAt, version, createdAt]
+      properties:
+        exportId: { type: string, format: uuid }
+        operationId: { type: string, format: uuid }
+        format: { type: string, enum: [CSV, PDF] }
+        category: { type: string, enum: [APPOINTMENTS] }
+        state:
+          type: string
+          enum: [REQUESTED, PROCESSING, RETRY_WAIT, AVAILABLE, FAILED_FINAL, EXPIRED]
+        filters: { $ref: '#/components/schemas/AppointmentFilters' }
+        snapshotAt: { type: string, format: date-time, nullable: true }
+        retryNumber: { type: integer, minimum: 0, maximum: 3 }
+        nextAttemptAt: { type: string, format: date-time, nullable: true }
+        availableAt: { type: string, format: date-time, nullable: true }
+        expiresAt: { type: string, format: date-time, nullable: true }
+        rowCount: { type: integer, minimum: 0, nullable: true }
+        artifactSize: { type: integer, minimum: 0, nullable: true }
+        artifactDigest: { type: string, nullable: true, description: SHA-256 do conteúdo cifrado, sem expor campos do arquivo. }
+        failureCode: { type: string, nullable: true, description: Código normalizado, sem mensagem externa ou PII. }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    DownloadHandle:
+      type: object
+      required: [downloadHandle, expiresAt]
+      properties:
+        downloadHandle: { type: string, minLength: 32, maxLength: 128 }
+        expiresAt: { type: string, format: date-time, description: Igual à expiração do arquivo; no máximo 30 minutos após AVAILABLE. }
+  responses:
+    InvalidExportRequest: { description: Filtro inválido, categoria/formato não suportados ou limite seguro excedido. }
+    Unauthorized: { description: Sessão OIDC ausente/expirada. }
+    Forbidden: { description: Papel ou associação administrativa atual inválida/revogada. }
+    NotFound: { description: Export inexistente ou não pertencente ao tenant atual; resposta não reveladora. }

@@ -1,0 +1,84 @@
+# AGD-044 — Exportação CSV/PDF: acordo de trabalho paralelo
+
+## Identificação e base
+
+- História: AGD-044 — Exportação CSV e PDF, documento 06 §7, critério E2E-11.
+- Base exata: head do PR #25/branch `agd-043-reativacao-renovacao`, `78921069f97e0b590511c99a1e0154e926d88d16`.
+- PR #25 continua draft e depende de #24; ambos permanecem sem merge. AGD-044 também dependerá de AGD-043 e terá base `agd-043-reativacao-renovacao`, não `main`.
+- Branch de integração: `agd-044-exportacoes`; worktree isolada `/tmp/kronos-agd044`.
+- Migração remota mais recente verificada: V40; primeira livre prevista V41. Confirmar novamente antes de criar.
+- Contrato inicial: `docs/openapi/admin-exports.yaml`, commit publicado antes de liberar a UI.
+
+## Objetivo, referências e limites
+
+Implementar solicitação, snapshot, processamento, armazenamento cifrado, consulta, download autorizado, expiração e auditoria de exportações CSV/PDF. Referências: documento 01 §§13–14; documento 02 §§4.8 e 10; documento 03 seção “Exportações”, eventos `ExportRequested`/`ExportAvailable`/`ExportExpired`, e seção 12; documento 04 §§10 e 13; documento 05 §§10–13 e 22; documento 06 AGD-044/E2E-11.
+
+Inclui filtros documentados de período, status, serviço e categoria disponível; um job ativo por tenant; retries em 30 s, 1 min e 2 min; disponibilidade de 30 min; isolamento, snapshot imutável, criptografia em repouso e auditoria. Não inclui AGD-045, exportação excepcional de suporte, dupla aprovação, novas categorias sem aprovação, retenção/exclusão geral, escolha/contratação de storage ou key-management provider.
+
+## Estado confirmado e questões
+
+- Módulo `exports` existe apenas como `package-info`; não há tabela, OpenAPI específico, worker, storage nem testes da história.
+- Reuso: OIDC/associação atual e CSRF; `AuditEventRecorder`; outbox; jobs persistidos com lease/fencing conforme padrões existentes.
+- Falta adaptação de produção para storage S3-compatível e gerenciamento real de chaves. A porta falha fechada sem implementação/configuração real; adapters de memória são somente teste/E2E e não comprovam prontidão.
+- A categoria `APPOINTMENTS` aparece no exemplo canônico. A especificação enumera outras classes de conteúdo, mas não aprova enum nem colunas/PII por categoria. Pergunta aberta registrada em `OPEN-QUESTIONS.md`: proposta inicial é derivar uma allowlist mínima do `AdminAppointmentResponse`, sem telefone, detalhes integrais de auditoria ou dados financeiros; não materializar outras categorias até decisão.
+- Documento 04 menciona reautenticação para exportação excepcional, não para download administrativo regular. O download comum revalida OIDC + associação atual + tenant + estado/versão/expiração; capacidade de AGD-045 continua fora do escopo. Não haverá URL assinada como autoridade.
+- Datas `from`/`to` serão locais inclusivas no timezone IANA confiável do tenant, seguindo as consultas administrativas existentes. O filtro não recebe timezone/tenant do cliente.
+
+## Contrato acordado antes da implementação extensa
+
+OpenAPI em `docs/openapi/admin-exports.yaml`:
+
+- `POST /api/v1/admin/exports`: body `format`, `category`, `filters`; `Idempotency-Key` obrigatória e escopada pelo tenant autenticado. Mesmo corpo/chave recupera `exportId` original; digest divergente retorna `IDEMPOTENCY_KEY_REUSED`; outra exportação ativa retorna `EXPORT_ALREADY_ACTIVE`.
+- `GET /api/v1/admin/exports/{exportId}`: estado minimizado e critérios aceitos; IDs inexistentes/alheios retornam resposta não reveladora.
+- `POST /api/v1/admin/exports/{exportId}/download-token`: emite handle opaco em corpo `no-store`, vinculado a export/tenant e até `expiresAt`; o handle não substitui sessão/associação atual.
+- `GET /api/v1/admin/exports/{exportId}/content`: exige sessão administrativa atual, associação ativa, tenant correspondente, handle válido, estado `AVAILABLE` e `now < expiresAt`. Resposta privada `no-store`; sem acesso após expiração, mesmo se remoção física atrasar.
+- `DELETE /api/v1/admin/exports/{exportId}`: expiração antecipada somente de `AVAILABLE`, CAS por `If-Match`; retry terminal é idempotente. Não cancela job em processamento.
+- Estados externos: `REQUESTED`, `PROCESSING`, `RETRY_WAIT`, `AVAILABLE`, `FAILED_FINAL`, `EXPIRED`. Erros expostos são códigos normalizados, sem payload do storage/PII.
+- Em timeout/5xx/resposta inválida de criação, a UI preserva body, tenant-context e chave; retry usa a mesma intenção. Rejeições definitivas não prendem o formulário.
+- Job registra snapshot de filtros, `snapshotAt`, row count, digest SHA-256 do artefato cifrado, tamanho, estados/retries e expiração; nunca inclui tenant/ator do request como autoridade.
+
+## Acordo de arquivos e ownership
+
+**Coordenador/backend — este terminal:**
+
+- `backend/**`, V41+, integrações PostgreSQL e testes.
+- `docs/openapi/admin-exports.yaml`, `docs/plans/AGD-044-paralelo.md`, `docs/development/OPEN-QUESTIONS.md`, `STATUS.md`, `VALIDATION.md`, `TRACEABILITY.md` e contratos/ADR quando necessários.
+- `frontend/src/App.tsx` somente para montar o componente entregue.
+- `scripts/dev/test-keycloak-browser.mjs` para E2E compartilhado.
+- configuração/CI/dependências somente se necessárias e aprovadas no escopo.
+
+**Implementador frontend no outro terminal — caminhos exclusivos, sem editar os arquivos acima:**
+
+- `frontend/src/exports/ExportCenter.tsx`
+- `frontend/src/exports/ExportCenter.test.tsx`
+- `frontend/src/exports/types.ts`
+- `frontend/src/exports/exports.css`
+
+Assinatura React acordada: `export function ExportCenter(props: ExportCenterProps): JSX.Element`, onde `ExportCenterProps` contém `tenantId: string`, `csrf: { headerName: string; token: string } | null` e `onSessionInvalid: (status: number) => void`. `tenantId` serve apenas para vincular rascunho de retry no navegador; nunca seleciona ou autoriza tenant no servidor. A UI importa `apiBaseUrl` do módulo de configuração existente. O componente gerencia POST/recovery, polling, download e apresentação de estados; App apenas fornece props e o renderiza para sessão admin autenticada.
+
+Qualquer divergência de contrato precisa ser comunicada em novo commit e descrita antes de o outro terminal alterar seu consumidor.
+
+## Estratégia técnica e validação
+
+1. Após este acordo/contrato: criar worktree frontend a partir do commit de contrato e liberá-la. Seguir backend em paralelo.
+2. Persistir `ExportJob`, critérios e chaves idempotentes com constraints; índice único parcial garante um ativo por tenant. Claims individuais, lease e fencing em PostgreSQL. Retry do item só nos tempos normativos; falhas definitivas terminam sem repetição.
+3. Snapshot de dados e critérios é imutável. Usar transação/isolamento e materialização coerentes por categoria; documentar watermark/semântica de snapshot e evitar transaction aberta durante upload.
+4. Gerar CSV com quoting RFC 4180 e neutralização de células iniciadas por `=`, `+`, `-`, `@` mesmo após whitespace/controles; PDF legível, paginação e escape de texto. Sem campos fora da allowlist aprovada.
+5. Cifrar artefato com AES-256-GCM, AAD tenant/export e key-id externo; chave ausente/ inválida bloqueia solicitação/processamento. Não gravar plaintext temporário persistente, chave, PII ou conteúdo em logs.
+6. Portas para artifact storage e keyring; adapter de teste isolado. Sem storage S3-compatível/segredo real, API de produção responde `503` e não aceita job nem produz falso `AVAILABLE`.
+7. Auditoria para solicitação, disponibilidade, download autorizado e expiração; outbox `ExportRequested`, `ExportAvailable`, `ExportExpired` somente quando estado correspondente confirmar. Job/receipt/auditoria/outbox compartilham a transação.
+8. Testar PostgreSQL real: filtro/tenant, corrida uma ativa/tenant, snapshot, idempotência, worker/lease/retries, arquivo CSV/PDF, criptografia, download não revelador, expiração, rollback, grants e instalação/upgrade/Flyway. E2E OIDC/Chrome com infraestrutura descartável e adapter sintético; não tocar Compose compartilhado.
+9. Revisar diff integrado, executar gates completos, publicar branch e abrir um PR draft único para a branch de AGD-043. Conferir CI push/PR; separar resultados funcionais do security scan Keycloak conhecido.
+
+## Progresso
+
+- [x] Head #25, working tree/worktrees e migração V40 confirmados.
+- [x] OpenAPI inicial e acordo de ownership preparados antes de implementação extensa.
+- [ ] Commit do contrato/acordo e liberação da worktree frontend.
+- [ ] Backend funcional, testes e validação PostgreSQL.
+- [ ] Integração App/E2E com frontend entregue.
+- [ ] Revisão final, atualização documental, PR draft e CI final.
+
+## Retomada
+
+Trabalho backend continua em `/tmp/kronos-agd044`, branch `agd-044-exportacoes`. Não trocar a branch nem editar os arquivos de frontend do acordo. Base e PRs predecessores permanecem sem merge.
