@@ -677,7 +677,7 @@ try {
     const firstExportAttempt = await evaluate('window.__exportPostAttempts[0]');
     const uncertainExportUi = await evaluate(`({
       intent: JSON.parse(sessionStorage.getItem('agd044.export-context.v1:' + encodeURIComponent(${JSON.stringify(authenticatedSession.tenantId)}))).intent,
-      fromDisabled: document.querySelector('input[type=date]')?.disabled,
+      fromDisabled: document.querySelector('.export-center__form input[type=date]')?.disabled,
       retryDisabled: [...document.querySelectorAll('button')].find(button => button.innerText.includes('Recuperar solicitação pendente'))?.disabled,
       submitDisabled: [...document.querySelectorAll('button')].find(button => button.innerText.includes('Solicitar exportação'))?.disabled
     })`);
