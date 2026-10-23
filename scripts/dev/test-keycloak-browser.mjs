@@ -636,27 +636,41 @@ try {
     await evaluate(`(() => {
       const originalFetch = window.fetch.bind(window);
       window.__exportPostAttempts = [];
+      window.__exportApiTrace = [];
       window.fetch = async (input, init = {}) => {
         const url = new URL(typeof input === 'string' ? input : input.url, location.href);
         const method = (init.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
         if (url.pathname === '/api/v1/admin/exports' && method === 'POST') {
           const headers = new Headers(input instanceof Request ? input.headers : undefined);
           new Headers(init.headers).forEach((value, name) => headers.set(name, value));
-          const attempt = {body: init.body, key: headers.get('Idempotency-Key'), committedStatus: null, returnedStatus: null};
+          const attempt = {body: init.body, key: headers.get('Idempotency-Key'), committedStatus: null, returnedStatus: null, responseState: null, exportId: null};
           window.__exportPostAttempts.push(attempt);
           const response = await originalFetch(input, init);
+          attempt.committedStatus = response.status;
+          if (response.ok) {
+            const body = await response.clone().json().catch(() => null);
+            attempt.responseState = body?.state ?? null;
+            attempt.exportId = body?.exportId ?? null;
+          }
+          window.__exportApiTrace.push({method, path:url.pathname, status:response.status, state:attempt.responseState});
           if (window.__exportPostAttempts.length === 1 && response.status === 202) {
             window.__exportFirstResponseLost = true;
-            attempt.committedStatus = response.status;
             const gatewayResponse = new Response(JSON.stringify({error:{code:'GATEWAY_UNAVAILABLE',message:'Resposta substituída pelo gateway E2E'}}), {status:503, headers:{'Content-Type':'application/json'}});
             attempt.returnedStatus = gatewayResponse.status;
             return gatewayResponse;
           }
-          attempt.committedStatus = response.status;
           attempt.returnedStatus = response.status;
           return response;
         }
         const response = await originalFetch(input, init);
+        if (url.pathname.startsWith('/api/v1/admin/exports/')) {
+          const entry = {method, path:url.pathname, status:response.status, state:null};
+          if (method === 'GET' && response.ok && /\/api\/v1\/admin\/exports\/[^/]+$/.test(url.pathname)) {
+            const body = await response.clone().json().catch(() => null);
+            entry.state = body?.state ?? null;
+          }
+          window.__exportApiTrace.push(entry);
+        }
         if (url.pathname.endsWith('/download-token') && response.ok) {
           window.__exportDownloadHandle = (await response.clone().json()).downloadHandle;
         }
@@ -712,7 +726,21 @@ try {
     ) {
         throw new Error(`Retry de exportação mudou a intenção original: ${JSON.stringify(exportAttempts)}`);
     }
-    await waitForText('Arquivo disponível', evaluate);
+    try {
+        await waitForText('Arquivo disponível', evaluate);
+    } catch (cause) {
+        const diagnostic = await evaluate(`({
+          attempts: window.__exportPostAttempts.map(({committedStatus, returnedStatus, responseState, exportId}) => ({committedStatus, returnedStatus, responseState, exportId})),
+          apiTrace: window.__exportApiTrace,
+          exportCard: document.querySelector('.export-center__job')?.innerText ?? null,
+          exportButtons: [...document.querySelectorAll('.export-center__actions button')].map(button => ({label:button.innerText.trim(), disabled:button.disabled}))
+        })`);
+        const persistedStates = queryPostgres(
+            `SELECT COALESCE(string_agg(state || ':' || amount, ',' ORDER BY state), '') FROM (SELECT state, count(*) AS amount FROM agendamento.export_job WHERE tenant_id = '${authenticatedSession.tenantId}' AND category = 'APPOINTMENTS' GROUP BY state) jobs`,
+            appEnvironment,
+        );
+        throw new Error(`Worker não tornou a exportação disponível no DOM: ${JSON.stringify({diagnostic, persistedStates})}`, {cause});
+    }
     const activeExport = await evaluate(`(async () => {
       const response = await fetch('/api/v1/admin/exports/active', {credentials:'same-origin', cache:'no-store'});
       const body = response.status === 204 ? null : await response.json();
