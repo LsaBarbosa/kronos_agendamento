@@ -2,6 +2,8 @@
 
 ## Decisões resolvidas
 
+| AGD-044 — allowlist mínima de exportação | Documento 01 §13, documento 03 exemplo `APPOINTMENTS`, documento 06 AGD-044 | A primeira versão exporta somente `APPOINTMENTS`: appointmentId, serviceId, snapshot do nome do serviço, instantes de atendimento/ocupação, timezone, duração, buffer, status e createdAt. Não exporta nome/telefone/clientId, auditoria nem dados financeiros; nenhuma outra categoria é habilitada. Esses campos de agenda ainda são dados pessoais protegidos por controle de acesso, `no-store` e criptografia em repouso. | **Aprovado pelo usuário em 23/10/2026 nesta instrução.** Outras categorias e campos exigem allowlist específica. Retenção segue pendente. |
+
 | AGD-042 — limite e recuperação tardia | AGD-042; documento 01 §12.3, documento 02 §7, documento 03 jobs, documento 06; ADR-0027 | `graceEndsAt = vencimento + 168h`; igualdade termina a tolerância (`now >= graceEndsAt`); D0/D+3/D+6 são 0/72/144h UTC. Em catch-up, só a mais recente vencida nunca iniciada permanece elegível; anteriores nunca iniciadas viram `SKIPPED_LATE_RECOVERY` com motivo. Futuras preservam horários. Tentativas iniciadas/em voo/ambíguas não são puladas; exigem reconciliação antes de outra cobrança lógica. Após grace não inicia nova chamada, mas resultado já iniciado continua reconciliável, inclusive após suspensão. Não altera trial. | **Aprovado pelo usuário em 22/10/2026 nesta instrução.** Registrado em requisitos, ADR-0027 e plano; integrações reais seguem fechadas. |
 
 | Política temporal de lembrete | AGD-031; documentos 01 §11, 02 §eventos e 03 AGD-031; ADR-0021 | Sem política explícita não criar lembrete nem inventar offset; job atrasado só é elegível se CONFIRMED, versão atual e início estritamente futuro; evento consumido após `due_at` pode ser processado imediatamente enquanto futuro; `due_at` usa política vigente no consumo e não é recalculado por alteração posterior, mas eventos não consumidos e nova versão usam política corrente no processamento. | Aprovado pelo usuário em 19/10/2026 nesta instrução. Regras registradas nos requisitos, contrato e ADR-0021; fornecedor, templates, segredos e homologação continuam pendentes. |
@@ -70,13 +72,9 @@ As quatro decisões foram aprovadas e implementadas no PR #21; a reconciliação
 
 Estas pendências não exigem reabrir a especificação inteira. Continuar a fundação e bloquear somente o comportamento que dependa de decisão ainda não tomada.
 
-### AGD-044 — allowlist PII de exportação
+### AGD-044 — fronteiras restantes
 
-| Tema | Referência | Efeito | Proposta para decisão |
-|---|---|---|---|
-| Categorias e campos exatos de CSV/PDF; especialmente nome/telefone de cliente, dados de assinatura/cobrança e auditoria | Documento 01 §13, documento 03 exemplo `APPOINTMENTS` e documento 06 AGD-044 | Define quais dados pessoais/sensíveis deixam o sistema e quais categorias podem ser solicitadas | O exemplo canônico nomeia `APPOINTMENTS`; sugiro primeira allowlist somente dos campos administrativos já publicados por `AdminAppointmentResponse`, sem telefone, auditoria integral ou dados financeiros. Não disponibilizar outras categorias até aprovação. A pergunta ao produto está em aberto; o contrato inicial rejeita categorias não aprovadas. |
-
-Para exportação administrativa normal, documento 01 §13 exige autorização atual e documento 04 §10 cita reautenticação para exportação excepcional. Este incremento aplicará sessão OIDC e associação atual em cada download; aprovação dupla/capability da exportação excepcional permanece em AGD-045. Se produto exigir step-up também para export normal, isso altera o fluxo e deverá ser decidido antes de habilitação.
+A aprovação da allowlist mínima não aprova retenção nem categorias adicionais. Para exportação administrativa normal, documento 01 §13 exige autorização atual; documento 04 §10 reserva reautenticação para exportação excepcional. O contrato usa sessão OIDC e associação atual em cada download; step-up/capability para exportação excepcional permanece em AGD-045. Retenção operacional e homologação seguem pendentes.
 
 ### AGD-043 — fronteira técnica revisada sem fechar decisões comerciais
 
