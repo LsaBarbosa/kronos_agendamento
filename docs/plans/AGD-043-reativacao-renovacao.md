@@ -81,7 +81,7 @@
 - [x] Interface/admin e roteiro E2E sintético atualizado para aguardar a materialização pelo worker; a assinatura-base segue sendo fixture de teste e não há envio.
 - [x] Backend completo com JDK 21 (80 unitários/arquiteturais e 283 integrações PostgreSQL); frontend format/lint/Vitest/typecheck/build; sintaxe do browser E2E.
 - [x] Revisão independente em leitura por dois revisores e revisão sequencial final; achados concretos corrigidos.
-- [ ] Browser E2E/CI remoto do head final após publicação; security deve continuar distinto e vermelho pelo scan Keycloak conhecido.
+- [x] Browser E2E no evento PR passou e demonstrou a materialização pelo worker, DOM e reload. No evento push, o mesmo roteiro passou pelo cenário anual, mas o job OIDC atingiu 25 min e foi cancelado antes do marcador final; a causa posterior ao cenário anual permanece desconhecida. App CI/security falhou apenas pelo scan Keycloak conhecido; CodeQL push/PR passou.
 
 ## Achados da revisão independente e resolução
 
@@ -100,6 +100,7 @@
 - Revisão leu pagamentos, CAS/locks, autorização, preflight V37, constraints/grants e aviso. Dois revisores independentes apontaram: (a) transição terminal do aviso ausente; (b) inversão entre lock de tenant e atualização da tentativa, além do risco de reativar com período já vencido. As correções estão cobertas por PostgreSQL. Revisões não equivalem a aprovação humana.
 - A regressão de resultado concorrente usa ordem `provider/account/reference → tenant → attempt`; pagamento autenticado de período que já venceu liquida somente o próprio ciclo, marca a evidência `EXPIRED_PERIOD` e não altera/reativa assinatura.
 - O browser E2E passou a aguardar o worker persistido criar a intenção anual para uma assinatura anual preparada por fixture isolada; verifica `READY`, texto “não enviada” e reload. Isso comprova worker+PostgreSQL+UI no ambiente sintético, não webhook/renovação real nem entrega.
+- CI no SHA `943bd3d37e5c9032d936aba10930765800afe6eb`: App CI PR [39933700761](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39933700761) teve verify/frontend/browser E2E/9 secrets verdes e security falhou no scan Keycloak conhecido; App CI push [39933695446](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39933695446) passou verify/frontend/secrets, mas o browser foi cancelado pelo timeout de 25 min depois de logar o cenário anual completo; a causa posterior não foi demonstrada. CodeQL push/PR [39933695468](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39933695468)/[39933700815](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39933700815) passou. O gate não está integralmente verde; não houve rerun.
 
 ## Validação
 
@@ -108,9 +109,9 @@
 | Correlação de pagamento com renewal attempt | `./mvnw -B -ntp spotless:check '-Dit.test=SubscriptionTrialIT,BillingWebhookIT' verify` | Testcontainers: evento autenticado vincula, liquida e deduplica com termos imutáveis da tentativa | Classes direcionadas passaram: 80 unitários/arquiteturais + 37 integrações PostgreSQL; o caso de contrato atualizado prova um único período/histórico e `APPLIED` |
 | Autorização mensal/anual | `SubscriptionTrialIT` com Clock | Mandato mensal distinto da autorização anual; default fail-closed | Cobertura direcionada passou dentro das 23 integrações da classe; porta anual indisponível sem fonte configurada |
 | Aviso anual e obsolescência | PostgreSQL/Testcontainers e E2E | Uma intenção por período, sem alegação de envio | `SubscriptionTrialIT` comprova materialização/deduplicação/obsolescência. No browser, a assinatura é fixture isolada, mas o worker do processo de teste cria a intenção; DOM/reload comprovam a composição sintética, não pagamento/webhook ou entrega real |
-| Schema V37 | `TenantPersistenceIT` | Fresh, V36→V37, validate/rerun/grants mínimos e legado sem snapshot falha sem reparo | 39 integrações PostgreSQL passaram, incluindo upgrade, validate/rerun, grant por coluna e preflight fail-closed |
+| Schema V38 | `TenantPersistenceIT` | Fresh, V37→V38, validate/rerun/grants mínimos; V37 falha fechado para legado sem prova histórica | 39 integrações PostgreSQL passaram, incluindo upgrade, validate/rerun, grant por coluna e preflight fail-closed |
 | Corridas temporais de AGD-042 | `BillingWebhookIT` | Igualdade e espera do lock não iniciam envio; instante anterior permite uma chamada | 14 integrações passaram; fixtures incluem snapshot/conta/ref e isolam ciclo de outros tenants sem reduzir estado/transport assertions |
-| Suíte completa backend | `env JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify`, JDK 21 | Todos os testes unitários e Testcontainers passam | Passou: 80 unitários/arquiteturais e 277 integrações PostgreSQL; 0 falhas, erros ou skips |
+| Suíte completa backend | `env JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify`, JDK 21 | Todos os testes unitários e Testcontainers passam | Passou: 80 unitários/arquiteturais e 283 integrações PostgreSQL; 0 falhas, erros ou skips |
 | CI sobre base PR #24 | App CI/CodeQL push e PR | Jobs concluídos; falha de segurança herdada do pin Keycloak explicitamente separada | No SHA `b293ec2`, CodeQL push/PR passou. App CI PR passou verify/frontend/E2E/secrets; push passou nesses jobs exceto E2E, que expirou em duas tentativas seletivas em pontos diferentes sem erro final explicativo. Security push/PR falhou no scan Keycloak herdado. Causa do E2E push permanece indeterminada. O fixture sem `provider_account_id` do SHA inicial foi corrigido. Links em VALIDATION; scan de imagem não aprovado |
 
 ## Retomada
