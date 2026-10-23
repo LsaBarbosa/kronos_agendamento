@@ -1,0 +1,167 @@
+.export-center {
+    margin-top: 28px;
+    padding: 24px;
+    border: 1px solid #dbe4dc;
+    border-radius: 16px;
+    background: #fff;
+}
+
+.export-center__header,
+.export-center__job-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.export-center__header h2,
+.export-center__job h3 {
+    margin: 0;
+}
+
+.export-center__header p:last-child {
+    color: #617067;
+}
+
+.export-center__eyebrow {
+    margin: 0 0 6px;
+    color: #39725b;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.export-center__form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    margin-bottom: 16px;
+}
+
+.export-center__service,
+.export-center__statuses,
+.export-center__actions {
+    grid-column: 1 / -1;
+}
+
+.export-center__statuses {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 12px;
+    margin: 0;
+    padding: 16px;
+    border: 1px solid #dbe4dc;
+    border-radius: 10px;
+}
+
+.export-center__statuses legend {
+    padding: 0 6px;
+    color: #344b3f;
+    font-weight: 700;
+}
+
+.export-center__check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 500;
+}
+
+.export-center__check input {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+}
+
+.export-center__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 8px 0 0;
+}
+
+.export-center__secondary {
+    color: #344b3f;
+    background: #e8eee9;
+}
+
+.export-center__job,
+.export-center__pending {
+    margin-top: 20px;
+    padding: 18px;
+    border: 1px solid #dbe4dc;
+    border-radius: 12px;
+    background: #fbfcfa;
+}
+
+.export-center__job dl {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin: 20px 0;
+}
+
+.export-center__job dl div {
+    min-width: 0;
+}
+
+.export-center__job dt {
+    color: #617067;
+    font-size: 0.82rem;
+}
+
+.export-center__job dd {
+    margin: 4px 0 0;
+    overflow-wrap: anywhere;
+    font-weight: 600;
+}
+
+.export-center__badge {
+    padding: 6px 10px;
+    border-radius: 999px;
+    color: #244d39;
+    background: #e1f1e6;
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+.export-center__badge--failed_final,
+.export-center__badge--expired {
+    color: #773b32;
+    background: #f8e8e5;
+}
+
+.export-center__message {
+    padding: 10px 12px;
+    border-left: 4px solid #39725b;
+    background: #eef5ef;
+}
+
+.export-center__message--error {
+    border-color: #a74739;
+    color: #772d24;
+    background: #fff1ee;
+}
+
+.export-center__empty {
+    color: #617067;
+}
+
+@media (max-width: 560px) {
+    .export-center {
+        padding: 18px;
+    }
+
+    .export-center__form {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .export-center__header,
+    .export-center__job-heading {
+        flex-direction: column;
+    }
+
+    .export-center__actions button {
+        width: 100%;
+    }
+}
