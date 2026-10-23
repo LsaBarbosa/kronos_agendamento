@@ -77,8 +77,9 @@ Qualquer divergência de contrato precisa ser comunicada em novo commit e descri
 - [x] OpenAPI inicial e acordo de ownership preparados antes de implementação extensa.
 - [x] Commit do contrato/acordo e liberação da worktree frontend (`60c55b57bed37f7c45644ac7c0b4ece32f2b117a`).
 - [x] Backend funcional, testes direcionados e validação PostgreSQL.
+- [x] PR #26 aberto como draft, base `agd-043-reativacao-renovacao`, dependência #25 explicitada.
 - [ ] Integração App/E2E com frontend entregue.
-- [ ] Revisão final, atualização documental, PR draft e CI final.
+- [ ] Integração App/E2E, revisão final e CI no head combinado.
 
 ## Progresso técnico do backend
 
@@ -96,8 +97,9 @@ Qualquer divergência de contrato precisa ser comunicada em novo commit e descri
 - Testes unitários cobrem quoting RFC 4180, neutralização de fórmula após whitespace, controles, espaço Unicode e caracteres de formatação invisíveis; datas cobrem limite de 366 e janela invertida/excessiva. PDF é validado quanto à legibilidade/texto.
 - Testes PostgreSQL/Testcontainers cobrem isolamento, associação revogada, corrida de um job ativo, idempotência/replay, download, expiração, rollback, grants, retry transitório, indisponibilidade de storage e limpeza concorrente com escrita de worker obsoleto. O filtro local considera interseção da ocupação `[startsAt, occupiedUntil)` com a janela pedida, inclusive quando o atendimento começou antes dela.
 - A execução Testcontainers inicial foi bloqueada pelo socket no sandbox. Execuções autorizadas alcançaram PostgreSQL 16.13 e aplicaram V1–V41. `TenantPersistenceIT` passou 43 testes e a execução focada final de `ExportLifecycleIT` passou 16 testes, incluindo a concorrência sincronizada do fencing de limpeza. A suíte completa precisa ser repetida após integrar a UI.
-- A worktree UI permanece separada em `/tmp/kronos-agd044-ui`, branch `agd-044-exportacoes-ui`; não editar seus quatro arquivos exclusivos. O coordenador só integrará após receber commits e relatório explícito.
+- A worktree UI permanece separada em `/tmp/kronos-agd044-ui`, branch `agd-044-exportacoes-ui`, limpa no commit `60c55b57bed37f7c45644ac7c0b4ece32f2b117a`; `git fetch origin agd-044-exportacoes-ui` informa que ainda não há ref remota. Não editar seus quatro arquivos exclusivos. O coordenador só integrará após receber commits e relatório explícito.
 - Backend validado localmente em JDK 21: suíte completa `spotless:check verify` passou com 82 testes unitários/arquiteturais e 310 integrações PostgreSQL 16.13; após ajuste final dos adapters de tombstone, `ExportLifecycleIT` passou 16/16 e os unitários de filtro/geração passaram 5/5. A migration V41 também passou em instalação limpa, upgrade V40→V41, validate/rerun e grants (`TenantPersistenceIT` 43/43).
+- Revalidação completa posterior no SHA `04c05305280a00acf5089e42f8694bbfa54c7113`: JDK 21 `spotless:check verify` passou com 85 unitários/arquiteturais + 310 integrações PostgreSQL 16.13/Testcontainers; validações V41 e grants incluídas. UI continua não entregue na worktree isolada, então esta evidência é exclusivamente backend.
 - OpenAPI explicita envelope de erros, janela de 366 datas, filtros e o ETag de representação como não autorizador. A allowlist de dados permanece limitada a APPOINTMENTS sem nome/telefone de cliente; demais categorias/campos continuam como decisão aberta.
 - E2E OIDC compartilhado ainda não foi alterado nem executado. Será atualizado após a entrega UI, com ambiente descartável e adapter controlado apenas no perfil de teste; não usar o Compose compartilhado.
 
