@@ -51,6 +51,8 @@ let socket;
 let browserCdp;
 let secondTab;
 let secondTargetId;
+let unlinkedTab;
+let unlinkedTargetId;
 try {
     await waitUntil(async () => {
         const response = await fetch('http://127.0.0.1:9222/json/version');
@@ -3172,14 +3174,23 @@ try {
     console.log('Browser E2E sintético: o worker de AGD-042 materializa a intenção anual no período corrente; PostgreSQL confirma READY sem entrega, e a UI mantém estado/versão após reload. A assinatura foi preparada por fixture isolada; nenhum fornecedor/notificação real.');
 
     await command('Network.clearBrowserCookies');
-    // A página já está em /admin. Recarregá-la após limpar os cookies valida
-    // a sessão anônima sem emitir Page.navigate para a mesma URL.
-    await command('Page.reload');
-    await waitForText('Entrar como administrador', evaluate);
-    await evaluate("document.querySelector('a[href*=oauth2]').click()");
-    await waitForText('username', evaluate, true);
-    await submitLogin(credentials.KEYCLOAK_UNLINKED_USERNAME, credentials.KEYCLOAK_UNLINKED_PASSWORD, evaluate);
-    await waitForText('ADMIN_ACCESS_DENIED', evaluate);
+    const unlinkedTarget = await browserCdp.command('Target.createTarget', {
+        url: 'http://localhost:5173/admin',
+    });
+    unlinkedTargetId = unlinkedTarget.targetId;
+    const unlinkedTargetInfo = await waitForTarget(unlinkedTargetId);
+    unlinkedTab = await connectToCdp(unlinkedTargetInfo.webSocketDebuggerUrl);
+    await unlinkedTab.command('Page.enable');
+    await unlinkedTab.command('Runtime.enable');
+    await waitForText('Entrar como administrador', unlinkedTab.evaluate);
+    await unlinkedTab.evaluate("document.querySelector('a[href*=oauth2]').click()");
+    await waitForText('username', unlinkedTab.evaluate, true);
+    await submitLogin(
+        credentials.KEYCLOAK_UNLINKED_USERNAME,
+        credentials.KEYCLOAK_UNLINKED_PASSWORD,
+        unlinkedTab.evaluate,
+    );
+    await waitForText('ADMIN_ACCESS_DENIED', unlinkedTab.evaluate);
     assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, credentials, [
         clientPhone,
         differentPhone,
@@ -3192,6 +3203,10 @@ try {
         'Browser E2E passed: OIDC login, tenant, 30-minute idle expiry, SSO reauthentication, revocation, CSRF logout, unlinked denial, no test credentials in backend logs.',
     );
 } finally {
+    if (browserCdp && unlinkedTargetId) {
+        await browserCdp.command('Target.closeTarget', { targetId: unlinkedTargetId }).catch(() => {});
+    }
+    unlinkedTab?.close();
     if (browserCdp && secondTargetId) {
         await browserCdp.command('Target.closeTarget', { targetId: secondTargetId }).catch(() => {});
     }
