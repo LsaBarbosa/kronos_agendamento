@@ -1015,6 +1015,12 @@ No SHA funcional `0fa225ac92dbc46233993bc578787b230c1c0115`, App CI push [393364
 
 #### CI terminal no head documental `e810d82d6c0c43626ae41d7b5d5d13c23745df6c`
 
-- App CI push [39967196980](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39967196980) e PR [39967206406](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39967206406) concluíram `completed/failure`, com todos os jobs/check-runs terminais. Verify/Testcontainers, frontend, OIDC E2E geral e secret scans passaram; `security` falhou só em `Scan pinned Keycloak image` (bloqueio conhecido).
+- App CI push [39967196980](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39967196980) e PR [39967206406](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39967206406) concluíram `completed/failure`, com todos os jobs/check-runs terminais. Em ambos, verify/Testcontainers, frontend e secret scans passaram; `security` falhou só em `Scan pinned Keycloak image` (bloqueio conhecido). O E2E PR passou; o push falhou na remarcação preexistente: tentativa inicial 409, respostas posteriores 200, mas o DOM não alcançou “Remarcação confirmada e persistida”. A causa continua desconhecida.
 - CodeQL push [39967197028](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39967197028) e PR [39967205297](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39967205297) concluíram success com os dois analisadores.
 - E2E OIDC geral não exerce exportações. A worktree foi liberada ao implementador UI com contrato/agreement commitado; teste do componente, composição em App e E2E de exportação aguardam entrega `FRONTEND PRONTO PARA INTEGRAÇÃO`.
+
+#### CI terminal no head `638848c882660f6603730634e56e7a96004d1cbf`
+
+- App CI push [39967971983](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39967971983) e PR [39967984289](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39967984289) concluíram todos os jobs/check-runs. Verify/Testcontainers, frontend e secret scans passaram; `security` falhou nos dois eventos apenas no Keycloak. O E2E PR passou OIDC geral; o push falhou no cenário de remarcação descrito acima. Esta repetição de padrão não estabelece causa nem resolve a intermitência histórica.
+- CodeQL push [39967971890](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39967971890) e PR [39967984229](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39967984229) concluíram success com ambos analisadores.
+- Os jobs e workflows estão terminais no SHA. O E2E executado é o OIDC geral e não cobre a UI de exportações, que segue em implementação paralela.
