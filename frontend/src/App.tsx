@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+    useCallback,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+} from 'react';
 import type { FormEvent } from 'react';
 import { apiBaseUrl } from './config';
 import { commandKey } from './commandKey';
@@ -40,6 +46,18 @@ const emptyDraft: Draft = {
     status: '',
 };
 
+const exportContextStoragePrefix = 'agd044.export-context.v1:';
+
+function clearExportContext(tenantId: string) {
+    try {
+        window.sessionStorage.removeItem(
+            exportContextStoragePrefix + encodeURIComponent(tenantId),
+        );
+    } catch {
+        // Storage may be unavailable; the export component still clears memory.
+    }
+}
+
 async function responseError(response: Response): Promise<string> {
     try {
         const body = (await response.json()) as {
@@ -64,6 +82,7 @@ function AdminApp() {
     const [saving, setSaving] = useState(false);
     const pendingKeys = useRef(new Map<string, string>());
     const sessionBootstrapEpoch = useRef(0);
+    const previousExportTenant = useRef<string | null>(null);
     const invalidateSessionBootstrap = useCallback(() => {
         sessionBootstrapEpoch.current++;
     }, []);
@@ -80,6 +99,15 @@ function AdminApp() {
         },
         [invalidateSessionBootstrap],
     );
+
+    useLayoutEffect(() => {
+        const currentTenant = session?.tenantId ?? null;
+        const previousTenant = previousExportTenant.current;
+        if (previousTenant && previousTenant !== currentTenant) {
+            clearExportContext(previousTenant);
+        }
+        previousExportTenant.current = currentTenant;
+    }, [session?.tenantId]);
 
     useEffect(() => {
         const epochRef = sessionBootstrapEpoch;
@@ -582,7 +610,7 @@ function AdminApp() {
                         onSessionInvalid={handleNoShowPolicySessionInvalid}
                     />
                 )}
-                {session && (
+                {session && csrf && (
                     <ExportCenter
                         key={`${session.tenantId}:${session.role}`}
                         tenantId={session.tenantId}
