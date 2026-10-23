@@ -135,3 +135,10 @@
 ## Retomada
 
 Branch `agd-043-reativacao-renovacao` é dependente do PR #24. O PR deve ter base `agd-042-inadimplencia-retries-suspensao`, permanecer draft e conter somente commits AGD-043 acima do head base. Não fazer merge, deploy ou operação externa.
+
+### Evidência remota do head funcional `3ddd3c3ef7b256227ebcbca81f3c0387955e9daa`
+
+- App CI PR [39948517169](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39948517169) e push [39948521812](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39948521812) concluíram todos os jobs. Verify, frontend, browser OIDC E2E e secret scans passaram; o único job falho foi `security`, exclusivamente no scan conhecido da imagem Keycloak.
+- CodeQL PR [39948517156](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39948517156) e push [39948521782](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39948521782) passaram com ambos os analisadores; check agregado [120397258903](https://github.com/LsaBarbosa/kronos_agendamento/runs/120397258903) também passou.
+- Os E2Es de PR/push passaram em 3m54s/3m58s. São testes isolados com dados sintéticos: observam a intenção persistida pelo worker e a interface após reload; não comprovam cobrança, autorização comercial ou aviso real.
+- O commit de atualização desta evidência altera somente documentação; verificar também os workflows que forem disparados para seu SHA.
