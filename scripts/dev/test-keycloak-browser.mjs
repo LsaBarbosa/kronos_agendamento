@@ -795,20 +795,49 @@ try {
         })();`,
     });
     await command('Page.reload', {ignoreCache: true});
+    await waitUntil(
+        () =>
+            evaluate(
+                "document.readyState === 'complete' && location.pathname === '/admin' && performance.getEntriesByType('navigation')[0]?.type === 'reload'",
+            ),
+        60_000,
+    );
     try {
-        await waitForText('Arquivo disponível', evaluate);
+        await waitUntil(
+            () =>
+                evaluate(
+                    "(() => { const card = document.querySelector('.export-center__job'); return card?.querySelector('h3')?.innerText === 'Arquivo disponível' && [...card.querySelectorAll('button')].some(button => button.innerText.trim() === 'Baixar arquivo'); })()",
+                ),
+            60_000,
+        );
     } catch (cause) {
         const reloadDiagnostic = await evaluate(`({
           url:location.pathname,
+          readyState:document.readyState,
+          navigationType:performance.getEntriesByType('navigation')[0]?.type ?? null,
           authenticated:document.body.innerText.includes('Sessão administrativa ativa.'),
           exportContext:JSON.parse(sessionStorage.getItem('agd044.export-context.v1:' + encodeURIComponent(${JSON.stringify(authenticatedSession.tenantId)})) || 'null'),
           exportCard:document.querySelector('.export-center__job')?.innerText ?? null,
           buttons:[...document.querySelectorAll('.export-center__job button')].map(button => button.innerText.trim()),
           trace:window.__agd044ExportReloadTrace ?? []
         })`);
-        throw new Error(`Reload não recuperou a exportação AVAILABLE no DOM: ${JSON.stringify(reloadDiagnostic)}`, {cause});
+        throw new Error(`Reload não recuperou job AVAILABLE e controles de download no DOM: ${JSON.stringify(reloadDiagnostic)}`, {cause});
     }
-    console.log('Browser: reload recuperou o mesmo job disponível no DOM com contexto de sessão e GET tenant-scoped.');
+    const reloadTrace = await evaluate('window.__agd044ExportReloadTrace ?? []');
+    if (
+        !reloadTrace.some(
+            (entry) =>
+                entry.method === 'GET' &&
+                entry.path === `/api/v1/admin/exports/${activeExport.body.exportId}` &&
+                entry.status === 200 &&
+                entry.state === 'AVAILABLE',
+        )
+    ) {
+        throw new Error(
+            `Reload mostrou job disponível sem GET tenant-scoped correspondente: ${JSON.stringify(reloadTrace)}`,
+        );
+    }
+    console.log('Browser: reload concluiu a navegação, consultou o mesmo job tenant-scoped e exibiu estado e controle de download no DOM.');
     const recoveredExportId = await evaluate(`JSON.parse(sessionStorage.getItem('agd044.export-context.v1:' + encodeURIComponent(${JSON.stringify(authenticatedSession.tenantId)}))).exportId`);
     const recoveredExportContext = await evaluate(`sessionStorage.getItem('agd044.export-context.v1:' + encodeURIComponent(${JSON.stringify(authenticatedSession.tenantId)}))`);
     if (
