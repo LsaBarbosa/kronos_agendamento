@@ -38,11 +38,12 @@ public record AuditEvent(
                     || actorRef.equals("CONTROLLED_DEMO_PROVISIONER")
                     || actorRef.equals("PUBLIC_BOOKING")
                     || actorRef.equals("NO_SHOW_POLICY")
-                    || actorRef.equals("SUBSCRIPTION_LIFECYCLE"))
+                    || actorRef.equals("SUBSCRIPTION_LIFECYCLE")
+                    || actorRef.equals("EXPORT_LIFECYCLE"))
             || actorType.equals("CLIENT") && actorRef.equals("VERIFIED_CLIENT"))
         || !result.equals("COMMITTED")
         || !action.matches(
-            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|CLIENT_NO_SHOW_POLICY_UPDATED|CLIENT_SELF_BOOKING_(BLOCKED|UNBLOCKED|RECONCILED)|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)|PUBLICATION_(PUBLISHED|UNPUBLISHED)|PUBLIC_PROFILE_UPDATED|APPOINTMENT_CONFIRMED|APPOINTMENT_RESCHEDULED|APPOINTMENT_CANCELLED_BY_PROVIDER|APPOINTMENT_CANCELLED_BY_CLIENT|APPOINTMENT_COMPLETED|APPOINTMENT_NO_SHOW_RECORDED|APPOINTMENT_NO_SHOW_CORRECTED|SUBSCRIPTION_TRIAL_GRANTED|SUBSCRIPTION_TRIAL_EXPIRED|SUBSCRIPTION_PAYMENT_CONFIRMED|SUBSCRIPTION_PAYMENT_PAST_DUE|SUBSCRIPTION_PAYMENT_SUSPENDED")) {
+            "TENANT_(CREATED|RENAMED|ADMIN_LINKED)|SERVICE_(CREATED|UPDATED|ACTIVATED|DEACTIVATED)|SCHEDULE_UPDATED|AVAILABILITY_POLICY_UPDATED|CLIENT_NO_SHOW_POLICY_UPDATED|CLIENT_SELF_BOOKING_(BLOCKED|UNBLOCKED|RECONCILED)|SCHEDULE_EXCEPTION_(CREATED|UPDATED|REMOVED)|BLOCKED_PERIOD_(CREATED|CANCELLED)|PUBLICATION_(PUBLISHED|UNPUBLISHED)|PUBLIC_PROFILE_UPDATED|APPOINTMENT_CONFIRMED|APPOINTMENT_RESCHEDULED|APPOINTMENT_CANCELLED_BY_PROVIDER|APPOINTMENT_CANCELLED_BY_CLIENT|APPOINTMENT_COMPLETED|APPOINTMENT_NO_SHOW_RECORDED|APPOINTMENT_NO_SHOW_CORRECTED|SUBSCRIPTION_TRIAL_GRANTED|SUBSCRIPTION_TRIAL_EXPIRED|SUBSCRIPTION_PAYMENT_CONFIRMED|SUBSCRIPTION_PAYMENT_PAST_DUE|SUBSCRIPTION_PAYMENT_SUSPENDED|EXPORT_(REQUESTED|AVAILABLE|DOWNLOADED|EXPIRED)")) {
       throw new IllegalArgumentException("Ator ou resultado de auditoria inválido");
     }
     if (((actorType.equals("ADMIN") || actorType.equals("CLIENT")) && actorId == null)
@@ -61,6 +62,23 @@ public record AuditEvent(
           case "TENANT_ADMIN_LINKED" ->
               actorRef.equals("CONTROLLED_DEMO_PROVISIONER")
                   && detailsJson.equals("{\"changed_fields\":[\"identity\",\"membership\"]}");
+          case "EXPORT_REQUESTED" ->
+              actorType.equals("ADMIN")
+                  && detailsJson.matches(
+                      "\\{\\\"changed_fields\\\":\\[\\\"export\\\"\\],\\\"category\\\":\\\"APPOINTMENTS\\\",\\\"format\\\":\\\"(CSV|PDF)\\\",\\\"version_before\\\":0,\\\"version_after\\\":1\\}");
+          case "EXPORT_AVAILABLE" ->
+              actorType.equals("SYSTEM")
+                  && actorRef.equals("EXPORT_LIFECYCLE")
+                  && detailsJson.matches(
+                      "\\{\\\"changed_fields\\\":\\[\\\"export\\\"\\],\\\"version_before\\\":[1-9][0-9]*,\\\"version_after\\\":[1-9][0-9]*,\\\"row_count\\\":[0-9]+\\}");
+          case "EXPORT_DOWNLOADED" ->
+              actorType.equals("ADMIN")
+                  && detailsJson.equals("{\"changed_fields\":[\"export_download\"]}");
+          case "EXPORT_EXPIRED" ->
+              (actorType.equals("ADMIN")
+                      || actorType.equals("SYSTEM") && actorRef.equals("EXPORT_LIFECYCLE"))
+                  && detailsJson.matches(
+                      "\\{\\\"changed_fields\\\":\\[\\\"export\\\"\\],\\\"version_before\\\":[1-9][0-9]*,\\\"version_after\\\":[1-9][0-9]*\\}");
           case "SERVICE_CREATED" ->
               actorType.equals("ADMIN")
                   && detailsJson.equals(

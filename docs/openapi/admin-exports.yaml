@@ -139,7 +139,7 @@ paths:
           headers:
             Cache-Control: { schema: { type: string, const: 'no-store, private' } }
             Content-Disposition: { schema: { type: string } }
-            ETag: { schema: { type: string, description: Digest do artefato cifrado } }
+            ETag: { schema: { type: string, description: SHA-256 da representação em claro, sem autorização implícita. } }
           content:
             text/csv:
               schema: { type: string, format: binary }

@@ -37,6 +37,11 @@ import com.appagendamento.clients.application.LiftClientBookingRestriction;
 import com.appagendamento.clients.application.ReconcileClientBookingRestriction;
 import com.appagendamento.clients.application.ReplaceClientNoShowPolicy;
 import com.appagendamento.clients.application.SearchAdministrativeClients;
+import com.appagendamento.exports.application.DownloadExport;
+import com.appagendamento.exports.application.ExpireExport;
+import com.appagendamento.exports.application.GetExport;
+import com.appagendamento.exports.application.IssueExportDownloadHandle;
+import com.appagendamento.exports.application.RequestExport;
 import com.appagendamento.notifications.application.GetNotificationOperations;
 import com.appagendamento.platform.infrastructure.web.CorrelationIdFilter;
 import com.appagendamento.publicpage.application.ChangePublicationStatus;
@@ -122,6 +127,11 @@ class SecurityBoundaryTest {
   @MockitoBean private LiftClientBookingRestriction liftClientBookingRestriction;
   @MockitoBean private ReplaceClientNoShowPolicy replaceClientNoShowPolicy;
   @MockitoBean private ReconcileClientBookingRestriction reconcileClientBookingRestriction;
+  @MockitoBean private RequestExport requestExport;
+  @MockitoBean private GetExport getExport;
+  @MockitoBean private IssueExportDownloadHandle issueExportDownloadHandle;
+  @MockitoBean private DownloadExport downloadExport;
+  @MockitoBean private ExpireExport expireExport;
 
   @Test
   void anonymousBusinessRequestReceivesConsistentError() throws Exception {
