@@ -3154,9 +3154,8 @@ try {
 
     queryPostgres(`UPDATE agendamento.billing_dunning_attempt a SET state = 'CANCELLED', claim_token = NULL, lease_until = NULL, send_claim_token = NULL, next_attempt_at = NULL, skip_reason = NULL FROM agendamento.billing_dunning_cycle c WHERE a.cycle_id = c.cycle_id AND a.tenant_id = c.tenant_id AND c.tenant_id = '${authenticatedSession.tenantId}' AND c.subscription_id = '${activeTrial.subscriptionId}'`, appEnvironment);
     queryPostgres(`UPDATE agendamento.billing_dunning_cycle SET state = 'PAID', closed_at = clock_timestamp() WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}' AND state IN ('OPEN', 'SUSPENDED')`, appEnvironment);
-    queryPostgres(`UPDATE agendamento.subscription SET status = 'ACTIVE', plan_code = 'ANNUAL', paid_through_at = clock_timestamp() + INTERVAL '168 hours', grace_ends_at = NULL, version = version + 1 WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}'`, appEnvironment);
-    const annualNoticeId = randomUUID();
-    queryPostgres(`INSERT INTO agendamento.billing_annual_renewal_notice (notice_id, tenant_id, subscription_id, subscription_version, paid_through_at, scheduled_at, state, created_at, updated_at) SELECT '${annualNoticeId}', tenant_id, subscription_id, version, paid_through_at, paid_through_at - INTERVAL '168 hours', 'READY', clock_timestamp(), clock_timestamp() FROM agendamento.subscription WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}'`, appEnvironment);
+    queryPostgres(`UPDATE agendamento.subscription SET status = 'ACTIVE', plan_code = 'ANNUAL', paid_through_at = clock_timestamp() + INTERVAL '1 hour', grace_ends_at = NULL, version = version + 1 WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}'`, appEnvironment);
+    await waitUntil(async () => Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_annual_renewal_notice WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}' AND paid_through_at = (SELECT paid_through_at FROM agendamento.subscription WHERE subscription_id = '${activeTrial.subscriptionId}') AND state = 'READY' AND obsolete_reason IS NULL AND scheduled_at <= clock_timestamp()`, appEnvironment)) === 1, 125000);
     await command('Page.reload');
     await waitForText('Renovação anual', evaluate);
     const annualNoticeDom = await evaluate(`({
@@ -3164,13 +3163,13 @@ try {
       pendingDelivery: document.body.innerText.includes('intenção pronta; não enviada'),
       authorizationUnavailable: document.body.innerText.includes('indisponível ou não confirmada')
     })`);
-    const annualNoticeRows = Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_annual_renewal_notice WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}' AND notice_id = '${annualNoticeId}' AND state = 'READY'`, appEnvironment));
+    const annualNoticeRows = Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_annual_renewal_notice WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}' AND paid_through_at = (SELECT paid_through_at FROM agendamento.subscription WHERE subscription_id = '${activeTrial.subscriptionId}') AND state = 'READY' AND obsolete_reason IS NULL`, appEnvironment));
     if (!annualNoticeDom.section?.includes('Versão') || !annualNoticeDom.pendingDelivery || !annualNoticeDom.authorizationUnavailable || annualNoticeRows !== 1) {
         throw new Error(`Intenção de aviso anual não persistiu/renderizou como não enviada: ${JSON.stringify({annualNoticeDom, annualNoticeRows})}`);
     }
     await command('Page.reload');
     await waitForText('intenção pronta; não enviada', evaluate);
-    console.log('Browser E2E sintético: intenção de aviso anual tenant-scoped e versão persistida reaparece após reload; a UI indica autorização indisponível e não enviada. Fixture de banco isolada; nenhum fornecedor/notificação real.');
+    console.log('Browser E2E sintético: o worker de AGD-042 materializa a intenção anual no período corrente; PostgreSQL confirma READY sem entrega, e a UI mantém estado/versão após reload. A assinatura foi preparada por fixture isolada; nenhum fornecedor/notificação real.');
 
     await command('Network.clearBrowserCookies');
     await navigate('http://localhost:5173/admin', command, evaluate);

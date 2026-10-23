@@ -805,7 +805,13 @@ export function AdminSubscriptionPanel({
                                     })}{' '}
                                     UTC —{' '}
                                     {notice.state === 'OBSOLETE'
-                                        ? `obsoleto (${notice.obsoleteReason ?? 'motivo não informado'})`
+                                        ? notice.obsoleteReason ===
+                                          'PAID_PERIOD_EXPIRED'
+                                            ? 'encerrado; o período pago terminou antes do processamento do aviso'
+                                            : notice.obsoleteReason ===
+                                                'PERIOD_CHANGED'
+                                              ? 'obsoleto; o período contratado mudou'
+                                              : 'obsoleto; assinatura inelegível para o aviso'
                                         : notice.state === 'READY'
                                           ? 'intenção pronta; não enviada'
                                           : 'agendado; não enviado'}

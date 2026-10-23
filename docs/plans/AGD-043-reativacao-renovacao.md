@@ -11,7 +11,8 @@
 - AGD-041 já autentica eventos financeiros, registra inbox, correlaciona operações de checkout e atualiza estado/histórico/auditoria/outbox numa transação.
 - AGD-042 já fornece ciclo de inadimplência, tentativas lógicas D0/D+3/D+6, identidade externa estável, claim/lease/fencing e autorização local revalidada sob lock. Uma tentativa só é iniciada com autorização e transporte presentes.
 - A confirmação de webhook atualmente correlaciona apenas `billing_checkout_operation`; o resultado aceito de uma tentativa Dunning não tem caminho autoritativo de liquidação correlacionado.
-- V1–V36 permanecem imutáveis. V37 é a migration funcional desta branch: vínculo entre attempt e inbox, snapshot contratual imutável por tentativa, intenção anual, preflight de legado e privilégios de correlação mínimos.
+- V1–V37 permanecem imutáveis. V37 é a migration funcional inicial desta branch: vínculo entre attempt e inbox, snapshot contratual imutável por tentativa, intenção anual, preflight de legado e privilégios de correlação mínimos. V38 acrescenta o motivo terminal de período expirado e a disposição explícita de evidência de pagamento vencida.
+- Revisão do preflight V37: a tabela contratual é reconstruída somente a partir de `PAYMENT_CONFIRMED` ligado a operação `CONFIRMED`; os termos da tentativa só são copiados quando `recorded_at <= cycle.created_at`. Tentativa já iniciada sem evidência temporal suficiente faz a migração falhar. A migração não usa o contrato corrente como prova retroativa.
 - Fornecedor, preço/moeda/oferta, autorização recorrente confiável, credenciais gerenciadas e homologação permanecem ausentes; produção continua fail-closed.
 
 ## Escopo
@@ -19,7 +20,7 @@
 - Correlacionar evento autenticado a uma tentativa Dunning aceita pela referência/provedor/conta, validar snapshot financeiro do servidor, deduplicar/ordenar e aplicar pagamento sob o lock de tenant existente.
 - Preservar retry técnico e identidade lógica do attempt; pagamento sela ciclo, cancela só o que ainda não começou e reativa imediatamente sem repetir versão/histórico/auditoria/outbox.
 - Restringir renovação automática ao mandato mensal confiável; renovação anual usa porta distinta de autorização correspondente ao período e falha fechada sem essa evidência.
-- Materializar intenção anual deduplicada no instante `paidThroughAt - 168h`, obsoletando-a quando a versão/período corrente mudar. Sem transporte de notificação configurado, não enviar nem registrar entrega.
+- Materializar intenção anual deduplicada em `paidThroughAt - 168h` UTC. Persistir `SCHEDULED` antes do prazo e promover a `READY` no/apos o instante programado somente enquanto `now < paidThroughAt` e o período for corrente. Em `now >= paidThroughAt`, terminar como `OBSOLETE/PAID_PERIOD_EXPIRED`; mudança de período obsoleta a anterior, sem acumular períodos passados. Sem transporte configurado, não enviar nem registrar entrega.
 - Exibir contrato, estado de autorização, intenção anual e tentativas existentes na área administrativa.
 
 ## Exclusões
@@ -37,36 +38,38 @@
 | Eventos antigos/duplicados não sobrescrevem período mais recente | eventos concorrentes/fora de ordem, comparação monotônica de `paidThroughAt` e sequência |
 | Mensal só inicia chamada com mandato mensal atual | Clock + locks; autorização revogada/ausente nega antes do transporte |
 | Anual não reutiliza mandato mensal | porta específica de autorização anual por período; ausência falha fechada |
-| Aviso anual é persistido uma vez e obsoleto após alteração | Postgres, períodos/versões e concorrência de materialização |
+| Aviso anual é persistido antes do prazo, promovido na janela e terminalizado na expiração | PostgreSQL/Clock: instante programado, atraso antes do vencimento, igualdade/depois, mudança de período, concorrência e motivo persistido |
+| Pagamento confirmado para período já expirado não reabre acesso | PostgreSQL: encerra somente ciclo correlacionado, preserva assinatura sem ACTIVE e não gera `SubscriptionReactivated` |
 | UI comunica estado sem afirmar pagamento/entrega | testes React e browser E2E sintético, reload e isolamento do contexto |
 | Produção sem integrações continua sem efeitos externos | teste de ausência de transport/verifier e E2E isolado |
-| V37 e privilégios são seguros | instalação limpa, V36→V37, Flyway validate/rerun, preflight/grants |
+| V37/V38 e privilégios são seguros | instalação limpa, V36→V38, Flyway validate/rerun, preflight/grants e estados terminais |
 
 ## Decisões técnicas e limites
 
 - Um ciclo Dunning existente representa a cobrança lógica associada ao vencimento; tentativas D0/D+3/D+6 não criam uma segunda assinatura nem outro ledger.
 - `billing_event_inbox` aceitará vínculo exclusivo com operação de checkout ou attempt Dunning; correspondência exige provider, account, referência, valor e moeda persistidos no servidor. Uma evidência sem vínculo permanece `UNLINKED`; não altera estado.
-- O evento confirmado adquire `TenantAgendaLock` antes de ler a assinatura, attempt e ciclo. Usa `READ_COMMITTED`, locks de linha e sequência monotônica; uma referência de ciclo já concluída não pode regredir a assinatura.
+- O evento confirmado adquire o lock de referência e depois `TenantAgendaLock`, seguido de locks de linha; resultado do transporte usa a mesma ordem `referência → tenant → attempt`, evitando inversão de locks na corrida de suspensão/settlement. Usa `READ_COMMITTED` e sequência monotônica; uma referência de ciclo já concluída não pode regredir a assinatura.
 - Pagamento confirmado poderá ser registrado mesmo quando o ciclo foi suspenso, preservando a regra AGD-042 de evidência de chamada já iniciada. Eventos de período não mais recente são registrados como `OLDER` e não alteram estado/período.
 - O aviso anual usa uma intenção independente da tabela de notificações de reservas: essa tabela exige destinatário/contrato de appointment e não se aplica à comunicação comercial. Uma tabela mínima de intents não implica transporte nem entrega.
-- `168h` é usado como instante técnico de agenda do aviso; se produto exigir sete dias de calendário local, isso precisa de decisão explícita. Não há template ou destinatário/fornecedor aprovado; estado observável permanece não entregue.
+- **Decisão aprovada pelo usuário nesta instrução em 23/10/2026:** agenda UTC `paidThroughAt - 168h`; recuperação atrasada só antes do vencimento e no período corrente; em igualdade/depois, terminal `PAID_PERIOD_EXPIRED`; período diferente obsoleta a intenção anterior, com dedupe por assinatura/período e sem backlog histórico. Não há template ou destinatário/fornecedor aprovado.
+- Evidência financeira autenticada cujo novo `paidThroughAt` já venceu encerra apenas seu ciclo correlacionado e é registrada como `EXPIRED_PERIOD`; não reativa nem fecha um ciclo mais recente. A âncora/duração comercial não é calculada localmente.
 - Nenhuma transação de banco abrange uma chamada externa. Resultado ambíguo permanece no mesmo attempt e exige reconciliação suportada antes de nova cobrança.
 - O snapshot em `billing_subscription_contract` representa os termos correntes para novos ciclos. Ao materializar ciclo, cada tentativa recebe cópia própria e imutável de valor, moeda, `termsVersion` e `offerVersion`; claim/autorização/webhook usam essa cópia mesmo que checkout posterior atualize o contrato corrente.
 - A V37 preenche tentativas legadas somente quando há evidência de termos confirmados registrados até a criação do ciclo. Tentativa legada já iniciada sem esse vínculo faz a migration falhar em transação; não há preço inventado nem correção automática. Operação deve inspecionar/reconciliar antes do upgrade.
-- O E2E browser injeta uma intenção anual sintética para provar projeção administrativa/reload. Materialização real da intenção é comprovada pelos testes PostgreSQL de `SubscriptionTrialIT`, não pelo fixture browser; nenhum fornecedor ou entrega é simulada como sucesso.
+- O E2E browser prepara uma assinatura anual em fixture isolada e aguarda o worker real do processo de teste materializar a intenção corrente; então verifica a linha `READY`, a projeção administrativa e o reload. Isso prova a composição do worker com banco/UI no ambiente sintético, não pagamento/webhook real, fornecedor ou entrega.
 
 ## Decisões de produto pendentes
 
 - Âncora e duração comercial de período mensal/anual, incluindo pagamento antecipado/atrasado. Proposta a deliberar: aceitar somente o `paidThroughAt` autenticado do provedor e não calculá-lo localmente; exige contrato explícito do provedor e aprovação comercial.
 - Semântica de mensal/anual quando o pagamento confirmado chega depois de período mais recente: este incremento protege monotonicidade e não substitui período por evidência mais antiga; regras de crédito/prorrogação permanecem pendentes.
-- Se aviso de sete dias significa 168 horas exatas ou sete dias de calendário/zona, e canal/destinatário/retentativas quando não há fornecedor.
+- Canal, destinatário, template, fornecedor e operação de reconciliação de envio ambíguo quando houver integração aprovada.
 - Autorização anual por renovação e autoridade que pode concedê-la. A porta permanece indisponível; a UI não oferece consentimento simulado.
 
 ## Estratégia de execução e testes
 
 1. Acrescentar porta de autorização anual, bloquear uso de mandato mensal para plano anual e adicionar correlação de attempt Dunning em webhook.
-2. Criar V37 com preflight, constraints completas, FK tenant-scoped, unicidade, snapshots por attempt e grants mínimos (incluindo revogação de UPDATE amplo herdado na inbox).
-3. Persistir/obsoletar intents anuais com Clock e apresentar na consulta administrativa; sem adaptador de entrega em produção.
+2. Criar V37 com preflight, constraints completas, FK tenant-scoped, unicidade, snapshots por attempt e grants mínimos (incluindo revogação de UPDATE amplo herdado na inbox); V38 amplia apenas estados explicáveis e disposição de período expirado.
+3. Persistir, promover e terminalizar intents anuais com Clock e lock tenant-scoped; apresentar na consulta administrativa; sem adaptador de entrega em produção.
 4. Testar eventos, ordenação, reativação, autorizações, retries, aviso, tenant isolation, rollback e worker races com PostgreSQL real/conexões independentes.
 5. Atualizar OpenAPI, especificação, ADR, STATUS, VALIDATION e TRACEABILITY; revisar achados de requisito/segurança independentemente quando houver revisores disponíveis.
 
@@ -75,15 +78,28 @@
 - [x] Base remota confirmada: PR #24 draft aberto, head `1d434a83ba63b4e247b0ca675c5db1a2b13c600e`; branch de trabalho derivada desse head.
 - [x] Mapeados GAPs: inbox não correlaciona attempts Dunning; a autorização genérica atual pode aceitar plano anual; intenção anual ainda não existe.
 - [x] Implementação backend/migration e testes PostgreSQL direcionados, incluindo snapshot por tentativa e grants inbox restritos.
-- [x] Interface/admin e roteiro E2E sintético (fixture prova exibição persistida, não materialização pelo worker).
-- [ ] Gates completos do backend/frontend, revisão final e CI remoto no head de publicação.
+- [x] Interface/admin e roteiro E2E sintético atualizado para aguardar a materialização pelo worker; a assinatura-base segue sendo fixture de teste e não há envio.
+- [x] Backend completo com JDK 21 (80 unitários/arquiteturais e 283 integrações PostgreSQL); frontend format/lint/Vitest/typecheck/build; sintaxe do browser E2E.
+- [x] Revisão independente em leitura por dois revisores e revisão sequencial final; achados concretos corrigidos.
+- [ ] Browser E2E/CI remoto do head final após publicação; security deve continuar distinto e vermelho pelo scan Keycloak conhecido.
 
 ## Achados da revisão independente e resolução
 
 - **P1 — validação de pagamento com contrato mutável:** um checkout posterior podia substituir o valor/moeda corrente e fazer evidência autenticada de um attempt já iniciado ser classificada como `MISMATCHED`. Resolvido no mesmo incremento: snapshot financeiro persistido por attempt e usado por claim, autorização e reconciliação; teste PostgreSQL altera o contrato corrente após `ACCEPTED` e comprova evento original `APPLIED`, uma reativação e um único fato histórico.
 - **P2 — privilégio de inbox:** grant de tabela `UPDATE` de V32 continuava efetivo apesar do grant parcial de V37. Resolvido em V37 por `REVOKE UPDATE` de tabela seguido de grant somente nas colunas de associação/correlação. `TenantPersistenceIT` comprova `has_table_privilege(..., 'UPDATE') = false`, colunas de correlação permitidas e payload financeiro sem UPDATE.
-- **P2 — alcance do browser E2E:** o teste de UI semeia uma intenção anual persistida; não executa o worker para criá-la. A criação/deduplicação e obsolescência permanecem demonstradas em PostgreSQL real. O E2E não é apresentado como prova do worker nem de notificação real.
+- **P2 — alcance do browser E2E:** a versão anterior semeava uma intenção; nesta rodada o script foi alterado para aguardar o worker de AGD-042 persistir a intenção do período sintético, depois verificar DOM/reload. A preparação do estado da assinatura ainda é fixture e não prova webhook/renovação real. Nenhum envio é executado.
+- **P2 — aviso vencido sem estado terminal:** resolvido nesta rodada. A intenção é persistida antes do prazo, fica `READY` somente antes do fim do período e termina como `OBSOLETE/PAID_PERIOD_EXPIRED` em `now >= paidThroughAt`.
+- **P2 — inversão de locks no resultado da tentativa:** resolvido nesta rodada; resultado externo bloqueia primeiro a identidade provider/account/reference, depois o tenant e somente então atualiza attempt, consistente com a reconciliação da inbox.
+- **P2 — evidência confirmada com período já expirado:** resolvido nesta rodada sem calcular extensão comercial: o ciclo do attempt correlacionado é encerrado e evidência recebe `EXPIRED_PERIOD`, mas assinatura não é reativada e nenhum evento `SubscriptionReactivated` é produzido.
 - Revisões feitas em leitura por dois revisores independentes (requisitos/estados e persistência/segurança). Não substituem aprovação humana no GitHub.
+
+### Follow-up de consolidação — 23/10/2026
+
+- Aplicadas as decisões aprovadas para o aviso anual: UTC `paidThroughAt - 168h`; atraso somente no período corrente antes do vencimento; terminal `PAID_PERIOD_EXPIRED` em `now >= paidThroughAt`; mudança de período obsoleta a intenção anterior e não acumula períodos; tentativa iniciada preserva identidade/evidência e resultado ambíguo não é entrega nem autorização de duplicação. Canal, destinatário, template e fornecedor continuam pendentes.
+- V38 adiciona somente estados explicáveis (`PAID_PERIOD_EXPIRED`, `EXPIRED_PERIOD`) e suas constraints; V1–V37 permanecem imutáveis e não há backfill de termos comerciais.
+- Revisão leu pagamentos, CAS/locks, autorização, preflight V37, constraints/grants e aviso. Dois revisores independentes apontaram: (a) transição terminal do aviso ausente; (b) inversão entre lock de tenant e atualização da tentativa, além do risco de reativar com período já vencido. As correções estão cobertas por PostgreSQL. Revisões não equivalem a aprovação humana.
+- A regressão de resultado concorrente usa ordem `provider/account/reference → tenant → attempt`; pagamento autenticado de período que já venceu liquida somente o próprio ciclo, marca a evidência `EXPIRED_PERIOD` e não altera/reativa assinatura.
+- O browser E2E passou a aguardar o worker persistido criar a intenção anual para uma assinatura anual preparada por fixture isolada; verifica `READY`, texto “não enviada” e reload. Isso comprova worker+PostgreSQL+UI no ambiente sintético, não webhook/renovação real nem entrega.
 
 ## Validação
 
@@ -91,7 +107,7 @@
 |---|---|---|---|
 | Correlação de pagamento com renewal attempt | `./mvnw -B -ntp spotless:check '-Dit.test=SubscriptionTrialIT,BillingWebhookIT' verify` | Testcontainers: evento autenticado vincula, liquida e deduplica com termos imutáveis da tentativa | Classes direcionadas passaram: 80 unitários/arquiteturais + 37 integrações PostgreSQL; o caso de contrato atualizado prova um único período/histórico e `APPLIED` |
 | Autorização mensal/anual | `SubscriptionTrialIT` com Clock | Mandato mensal distinto da autorização anual; default fail-closed | Cobertura direcionada passou dentro das 23 integrações da classe; porta anual indisponível sem fonte configurada |
-| Aviso anual e obsolescência | PostgreSQL/Testcontainers e E2E | Uma intenção por período, sem alegação de envio | `SubscriptionTrialIT` comprovou materialização/deduplicação/obsolescência; browser usa fixture persistida e comprova apenas projeção/reload, não execução do worker |
+| Aviso anual e obsolescência | PostgreSQL/Testcontainers e E2E | Uma intenção por período, sem alegação de envio | `SubscriptionTrialIT` comprova materialização/deduplicação/obsolescência. No browser, a assinatura é fixture isolada, mas o worker do processo de teste cria a intenção; DOM/reload comprovam a composição sintética, não pagamento/webhook ou entrega real |
 | Schema V37 | `TenantPersistenceIT` | Fresh, V36→V37, validate/rerun/grants mínimos e legado sem snapshot falha sem reparo | 39 integrações PostgreSQL passaram, incluindo upgrade, validate/rerun, grant por coluna e preflight fail-closed |
 | Corridas temporais de AGD-042 | `BillingWebhookIT` | Igualdade e espera do lock não iniciam envio; instante anterior permite uma chamada | 14 integrações passaram; fixtures incluem snapshot/conta/ref e isolam ciclo de outros tenants sem reduzir estado/transport assertions |
 | Suíte completa backend | `env JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 PATH=/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH ./mvnw -B -ntp spotless:check verify`, JDK 21 | Todos os testes unitários e Testcontainers passam | Passou: 80 unitários/arquiteturais e 277 integrações PostgreSQL; 0 falhas, erros ou skips |

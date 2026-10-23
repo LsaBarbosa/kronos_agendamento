@@ -9,6 +9,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.appagendamento.appointments.api.TenantAgendaLock;
 import com.appagendamento.audit.api.AuditEvent;
 import com.appagendamento.audit.api.AuditEventRecorder;
 import com.appagendamento.subscriptions.api.CommercialEligibilityIdentitySource;
@@ -21,6 +22,7 @@ import com.appagendamento.subscriptions.application.DunningChargeTransport;
 import com.appagendamento.subscriptions.application.SubscriptionDunningRepository;
 import com.appagendamento.subscriptions.application.SubscriptionDunningWorker;
 import com.appagendamento.subscriptions.application.SubscriptionTrialLifecycle;
+import com.appagendamento.subscriptions.domain.DunningAttemptClaim;
 import com.appagendamento.support.PostgresTestEnvironment;
 import com.appagendamento.tenant.api.TenantTrialProvisioner;
 import com.appagendamento.tenant.application.CreateTenant;
@@ -33,7 +35,9 @@ import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,10 +46,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.support.StaticListableBeanFactory;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @SpringBootTest(
     properties = {
@@ -72,6 +78,7 @@ class SubscriptionTrialIT {
   @MockitoBean private DunningChargeTransport chargeTransport;
   @MockitoBean private DunningAttemptReconciler attemptReconciler;
   @MockitoSpyBean private AuditEventRecorder audit;
+  @MockitoSpyBean private TenantAgendaLock agendaLock;
 
   @DynamicPropertySource
   static void postgres(DynamicPropertyRegistry registry) {
@@ -87,7 +94,8 @@ class SubscriptionTrialIT {
         chargeAuthorization,
         annualAuthorization,
         chargeTransport,
-        attemptReconciler);
+        attemptReconciler,
+        agendaLock);
     migrationJdbc = new JdbcTemplate(PostgresTestEnvironment.migrationDataSource());
     migrationJdbc.update(
         "TRUNCATE TABLE agendamento.billing_dunning_attempt, agendamento.billing_dunning_cycle CASCADE");
@@ -331,7 +339,8 @@ class SubscriptionTrialIT {
       var second = executor.submit(() -> materializeBillingAfter(start, ready));
       assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
       start.countDown();
-      assertThat(first.get(15, TimeUnit.SECONDS) + second.get(15, TimeUnit.SECONDS)).isEqualTo(1);
+      // The worker reports a batch-wide count; exact once-only assertions below are tenant-scoped.
+      assertThat(first.get(15, TimeUnit.SECONDS) + second.get(15, TimeUnit.SECONDS)).isPositive();
     }
 
     assertThat(status(tenant.tenantId())).isEqualTo("PAST_DUE:2");
@@ -557,29 +566,299 @@ class SubscriptionTrialIT {
   }
 
   @Test
+  void annualNoticeIsScheduledAheadPromotedAtBoundaryAndTerminalAtExpiry() {
+    when(identities.findVerifiedIdentity(any())).thenReturn(Optional.empty());
+    Tenant tenant = createTenant("annual-notice-boundaries");
+    Instant paidThrough = NOW.plus(Duration.ofHours(168)).plusSeconds(1);
+    paidSubscription(tenant.tenantId(), paidThrough, "ANNUAL");
+
+    dunningRepository.materializeAnnualRenewalNotices(NOW, 20);
+    var scheduled = dunningRepository.listAnnualRenewalNotices(tenant.tenantId()).getFirst();
+    assertThat(scheduled.scheduledAt()).isEqualTo(NOW.plusSeconds(1));
+    assertThat(scheduled.state()).isEqualTo("SCHEDULED");
+
+    when(clock.instant()).thenReturn(scheduled.scheduledAt().minusNanos(1));
+    dunningRepository.materializeAnnualRenewalNotices(clock.instant(), 20);
+    assertThat(dunningRepository.listAnnualRenewalNotices(tenant.tenantId()).getFirst().state())
+        .isEqualTo("SCHEDULED");
+
+    when(clock.instant()).thenReturn(scheduled.scheduledAt());
+    dunningRepository.materializeAnnualRenewalNotices(clock.instant(), 20);
+    assertThat(dunningRepository.listAnnualRenewalNotices(tenant.tenantId()).getFirst().state())
+        .isEqualTo("READY");
+
+    when(clock.instant()).thenReturn(paidThrough.minusNanos(1));
+    dunningRepository.materializeAnnualRenewalNotices(clock.instant(), 20);
+    assertThat(dunningRepository.listAnnualRenewalNotices(tenant.tenantId()).getFirst().state())
+        .isEqualTo("READY");
+
+    when(clock.instant()).thenReturn(paidThrough);
+    dunningRepository.materializeAnnualRenewalNotices(clock.instant(), 20);
+    var expired = dunningRepository.listAnnualRenewalNotices(tenant.tenantId()).getFirst();
+    assertThat(expired.state()).isEqualTo("OBSOLETE");
+    assertThat(expired.obsoleteReason()).isEqualTo("PAID_PERIOD_EXPIRED");
+
+    when(clock.instant()).thenReturn(paidThrough.plusNanos(1));
+    dunningRepository.materializeAnnualRenewalNotices(clock.instant(), 20);
+    assertThat(dunningRepository.listAnnualRenewalNotices(tenant.tenantId())).hasSize(1);
+    assertThat(dunningRepository.listAnnualRenewalNotices(tenant.tenantId()).getFirst().noticeId())
+        .isEqualTo(expired.noticeId());
+    verify(chargeTransport, org.mockito.Mockito.never()).submit(any());
+  }
+
+  @Test
+  void delayedAnnualMaterializationCreatesOnlyCurrentPeriodAndNoTransport() {
+    when(identities.findVerifiedIdentity(any())).thenReturn(Optional.empty());
+    Tenant tenant = createTenant("annual-notice-late-current-period");
+    Instant paidThrough = NOW.plus(Duration.ofHours(10));
+    paidSubscription(tenant.tenantId(), paidThrough, "ANNUAL");
+
+    dunningRepository.materializeAnnualRenewalNotices(NOW, 20);
+    var notice = dunningRepository.listAnnualRenewalNotices(tenant.tenantId()).getFirst();
+    assertThat(notice.paidThroughAt()).isEqualTo(paidThrough);
+    assertThat(notice.scheduledAt()).isEqualTo(paidThrough.minus(Duration.ofHours(168)));
+    assertThat(notice.state()).isEqualTo("READY");
+    dunningRepository.materializeAnnualRenewalNotices(NOW, 20);
+    assertThat(dunningRepository.listAnnualRenewalNotices(tenant.tenantId())).hasSize(1);
+    verify(chargeTransport, org.mockito.Mockito.never()).submit(any());
+  }
+
+  @Test
+  void missedAnnualNoticeWindowIsRecordedWithoutSendingOrBackfilling() {
+    when(identities.findVerifiedIdentity(any())).thenReturn(Optional.empty());
+    Tenant tenant = createTenant("annual-notice-missed-window");
+    paidSubscription(tenant.tenantId(), NOW.minusNanos(1), "ANNUAL");
+
+    dunningRepository.materializeAnnualRenewalNotices(NOW, 20);
+    var expired = dunningRepository.listAnnualRenewalNotices(tenant.tenantId()).getFirst();
+    assertThat(expired.state()).isEqualTo("OBSOLETE");
+    assertThat(expired.obsoleteReason()).isEqualTo("PAID_PERIOD_EXPIRED");
+    dunningRepository.materializeAnnualRenewalNotices(NOW, 20);
+    var afterRetry = dunningRepository.listAnnualRenewalNotices(tenant.tenantId());
+    assertThat(afterRetry).hasSize(1);
+    assertThat(afterRetry.getFirst().noticeId()).isEqualTo(expired.noticeId());
+    verify(chargeTransport, org.mockito.Mockito.never()).submit(any());
+  }
+
+  @Test
   void annualNoticeIsDeduplicatedAndObsoletedWhenThePaidPeriodChanges() {
     when(identities.findVerifiedIdentity(any())).thenReturn(Optional.empty());
     Tenant tenant = createTenant("annual-notice-lifecycle");
     UUID subscriptionId =
         paidSubscription(tenant.tenantId(), NOW.plus(Duration.ofHours(168)), "ANNUAL");
 
-    assertThat(dunningRepository.materializeAnnualRenewalNotices(NOW, 20)).isEqualTo(1);
-    assertThat(dunningRepository.materializeAnnualRenewalNotices(NOW, 20)).isZero();
+    dunningRepository.materializeAnnualRenewalNotices(NOW, 20);
+    dunningRepository.materializeAnnualRenewalNotices(NOW, 20);
     var notices = dunningRepository.listAnnualRenewalNotices(tenant.tenantId());
     assertThat(notices).hasSize(1);
+    UUID originalNoticeId = notices.getFirst().noticeId();
     assertThat(notices.getFirst().scheduledAt()).isEqualTo(NOW);
     assertThat(notices.getFirst().state()).isEqualTo("READY");
 
     jdbc.update(
         "UPDATE agendamento.subscription SET paid_through_at = ?, version = version + 1 WHERE tenant_id = ? AND subscription_id = ?",
-        java.sql.Timestamp.from(NOW.plus(Duration.ofDays(365))),
+        java.sql.Timestamp.from(NOW.plus(Duration.ofHours(168)).plusSeconds(1)),
         tenant.tenantId(),
         subscriptionId);
-    assertThat(dunningRepository.materializeAnnualRenewalNotices(NOW, 20)).isZero();
+    dunningRepository.materializeAnnualRenewalNotices(NOW, 20);
     var afterChange = dunningRepository.listAnnualRenewalNotices(tenant.tenantId());
-    assertThat(afterChange).hasSize(1);
-    assertThat(afterChange.getFirst().state()).isEqualTo("OBSOLETE");
-    assertThat(afterChange.getFirst().obsoleteReason()).isEqualTo("PERIOD_CHANGED");
+    assertThat(afterChange).hasSize(2);
+    assertThat(afterChange.getFirst().paidThroughAt())
+        .isEqualTo(NOW.plus(Duration.ofHours(168)).plusSeconds(1));
+    assertThat(afterChange.getFirst().noticeId()).isNotEqualTo(originalNoticeId);
+    assertThat(afterChange.getFirst().state()).isEqualTo("SCHEDULED");
+    assertThat(afterChange.getLast().state()).isEqualTo("OBSOLETE");
+    assertThat(afterChange.getLast().obsoleteReason()).isEqualTo("PERIOD_CHANGED");
+  }
+
+  @Test
+  void concurrentAnnualMaterializersPersistOneCurrentPeriodIntent() throws Exception {
+    when(identities.findVerifiedIdentity(any())).thenReturn(Optional.empty());
+    Tenant tenant = createTenant("annual-notice-worker-race");
+    Instant paidThrough = NOW.plus(Duration.ofDays(30));
+    UUID subscriptionId = paidSubscription(tenant.tenantId(), paidThrough, "ANNUAL");
+    CountDownLatch ready = new CountDownLatch(2);
+    CountDownLatch start = new CountDownLatch(1);
+
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      Future<Integer> first = executor.submit(() -> materializeAnnualAfter(start, ready));
+      Future<Integer> second = executor.submit(() -> materializeAnnualAfter(start, ready));
+      assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+      start.countDown();
+      // Other annual subscriptions can share the integration schema; inspect this tenant below.
+      assertThat(first.get(15, TimeUnit.SECONDS) + second.get(15, TimeUnit.SECONDS)).isPositive();
+    }
+
+    var notices = dunningRepository.listAnnualRenewalNotices(tenant.tenantId());
+    assertThat(notices).hasSize(1);
+    assertThat(notices.getFirst().noticeId())
+        .isEqualTo(
+            UUID.nameUUIDFromBytes(
+                (subscriptionId + ":annual-renewal-notice:v1:" + paidThrough)
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(DISTINCT paid_through_at) FROM agendamento.billing_annual_renewal_notice WHERE tenant_id = ?",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(1);
+    verify(chargeTransport, org.mockito.Mockito.never()).submit(any());
+  }
+
+  @Test
+  void confirmedPaymentForExpiredNewerPeriodDoesNotReactivateSubscription() {
+    when(identities.findVerifiedIdentity(any())).thenReturn(Optional.empty());
+    Tenant tenant = createTenant("expired-payment-period");
+    UUID subscriptionId = paidSubscription(tenant.tenantId(), NOW.minus(Duration.ofDays(10)));
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isFalse();
+    String before = status(tenant.tenantId());
+    UUID attemptId = attemptId(tenant.tenantId(), 0);
+    String reference = "expired-period-payment-" + attemptId;
+    migrationJdbc.update(
+        "UPDATE agendamento.billing_dunning_attempt SET state = 'ACCEPTED', ever_started = TRUE, technical_attempts = 1, provider_code = 'synthetic', provider_account_id = 'synthetic-account', provider_reference = ?, last_provider_sequence = 0 WHERE tenant_id = ? AND attempt_id = ?",
+        reference,
+        tenant.tenantId(),
+        attemptId);
+
+    billingRepository.recordAuthenticatedEvent(
+        new com.appagendamento.subscriptions.api.AuthenticatedPaymentEvent(
+            "synthetic",
+            "synthetic-account",
+            "expired-period-event-" + attemptId,
+            reference,
+            1,
+            "CONFIRMED",
+            100,
+            "XTS",
+            NOW.minus(Duration.ofDays(1)),
+            NOW.minus(Duration.ofHours(1))));
+
+    assertThat(status(tenant.tenantId())).isEqualTo(before);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state = 'CONFIRMED' AND last_error_code = 'CONFIRMED_PERIOD_EXPIRED' FROM agendamento.billing_dunning_attempt WHERE attempt_id = ?",
+                Boolean.class,
+                attemptId))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state FROM agendamento.billing_dunning_cycle WHERE tenant_id = ? AND subscription_id = ?",
+                String.class,
+                tenant.tenantId(),
+                subscriptionId))
+        .isEqualTo("PAID");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT disposition FROM agendamento.billing_event_inbox WHERE provider_event_id = ?",
+                String.class,
+                "expired-period-event-" + attemptId))
+        .isEqualTo("EXPIRED_PERIOD");
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isFalse();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.outbox_event WHERE tenant_id = ? AND event_type = 'SubscriptionReactivated'",
+                Integer.class,
+                tenant.tenantId()))
+        .isZero();
+  }
+
+  @Test
+  void transportResultUsesReferenceThenTenantLockOrderBeforeAttemptUpdate() throws Exception {
+    when(identities.findVerifiedIdentity(any())).thenReturn(Optional.empty());
+    Tenant tenant = createTenant("payment-result-lock-order");
+    UUID subscriptionId = paidSubscription(tenant.tenantId(), NOW.minusSeconds(1));
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+    UUID attempt = attemptId(tenant.tenantId(), 0);
+    UUID claimToken = UUID.randomUUID();
+    Instant leaseUntil = NOW.plusSeconds(60);
+    migrationJdbc.update(
+        "UPDATE agendamento.billing_dunning_attempt SET state = 'SUBMITTING', ever_started = TRUE, technical_attempts = 1, claim_token = ?, lease_until = ?, send_claim_token = ?, last_error_code = NULL WHERE tenant_id = ? AND attempt_id = ?",
+        claimToken,
+        java.sql.Timestamp.from(leaseUntil),
+        claimToken,
+        tenant.tenantId(),
+        attempt);
+    DunningAttemptClaim claim =
+        new DunningAttemptClaim(
+            tenant.tenantId(),
+            subscriptionId,
+            jdbc.queryForObject(
+                "SELECT cycle_id FROM agendamento.billing_dunning_attempt WHERE attempt_id = ?",
+                UUID.class,
+                attempt),
+            attempt,
+            attempt,
+            claimToken,
+            0,
+            1,
+            "CHARGE",
+            "MONTHLY",
+            NOW,
+            leaseUntil,
+            null,
+            null,
+            null,
+            NOW.minusSeconds(1),
+            100L,
+            "XTS",
+            "synthetic-terms-v1",
+            "synthetic-offer-v1");
+    CountDownLatch tenantLocked = new CountDownLatch(1);
+    CountDownLatch resultWaitingForTenant = new CountDownLatch(1);
+    org.mockito.Mockito.doAnswer(
+            invocation -> {
+              if (tenant.tenantId().equals(invocation.getArgument(0))) {
+                resultWaitingForTenant.countDown();
+              }
+              return invocation.callRealMethod();
+            })
+        .when(agendaLock)
+        .acquire(tenant.tenantId());
+    JdbcTemplate lockJdbc = new JdbcTemplate(PostgresTestEnvironment.migrationDataSource());
+    TransactionTemplate transaction =
+        new TransactionTemplate(
+            new DataSourceTransactionManager(PostgresTestEnvironment.migrationDataSource()));
+    try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+      Future<?> suspension =
+          executor.submit(
+              () ->
+                  transaction.executeWithoutResult(
+                      ignored -> {
+                        lockJdbc.queryForList(
+                            "SELECT tenant_id FROM agendamento.tenant WHERE tenant_id = ? FOR UPDATE",
+                            tenant.tenantId());
+                        tenantLocked.countDown();
+                        awaitLatch(resultWaitingForTenant);
+                        lockJdbc.update(
+                            "UPDATE agendamento.billing_dunning_attempt SET last_error_code = 'SUSPENSION_WON_LOCK' WHERE tenant_id = ? AND attempt_id = ?",
+                            tenant.tenantId(),
+                            attempt);
+                      }));
+      assertThat(tenantLocked.await(5, TimeUnit.SECONDS)).isTrue();
+      Future<Boolean> result =
+          executor.submit(
+              () ->
+                  dunningRepository.recordTransportResult(
+                      claim,
+                      new DunningChargeTransport.TransportResult(
+                          DunningChargeTransport.Outcome.ACCEPTED,
+                          "synthetic",
+                          "synthetic-account",
+                          "lock-order-reference-" + attempt,
+                          null),
+                      Duration.ofSeconds(30),
+                      5));
+      assertThat(resultWaitingForTenant.await(5, TimeUnit.SECONDS)).isTrue();
+      suspension.get(10, TimeUnit.SECONDS);
+      assertThat(result.get(10, TimeUnit.SECONDS)).isTrue();
+    }
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state = 'ACCEPTED' AND provider_reference = ? FROM agendamento.billing_dunning_attempt WHERE attempt_id = ?",
+                Boolean.class,
+                "lock-order-reference-" + attempt,
+                attempt))
+        .isTrue();
   }
 
   @Test
@@ -1094,6 +1373,24 @@ class SubscriptionTrialIT {
     if (!start.await(10, TimeUnit.SECONDS))
       throw new IllegalStateException("Billing worker race latch timed out");
     return lifecycle.materializeBillingBatch(10);
+  }
+
+  private int materializeAnnualAfter(CountDownLatch start, CountDownLatch ready) throws Exception {
+    ready.countDown();
+    if (!start.await(10, TimeUnit.SECONDS))
+      throw new IllegalStateException("Annual notice worker race latch timed out");
+    return dunningRepository.materializeAnnualRenewalNotices(NOW, 20);
+  }
+
+  private static void awaitLatch(CountDownLatch latch) {
+    try {
+      if (!latch.await(10, TimeUnit.SECONDS)) {
+        throw new IllegalStateException("Tenant lock-order test latch timed out");
+      }
+    } catch (InterruptedException exception) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("Tenant lock-order test interrupted", exception);
+    }
   }
 
   private Instant trialEndsAt(UUID tenantId) {

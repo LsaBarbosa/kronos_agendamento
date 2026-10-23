@@ -281,7 +281,10 @@ components:
         scheduledAt: { type: string, format: date-time }
         state: { type: string, enum: [SCHEDULED, READY, OBSOLETE] }
         obsoleteReason:
-          { type: [string, "null"], enum: [PERIOD_CHANGED, SUBSCRIPTION_INELIGIBLE, null] }
+          {
+            type: [string, "null"],
+            enum: [PERIOD_CHANGED, SUBSCRIPTION_INELIGIBLE, PAID_PERIOD_EXPIRED, null],
+          }
     Plan:
       type: object
       required:
