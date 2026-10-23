@@ -17,4 +17,10 @@ public record DunningAttemptClaim(
     Instant scheduledAt,
     Instant leaseUntil,
     String providerCode,
-    String providerReference) {}
+    String providerAccountId,
+    String providerReference,
+    Instant periodEndsAt,
+    Long amountMinorUnits,
+    String currency,
+    String termsVersion,
+    String offerVersion) {}

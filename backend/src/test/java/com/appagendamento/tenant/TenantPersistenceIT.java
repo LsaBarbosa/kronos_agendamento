@@ -53,7 +53,7 @@ class TenantPersistenceIT {
     String schema = isolatedSchemaName();
     Flyway fresh = isolatedFlyway(schema);
 
-    assertThat(fresh.migrate().migrationsExecuted).isEqualTo(36);
+    assertThat(fresh.migrate().migrationsExecuted).isEqualTo(40);
     fresh.validate();
     assertThat(fresh.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -65,7 +65,7 @@ class TenantPersistenceIT {
         .containsExactly(
             null, "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15",
             "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29",
-            "30", "31", "32", "33", "34", "35", "36");
+            "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = ? AND table_name = 'tenant')",
@@ -184,10 +184,10 @@ class TenantPersistenceIT {
         cycleId);
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(1);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(5);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT external_idempotency_key = attempt_id AND NOT ever_started AND state = 'SCHEDULED' FROM "
@@ -211,6 +211,535 @@ class TenantPersistenceIT {
                 schema + ".billing_dunning_attempt",
                 schema + ".billing_dunning_attempt",
                 schema + ".billing_dunning_attempt"))
+        .isTrue();
+  }
+
+  @Test
+  void v40FailsClosedWhenLegacyContractCannotProveTheAttemptSnapshot() {
+    String schema = isolatedSchemaName();
+    Flyway v39 = isolatedFlyway(schema, MigrationVersion.fromVersion("39"));
+    assertThat(v39.migrate().migrationsExecuted).isEqualTo(39);
+    UUID tenantId = UUID.randomUUID();
+    UUID subscriptionId = UUID.randomUUID();
+    UUID sourceOperationId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    UUID attemptId = UUID.randomUUID();
+    insertSubscriptionTenant(schema, tenantId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_checkout_operation(operation_id, tenant_id, plan_code, amount_minor_units, currency, terms_version, offer_version, expected_subscription_version, provider_code, provider_account_id, provider_reference, state) VALUES (?, ?, 'MONTHLY', 2500, 'XTS', 'terms-v1', 'offer-v1', 0, 'provider', 'account', ?, 'CONFIRMED')",
+        sourceOperationId,
+        tenantId,
+        "migration-invalid-source-" + sourceOperationId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".subscription(subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'MONTHLY', TIMESTAMPTZ '2027-01-01 00:00:00+00', 3)",
+        subscriptionId,
+        tenantId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_subscription_contract(subscription_id, tenant_id, source_operation_id, amount_minor_units, currency, terms_version, offer_version, recorded_at) VALUES (?, ?, ?, 2500, 'XTS', 'terms-v1', 'offer-v1', TIMESTAMPTZ '2026-10-01 00:00:00+00')",
+        subscriptionId,
+        tenantId,
+        sourceOperationId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".subscription_history(event_id, tenant_id, subscription_id, event_type, from_status, to_status, event_at, version, operation_id) VALUES (?, ?, ?, 'PAYMENT_CONFIRMED', NULL, 'ACTIVE', TIMESTAMPTZ '2026-10-01 00:00:00+00', 1, ?)",
+        UUID.randomUUID(),
+        tenantId,
+        subscriptionId,
+        sourceOperationId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_dunning_cycle(cycle_id, tenant_id, subscription_id, due_at, grace_ends_at, state, created_at, closed_at) VALUES (?, ?, ?, TIMESTAMPTZ '2026-10-01 00:00:00+00', TIMESTAMPTZ '2026-10-08 00:00:00+00', 'SUSPENDED', TIMESTAMPTZ '2026-10-02 00:00:00+00', TIMESTAMPTZ '2026-10-08 00:00:00+00')",
+        cycleId,
+        tenantId,
+        subscriptionId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_dunning_attempt(attempt_id, tenant_id, cycle_id, logical_sequence, scheduled_at, state, updated_at, external_idempotency_key, contract_amount_minor_units, contract_currency, contract_terms_version, contract_offer_version) VALUES (?, ?, ?, 0, TIMESTAMPTZ '2026-10-01 00:00:00+00', 'SCHEDULED', TIMESTAMPTZ '2026-10-02 00:00:00+00', ?, 2600, 'XTS', 'terms-v1', 'offer-v1')",
+        attemptId,
+        tenantId,
+        cycleId,
+        attemptId);
+
+    assertThatThrownBy(() -> isolatedFlyway(schema).migrate())
+        .isInstanceOf(org.flywaydb.core.api.FlywayException.class)
+        .hasMessageContaining("V40 cannot apply");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT amount_minor_units FROM "
+                    + schema
+                    + ".billing_subscription_contract WHERE subscription_id = ?",
+                Integer.class,
+                subscriptionId))
+        .isEqualTo(2500);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT contract_amount_minor_units FROM "
+                    + schema
+                    + ".billing_dunning_attempt WHERE attempt_id = ?",
+                Integer.class,
+                attemptId))
+        .isEqualTo(2600);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT to_regclass(? || '.billing_subscription_contract') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = ? AND table_name = 'billing_subscription_contract' AND column_name = 'plan_code')",
+                Boolean.class,
+                schema,
+                schema))
+        .isTrue();
+    assertThat(v39.info().current().getVersion().getVersion()).isEqualTo("39");
+  }
+
+  @Test
+  void v40FailsClosedWhenConfirmedContractHasNoHistoricalPaymentLink() {
+    String schema = isolatedSchemaName();
+    Flyway v39 = isolatedFlyway(schema, MigrationVersion.fromVersion("39"));
+    assertThat(v39.migrate().migrationsExecuted).isEqualTo(39);
+    UUID tenantId = UUID.randomUUID();
+    UUID subscriptionId = UUID.randomUUID();
+    UUID sourceOperationId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    UUID attemptId = UUID.randomUUID();
+    insertSubscriptionTenant(schema, tenantId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_checkout_operation(operation_id, tenant_id, plan_code, amount_minor_units, currency, terms_version, offer_version, expected_subscription_version, provider_code, provider_account_id, provider_reference, state) VALUES (?, ?, 'ANNUAL', 2500, 'XTS', 'terms-v1', 'offer-v1', 0, 'provider', 'account', ?, 'CONFIRMED')",
+        sourceOperationId,
+        tenantId,
+        "migration-unlinked-source-" + sourceOperationId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".subscription(subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'ANNUAL', TIMESTAMPTZ '2027-01-01 00:00:00+00', 3)",
+        subscriptionId,
+        tenantId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_subscription_contract(subscription_id, tenant_id, source_operation_id, amount_minor_units, currency, terms_version, offer_version, recorded_at) VALUES (?, ?, ?, 2500, 'XTS', 'terms-v1', 'offer-v1', TIMESTAMPTZ '2026-10-01 00:00:00+00')",
+        subscriptionId,
+        tenantId,
+        sourceOperationId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_dunning_cycle(cycle_id, tenant_id, subscription_id, due_at, grace_ends_at, state, created_at, closed_at) VALUES (?, ?, ?, TIMESTAMPTZ '2026-10-01 00:00:00+00', TIMESTAMPTZ '2026-10-08 00:00:00+00', 'SUSPENDED', TIMESTAMPTZ '2026-10-02 00:00:00+00', TIMESTAMPTZ '2026-10-08 00:00:00+00')",
+        cycleId,
+        tenantId,
+        subscriptionId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_dunning_attempt(attempt_id, tenant_id, cycle_id, logical_sequence, scheduled_at, state, updated_at, external_idempotency_key, contract_amount_minor_units, contract_currency, contract_terms_version, contract_offer_version) VALUES (?, ?, ?, 0, TIMESTAMPTZ '2026-10-01 00:00:00+00', 'SCHEDULED', TIMESTAMPTZ '2026-10-02 00:00:00+00', ?, 2500, 'XTS', 'terms-v1', 'offer-v1')",
+        attemptId,
+        tenantId,
+        cycleId,
+        attemptId);
+
+    assertThatThrownBy(() -> isolatedFlyway(schema).migrate())
+        .isInstanceOf(org.flywaydb.core.api.FlywayException.class)
+        .hasMessageContaining("V40 cannot apply");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM " + schema + ".subscription_history WHERE operation_id = ?",
+                Integer.class,
+                sourceOperationId))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = ? AND table_name = 'billing_subscription_contract' AND column_name = 'plan_code')",
+                Boolean.class,
+                schema))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT contract_amount_minor_units FROM "
+                    + schema
+                    + ".billing_dunning_attempt WHERE attempt_id = ?",
+                Integer.class,
+                attemptId))
+        .isEqualTo(2500);
+  }
+
+  @Test
+  void upgradesV37ToV38WithNoticeStatesValidateRerunAndLeastGrants() {
+    String schema = isolatedSchemaName();
+    Flyway v36 = isolatedFlyway(schema, MigrationVersion.fromVersion("36"));
+    assertThat(v36.migrate().migrationsExecuted).isEqualTo(36);
+    UUID tenantId = UUID.randomUUID();
+    UUID subscriptionId = UUID.randomUUID();
+    insertSubscriptionTenant(schema, tenantId);
+    Flyway v37 = isolatedFlyway(schema, MigrationVersion.fromVersion("37"));
+    assertThat(v37.migrate().migrationsExecuted).isEqualTo(1);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".subscription(subscription_id, tenant_id, status, trial_started_at, trial_ends_at, plan_code, paid_through_at, grace_ends_at, version) VALUES (?, ?, 'ACTIVE', NULL, NULL, 'ANNUAL', TIMESTAMPTZ '2027-01-01 00:00:00+00', NULL, 1)",
+        subscriptionId,
+        tenantId);
+
+    Flyway upgrade = isolatedFlyway(schema);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(3);
+    upgrade.validate();
+    assertThat(upgrade.migrate().migrationsExecuted).isZero();
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
+    UUID expiredNoticeId = UUID.randomUUID();
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_annual_renewal_notice(notice_id, tenant_id, subscription_id, subscription_version, paid_through_at, scheduled_at, state, obsolete_reason, created_at, updated_at) VALUES (?, ?, ?, 1, TIMESTAMPTZ '2027-01-01 00:00:00+00', TIMESTAMPTZ '2026-12-25 00:00:00+00', 'OBSOLETE', 'PAID_PERIOD_EXPIRED', TIMESTAMPTZ '2026-01-01 00:00:00+00', TIMESTAMPTZ '2026-01-01 00:00:00+00')",
+        expiredNoticeId,
+        tenantId,
+        subscriptionId);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "INSERT INTO "
+                        + schema
+                        + ".billing_annual_renewal_notice(notice_id, tenant_id, subscription_id, subscription_version, paid_through_at, scheduled_at, state, obsolete_reason, created_at, updated_at) VALUES (?, ?, ?, 1, TIMESTAMPTZ '2028-01-01 00:00:00+00', TIMESTAMPTZ '2027-12-25 00:00:00+00', 'OBSOLETE', NULL, TIMESTAMPTZ '2026-01-01 00:00:00+00', TIMESTAMPTZ '2026-01-01 00:00:00+00')",
+                    UUID.randomUUID(),
+                    tenantId,
+                    subscriptionId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT pg_get_constraintdef(constraint_row.oid) "
+                    + "FROM pg_catalog.pg_constraint constraint_row "
+                    + "JOIN pg_catalog.pg_namespace namespace ON namespace.oid = constraint_row.connamespace "
+                    + "WHERE namespace.nspname = ? AND constraint_row.conname = 'billing_event_inbox_disposition_check'",
+                String.class,
+                schema))
+        .contains("EXPIRED_PERIOD");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT has_table_privilege('agendamento_runtime', ?, 'SELECT') "
+                    + "AND has_table_privilege('agendamento_runtime', ?, 'INSERT') "
+                    + "AND NOT has_table_privilege('agendamento_runtime', ?, 'UPDATE') "
+                    + "AND has_column_privilege('agendamento_runtime', ?, 'plan_code', 'UPDATE') "
+                    + "AND NOT has_column_privilege('agendamento_runtime', ?, 'tenant_id', 'UPDATE') "
+                    + "AND NOT has_column_privilege('agendamento_runtime', ?, 'subscription_id', 'UPDATE') "
+                    + "AND NOT has_table_privilege('agendamento_runtime', ?, 'DELETE') "
+                    + "AND NOT has_table_privilege('agendamento_runtime', ?, 'TRUNCATE')",
+                Boolean.class,
+                schema + ".billing_subscription_contract",
+                schema + ".billing_subscription_contract",
+                schema + ".billing_subscription_contract",
+                schema + ".billing_subscription_contract",
+                schema + ".billing_subscription_contract",
+                schema + ".billing_subscription_contract",
+                schema + ".billing_subscription_contract",
+                schema + ".billing_subscription_contract"))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT has_table_privilege('agendamento_runtime', ?, 'SELECT') "
+                    + "AND has_table_privilege('agendamento_runtime', ?, 'INSERT') "
+                    + "AND has_column_privilege('agendamento_runtime', ?, 'state', 'UPDATE') "
+                    + "AND NOT has_table_privilege('agendamento_runtime', ?, 'DELETE') "
+                    + "AND NOT has_table_privilege('agendamento_runtime', ?, 'TRUNCATE')",
+                Boolean.class,
+                schema + ".billing_annual_renewal_notice",
+                schema + ".billing_annual_renewal_notice",
+                schema + ".billing_annual_renewal_notice",
+                schema + ".billing_annual_renewal_notice",
+                schema + ".billing_annual_renewal_notice"))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT has_column_privilege('agendamento_runtime', ?, 'obsolete_reason', 'UPDATE') "
+                    + "AND NOT has_table_privilege('agendamento_runtime', ?, 'UPDATE')",
+                Boolean.class,
+                schema + ".billing_annual_renewal_notice",
+                schema + ".billing_annual_renewal_notice"))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT has_column_privilege('agendamento_runtime', ?, 'tenant_id', 'UPDATE') "
+                    + "AND has_column_privilege('agendamento_runtime', ?, 'operation_id', 'UPDATE') "
+                    + "AND has_column_privilege('agendamento_runtime', ?, 'dunning_attempt_id', 'UPDATE') "
+                    + "AND has_column_privilege('agendamento_runtime', ?, 'disposition', 'UPDATE') "
+                    + "AND NOT has_table_privilege('agendamento_runtime', ?, 'UPDATE') "
+                    + "AND NOT has_column_privilege('agendamento_runtime', ?, 'provider_reference', 'UPDATE') "
+                    + "AND NOT has_column_privilege('agendamento_runtime', ?, 'outcome', 'UPDATE') "
+                    + "AND NOT has_column_privilege('agendamento_runtime', ?, 'amount_minor_units', 'UPDATE')",
+                Boolean.class,
+                schema + ".billing_event_inbox",
+                schema + ".billing_event_inbox",
+                schema + ".billing_event_inbox",
+                schema + ".billing_event_inbox",
+                schema + ".billing_event_inbox",
+                schema + ".billing_event_inbox",
+                schema + ".billing_event_inbox",
+                schema + ".billing_event_inbox"))
+        .isTrue();
+  }
+
+  @Test
+  void upgradesV38ToV40ForMonotonicPeriodExtensionsAndAttemptSnapshots() throws Exception {
+    String schema = isolatedSchemaName();
+    Flyway v38 = isolatedFlyway(schema, MigrationVersion.fromVersion("38"));
+    assertThat(v38.migrate().migrationsExecuted).isEqualTo(38);
+    UUID tenantId = UUID.randomUUID();
+    UUID subscriptionId = UUID.randomUUID();
+    UUID sourceOperationId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    UUID attemptId = UUID.randomUUID();
+    insertSubscriptionTenant(schema, tenantId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_checkout_operation(operation_id, tenant_id, plan_code, amount_minor_units, currency, terms_version, offer_version, expected_subscription_version, provider_code, provider_account_id, provider_reference, state) VALUES (?, ?, 'MONTHLY', 2500, 'XTS', 'terms-v1', 'offer-v1', 0, 'provider', 'account', ?, 'CONFIRMED')",
+        sourceOperationId,
+        tenantId,
+        "migration-source-" + sourceOperationId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".subscription(subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'MONTHLY', TIMESTAMPTZ '2027-01-01 00:00:00+00', 3)",
+        subscriptionId,
+        tenantId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_subscription_contract(subscription_id, tenant_id, source_operation_id, amount_minor_units, currency, terms_version, offer_version, recorded_at) VALUES (?, ?, ?, 2500, 'XTS', 'terms-v1', 'offer-v1', TIMESTAMPTZ '2026-10-01 00:00:00+00')",
+        subscriptionId,
+        tenantId,
+        sourceOperationId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".subscription_history(event_id, tenant_id, subscription_id, event_type, from_status, to_status, event_at, version, operation_id) VALUES (?, ?, ?, 'PAYMENT_CONFIRMED', NULL, 'ACTIVE', TIMESTAMPTZ '2026-10-01 00:00:00+00', 1, ?)",
+        UUID.randomUUID(),
+        tenantId,
+        subscriptionId,
+        sourceOperationId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_dunning_cycle(cycle_id, tenant_id, subscription_id, due_at, grace_ends_at, state, created_at, closed_at) VALUES (?, ?, ?, TIMESTAMPTZ '2026-10-01 00:00:00+00', TIMESTAMPTZ '2026-10-08 00:00:00+00', 'SUSPENDED', TIMESTAMPTZ '2026-10-02 00:00:00+00', TIMESTAMPTZ '2026-10-08 00:00:00+00')",
+        cycleId,
+        tenantId,
+        subscriptionId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_dunning_attempt(attempt_id, tenant_id, cycle_id, logical_sequence, scheduled_at, state, updated_at, external_idempotency_key, contract_amount_minor_units, contract_currency, contract_terms_version, contract_offer_version) VALUES (?, ?, ?, 0, TIMESTAMPTZ '2026-10-01 00:00:00+00', 'SCHEDULED', TIMESTAMPTZ '2026-10-02 00:00:00+00', ?, 2500, 'XTS', 'terms-v1', 'offer-v1')",
+        attemptId,
+        tenantId,
+        cycleId,
+        attemptId);
+
+    Flyway upgrade = isolatedFlyway(schema);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(2);
+    upgrade.validate();
+    assertThat(upgrade.migrate().migrationsExecuted).isZero();
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT plan_code FROM "
+                    + schema
+                    + ".billing_subscription_contract WHERE subscription_id = ?",
+                String.class,
+                subscriptionId))
+        .isEqualTo("MONTHLY");
+    jdbc.execute("GRANT USAGE ON SCHEMA " + schema + " TO agendamento_runtime");
+    assertThatThrownBy(
+            () -> {
+              try (var connection = PostgresTestEnvironment.migrationDataSource().getConnection();
+                  var statement = connection.createStatement()) {
+                statement.execute("SET search_path TO " + schema + ", public");
+                statement.execute("SET ROLE agendamento_runtime");
+                try (var update =
+                    connection.prepareStatement(
+                        "UPDATE "
+                            + schema
+                            + ".billing_subscription_contract SET plan_code = 'ANNUAL' WHERE subscription_id = ?")) {
+                  update.setObject(1, subscriptionId);
+                  update.executeUpdate();
+                }
+              }
+            })
+        .isInstanceOf(java.sql.SQLException.class)
+        .hasMessageContaining("authenticated checkout evidence");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT contract_plan_code FROM "
+                    + schema
+                    + ".billing_dunning_attempt WHERE attempt_id = ?",
+                String.class,
+                attemptId))
+        .isEqualTo("MONTHLY");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT has_column_privilege('agendamento_runtime', ?, 'contract_plan_code', 'SELECT') "
+                    + "AND NOT has_column_privilege('agendamento_runtime', ?, 'contract_plan_code', 'UPDATE') "
+                    + "AND NOT has_table_privilege('agendamento_runtime', ?, 'UPDATE')",
+                Boolean.class,
+                schema + ".billing_dunning_attempt",
+                schema + ".billing_dunning_attempt",
+                schema + ".billing_dunning_attempt"))
+        .isTrue();
+
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".subscription_history(event_id, tenant_id, subscription_id, event_type, from_status, to_status, event_at, version, operation_id) VALUES (?, ?, ?, 'PAYMENT_CONFIRMED', 'ACTIVE', 'ACTIVE', TIMESTAMPTZ '2026-10-23 00:00:00+00', 4, ?)",
+        UUID.randomUUID(),
+        tenantId,
+        subscriptionId,
+        UUID.randomUUID());
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "INSERT INTO "
+                        + schema
+                        + ".subscription_history(event_id, tenant_id, subscription_id, event_type, from_status, to_status, event_at, version, operation_id) VALUES (?, ?, ?, 'PAYMENT_CONFIRMED', 'ACTIVE', 'ACTIVE', TIMESTAMPTZ '2026-10-23 00:00:00+00', 1, ?)",
+                    UUID.randomUUID(),
+                    tenantId,
+                    subscriptionId,
+                    UUID.randomUUID()))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    UUID extensionOperationId = UUID.randomUUID();
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".outbox_event(event_id, tenant_id, aggregate_type, aggregate_id, aggregate_version, event_type, schema_version, operation_id, correlation_id, payload) VALUES (?, ?, 'SUBSCRIPTION', ?, 4, 'SubscriptionPeriodExtended', 1, ?, ?, ?::jsonb)",
+        UUID.randomUUID(),
+        tenantId,
+        subscriptionId,
+        extensionOperationId,
+        UUID.randomUUID(),
+        "{\"subscriptionId\":\"" + subscriptionId + "\",\"version\":4}");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "INSERT INTO "
+                        + schema
+                        + ".outbox_event(event_id, tenant_id, aggregate_type, aggregate_id, aggregate_version, event_type, schema_version, operation_id, correlation_id, payload) VALUES (?, ?, 'SUBSCRIPTION', ?, 4, 'SubscriptionPeriodExtended', 1, ?, ?, ?::jsonb)",
+                    UUID.randomUUID(),
+                    tenantId,
+                    subscriptionId,
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    "{\"subscriptionId\":\"" + subscriptionId + "\",\"version\":3}"))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT has_table_privilege('agendamento_runtime', ?, 'INSERT') AND NOT has_table_privilege('agendamento_runtime', ?, 'DELETE') AND NOT has_table_privilege('agendamento_runtime', ?, 'TRUNCATE')",
+                Boolean.class,
+                schema + ".outbox_event",
+                schema + ".outbox_event",
+                schema + ".outbox_event"))
+        .isTrue();
+  }
+
+  @Test
+  void v37FailsClosedForLegacyProviderReferenceAndPreservesIt() {
+    String schema = isolatedSchemaName();
+    Flyway v36 = isolatedFlyway(schema, MigrationVersion.fromVersion("36"));
+    assertThat(v36.migrate().migrationsExecuted).isEqualTo(36);
+    UUID tenantId = UUID.randomUUID();
+    UUID subscriptionId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    UUID attemptId = UUID.randomUUID();
+    insertSubscriptionTenant(schema, tenantId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".subscription(subscription_id, tenant_id, status, trial_started_at, trial_ends_at, plan_code, paid_through_at, grace_ends_at, version) VALUES (?, ?, 'PAST_DUE', NULL, NULL, 'MONTHLY', TIMESTAMPTZ '2027-01-01 00:00:00+00', TIMESTAMPTZ '2027-01-08 00:00:00+00', 2)",
+        subscriptionId,
+        tenantId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_dunning_cycle(cycle_id, tenant_id, subscription_id, due_at, grace_ends_at, state, created_at) VALUES (?, ?, ?, TIMESTAMPTZ '2027-01-01 00:00:00+00', TIMESTAMPTZ '2027-01-08 00:00:00+00', 'OPEN', TIMESTAMPTZ '2027-01-01 00:00:00+00')",
+        cycleId,
+        tenantId,
+        subscriptionId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_dunning_attempt(attempt_id, tenant_id, cycle_id, logical_sequence, scheduled_at, state, provider_reference, provider_code, ever_started, external_idempotency_key, updated_at) VALUES (?, ?, ?, 0, TIMESTAMPTZ '2027-01-01 00:00:00+00', 'ACCEPTED', 'legacy-ref', 'legacy-provider', TRUE, ?, TIMESTAMPTZ '2027-01-01 00:00:00+00')",
+        attemptId,
+        tenantId,
+        cycleId,
+        attemptId);
+
+    assertThatThrownBy(() -> isolatedFlyway(schema).migrate())
+        .hasMessageContaining(
+            "legacy dunning provider references have no persisted account identity");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT provider_reference || '|' || state FROM "
+                    + schema
+                    + ".billing_dunning_attempt WHERE attempt_id = ?",
+                String.class,
+                attemptId))
+        .isEqualTo("legacy-ref|ACCEPTED");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = ? AND table_name = 'billing_dunning_attempt' AND column_name = 'provider_account_id')",
+                Boolean.class,
+                schema))
+        .isTrue();
+  }
+
+  @Test
+  void v37FailsClosedForStartedAttemptWithoutTrustworthyContractSnapshot() {
+    String schema = isolatedSchemaName();
+    Flyway v36 = isolatedFlyway(schema, MigrationVersion.fromVersion("36"));
+    assertThat(v36.migrate().migrationsExecuted).isEqualTo(36);
+    UUID tenantId = UUID.randomUUID();
+    UUID subscriptionId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    UUID attemptId = UUID.randomUUID();
+    insertSubscriptionTenant(schema, tenantId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".subscription(subscription_id, tenant_id, status, trial_started_at, trial_ends_at, plan_code, paid_through_at, grace_ends_at, version) VALUES (?, ?, 'PAST_DUE', NULL, NULL, 'MONTHLY', TIMESTAMPTZ '2027-01-01 00:00:00+00', TIMESTAMPTZ '2027-01-08 00:00:00+00', 2)",
+        subscriptionId,
+        tenantId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_dunning_cycle(cycle_id, tenant_id, subscription_id, due_at, grace_ends_at, state, created_at) VALUES (?, ?, ?, TIMESTAMPTZ '2027-01-01 00:00:00+00', TIMESTAMPTZ '2027-01-08 00:00:00+00', 'OPEN', TIMESTAMPTZ '2027-01-01 00:00:00+00')",
+        cycleId,
+        tenantId,
+        subscriptionId);
+    jdbc.update(
+        "INSERT INTO "
+            + schema
+            + ".billing_dunning_attempt(attempt_id, tenant_id, cycle_id, logical_sequence, scheduled_at, state, ever_started, external_idempotency_key, updated_at) VALUES (?, ?, ?, 0, TIMESTAMPTZ '2027-01-01 00:00:00+00', 'ACCEPTED', TRUE, ?, TIMESTAMPTZ '2027-01-01 00:00:00+00')",
+        attemptId,
+        tenantId,
+        cycleId,
+        attemptId);
+
+    assertThatThrownBy(() -> isolatedFlyway(schema).migrate())
+        .hasMessageContaining("started legacy dunning attempt has no immutable contract snapshot");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state || ':' || ever_started FROM "
+                    + schema
+                    + ".billing_dunning_attempt WHERE attempt_id = ?",
+                String.class,
+                attemptId))
+        .isEqualTo("ACCEPTED:true");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = ? AND table_name = 'billing_dunning_attempt' AND column_name = 'contract_amount_minor_units')",
+                Boolean.class,
+                schema))
         .isTrue();
   }
 
@@ -314,10 +843,10 @@ class TenantPersistenceIT {
         convertedTrialTenantId);
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(7);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT pg_get_constraintdef(oid) LIKE '%IS TRUE%' FROM pg_constraint WHERE conname = 'ck_subscription_state' AND connamespace = ?::regnamespace",
@@ -447,10 +976,10 @@ class TenantPersistenceIT {
         2);
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(6);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(10);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT count(*) FROM " + schema + ".subscription_history", Integer.class))
@@ -561,10 +1090,10 @@ class TenantPersistenceIT {
         .isTrue();
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(8);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT has_column_privilege('agendamento_runtime', ?, 'status', 'UPDATE') "
@@ -637,10 +1166,10 @@ class TenantPersistenceIT {
     Flyway v22 = isolatedFlyway(schema, MigrationVersion.fromVersion("22"));
     assertThat(v22.migrate().migrationsExecuted).isEqualTo(22);
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(14);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(18);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT has_table_privilege('agendamento_app', ?, 'SELECT') "
@@ -666,10 +1195,10 @@ class TenantPersistenceIT {
     assertThat(v23.migrate().migrationsExecuted).isEqualTo(23);
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(13);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(17);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT has_table_privilege('agendamento_app', ?, 'SELECT') "
@@ -695,10 +1224,10 @@ class TenantPersistenceIT {
     assertThat(v24.migrate().migrationsExecuted).isEqualTo(24);
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(12);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(16);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT has_table_privilege('agendamento_runtime', ?, 'SELECT') "
@@ -731,10 +1260,10 @@ class TenantPersistenceIT {
         "policy-" + suffix());
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(11);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(15);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT has_table_privilege('agendamento_runtime', ?, 'SELECT') "
@@ -776,7 +1305,7 @@ class TenantPersistenceIT {
 
     assertThat(v1.info().current().getVersion().getVersion()).isEqualTo("1");
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(35);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(39);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -788,7 +1317,7 @@ class TenantPersistenceIT {
         .containsExactly(
             null, "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15",
             "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29",
-            "30", "31", "32", "33", "34", "35", "36");
+            "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = ? AND table_name = 'tenant')",
@@ -804,7 +1333,7 @@ class TenantPersistenceIT {
     assertThat(v2.migrate().migrationsExecuted).isEqualTo(2);
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(34);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(38);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -816,7 +1345,7 @@ class TenantPersistenceIT {
         .containsExactly(
             null, "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15",
             "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29",
-            "30", "31", "32", "33", "34", "35", "36");
+            "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40");
     assertThat(
             jdbc.queryForObject("SELECT to_regclass(?||'.spring_session')", String.class, schema))
         .isEqualTo(schema + ".spring_session");
@@ -830,14 +1359,14 @@ class TenantPersistenceIT {
     assertThat(v5.info().current().getVersion().getVersion()).isEqualTo("5");
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(31);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(35);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
             jdbc.queryForObject(
                 "SELECT count(*) FROM " + schema + ".flyway_schema_history WHERE success",
                 Integer.class))
-        .isEqualTo(37);
+        .isEqualTo(41);
     assertThat(
             jdbc.queryForObject(
                 "SELECT has_table_privilege('agendamento_app', ?, 'SELECT') "
@@ -858,7 +1387,7 @@ class TenantPersistenceIT {
     assertThat(v6.info().current().getVersion().getVersion()).isEqualTo("6");
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(30);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(34);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(jdbc.queryForObject("SELECT to_regclass(?||'.service')", String.class, schema))
@@ -870,7 +1399,7 @@ class TenantPersistenceIT {
             jdbc.queryForObject(
                 "SELECT count(*) FROM " + schema + ".flyway_schema_history WHERE success",
                 Integer.class))
-        .isEqualTo(37);
+        .isEqualTo(41);
   }
 
   @Test
@@ -881,7 +1410,7 @@ class TenantPersistenceIT {
     assertThat(v7.info().current().getVersion().getVersion()).isEqualTo("7");
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(29);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(33);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -892,7 +1421,7 @@ class TenantPersistenceIT {
             jdbc.queryForObject(
                 "SELECT count(*) FROM " + schema + ".flyway_schema_history WHERE success",
                 Integer.class))
-        .isEqualTo(37);
+        .isEqualTo(41);
   }
 
   @Test
@@ -931,7 +1460,7 @@ class TenantPersistenceIT {
     jdbc.update(
         "UPDATE " + schema + ".weekly_period SET local_start = '09:15' WHERE tenant_id = ?",
         tenantId);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(28);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(32);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -963,7 +1492,7 @@ class TenantPersistenceIT {
         tenantId);
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(28);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(32);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -981,10 +1510,10 @@ class TenantPersistenceIT {
     assertThat(v9.migrate().migrationsExecuted).isEqualTo(9);
     assertThat(v9.info().current().getVersion().getVersion()).isEqualTo("9");
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(27);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(31);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT to_regclass(?||'.schedule_exception')", String.class, schema))
@@ -1028,7 +1557,7 @@ class TenantPersistenceIT {
         });
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(26);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(30);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -1051,7 +1580,7 @@ class TenantPersistenceIT {
             privilegedJdbc.queryForObject(
                 "SELECT count(*) FROM " + schema + ".flyway_schema_history WHERE success",
                 Integer.class))
-        .isEqualTo(37);
+        .isEqualTo(41);
   }
 
   @Test
@@ -1068,7 +1597,7 @@ class TenantPersistenceIT {
         "existing-business-" + suffix());
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(25);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(29);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -1207,10 +1736,10 @@ class TenantPersistenceIT {
         UUID.randomUUID());
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(23);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(27);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT rtrim(request_digest) FROM "
@@ -1242,10 +1771,10 @@ class TenantPersistenceIT {
     assertThat(v14.info().current().getVersion().getVersion()).isEqualTo("14");
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(22);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(26);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = ? AND table_name = 'appointment_history' AND column_name = 'reason')",
@@ -1274,10 +1803,10 @@ class TenantPersistenceIT {
     assertThat(v15.info().current().getVersion().getVersion()).isEqualTo("15");
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(21);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(25);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT has_column_privilege('agendamento_app', ?, 'starts_at', 'UPDATE') "
@@ -1307,10 +1836,10 @@ class TenantPersistenceIT {
     assertThat(v16.migrate().migrationsExecuted).isEqualTo(16);
     Flyway upgrade = isolatedFlyway(schema);
 
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(20);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(24);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT has_table_privilege('agendamento_app', ?, 'SELECT') "
@@ -1331,10 +1860,10 @@ class TenantPersistenceIT {
     Flyway v17 = isolatedFlyway(schema, MigrationVersion.fromVersion("17"));
     assertThat(v17.migrate().migrationsExecuted).isEqualTo(17);
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(19);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(23);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT has_column_privilege('agendamento_app', ?, 'status', 'UPDATE') "
@@ -1539,10 +2068,10 @@ class TenantPersistenceIT {
     assertThat(v27.migrate().migrationsExecuted).isEqualTo(27);
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(9);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(13);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = ? AND table_name = 'client_booking_restriction') "
@@ -1581,10 +2110,10 @@ class TenantPersistenceIT {
     assertThat(v28.info().current().getVersion().getVersion()).isEqualTo("28");
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(8);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(12);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT pg_get_constraintdef(oid) LIKE '%RECONCILED%' FROM pg_constraint WHERE conname = 'ck_client_restriction_history_event' AND connamespace = ?::regnamespace",
@@ -1682,10 +2211,10 @@ class TenantPersistenceIT {
         new byte[29]);
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(17);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(21);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("36");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("40");
     assertThat(
             jdbc.queryForObject(
                 "SELECT challenge_id IS NULL FROM "

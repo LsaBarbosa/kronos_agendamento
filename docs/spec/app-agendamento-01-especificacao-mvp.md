@@ -391,6 +391,12 @@ Falha transitória somente admite retry técnico da mesma tentativa se a respost
 - Ausência de autorização não deve produzir cobrança silenciosa.
 - A expiração segue política comercial documentada e oferece migração para mensal quando aplicável.
 
+**Contrato incremental AGD-043:** a renovação mensal reutiliza o ciclo persistido de AGD-042 e só pode iniciar tentativa com autorização recorrente mensal válida revalidada no servidor. O plano anual não reutiliza essa autorização; requer autorização própria para a renovação correspondente. O aviso anual é deduplicado pelo tenant/assinatura/período e uma alteração do período torna obsoleta a intenção anterior. A confirmação que reativa a assinatura deve ser evidência autenticada do provedor; redirecionamento, aceite do transporte ou retry não confirmam pagamento.
+
+**Decisão aprovada pelo usuário nesta instrução em 23/10/2026 para o aviso anual:** agendar em `paidThroughAt - 168 horas` UTC. Atraso de processamento pode materializar a intenção e deixá-la pronta somente enquanto `now < paidThroughAt` e o período ainda for o corrente. Em `now >= paidThroughAt`, o aviso pré-vencimento não começa; a intenção termina como obsoleta com motivo `PAID_PERIOD_EXPIRED`. Período alterado obsoleta a intenção anterior, e a identidade seguinte é deduplicada por assinatura/período. Não há acúmulo de avisos de períodos passados. Tentativa já iniciada conserva sua identidade/evidência; resultado ambíguo não representa entrega nem permite duplicação cega. Sem canal, destinatário, template e fornecedor configurados, não enviar nem marcar sucesso.
+
+**Limite comercial ainda não definido:** a duração/âncora do novo período e o tratamento de pagamentos antecipados/atrasados não são calculados pela aplicação. `paidThroughAt` de evento autenticado permanece dado fornecido pela autoridade financeira, sujeito a correlação, tenant, conta, operação e snapshot válidos. Evidência histórica não reduz período mais recente nem libera acesso quando o próprio `paidThroughAt` já venceu. Produto/contrato do provedor deve definir sua semântica antes de habilitar operações reais.
+
 ## 13. Exportações e relatórios
 
 ### Conteúdo

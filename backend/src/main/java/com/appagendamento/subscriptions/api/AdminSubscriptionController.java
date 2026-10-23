@@ -106,7 +106,9 @@ public class AdminSubscriptionController {
                 !overview.checkoutOffers().isEmpty(),
                 overview.subscription() == null,
                 overview.eligibility(),
-                overview.dunningAttempts()));
+                overview.dunningAttempts(),
+                overview.annualRenewalNotices(),
+                overview.annualRenewalAuthorized()));
   }
 
   record AdminSubscriptionResponse(
@@ -117,7 +119,9 @@ public class AdminSubscriptionController {
       boolean checkoutAvailable,
       boolean trialEligibilityPending,
       String commercialEligibility,
-      List<com.appagendamento.subscriptions.domain.DunningAttemptView> dunningAttempts) {}
+      List<com.appagendamento.subscriptions.domain.DunningAttemptView> dunningAttempts,
+      List<com.appagendamento.subscriptions.domain.AnnualRenewalNoticeView> annualRenewalNotices,
+      boolean annualRenewalAuthorized) {}
 
   record SubscriptionView(
       java.util.UUID subscriptionId,

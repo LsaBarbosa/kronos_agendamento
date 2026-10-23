@@ -15,6 +15,8 @@ import com.appagendamento.subscriptions.domain.PlanCode;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -35,6 +37,7 @@ public class PostgresBillingRepository implements BillingRepository {
   private final AuditCorrelationId correlation;
   private final TenantAgendaLock agendaLock;
   private final SubscriptionDunningRepository dunning;
+  private final Clock clock;
 
   public PostgresBillingRepository(
       JdbcTemplate jdbc,
@@ -42,13 +45,15 @@ public class PostgresBillingRepository implements BillingRepository {
       AuditEventRecorder audit,
       AuditCorrelationId correlation,
       TenantAgendaLock agendaLock,
-      SubscriptionDunningRepository dunning) {
+      SubscriptionDunningRepository dunning,
+      Clock clock) {
     this.jdbc = jdbc;
     this.outbox = outbox;
     this.audit = audit;
     this.correlation = correlation;
     this.agendaLock = agendaLock;
     this.dunning = dunning;
+    this.clock = clock;
   }
 
   @Override
@@ -222,6 +227,8 @@ public class PostgresBillingRepository implements BillingRepository {
             Timestamp.from(event.occurredAt()),
             event.paidThroughAt() == null ? null : Timestamp.from(event.paidThroughAt()));
     reconcileUnlinked(event.providerCode(), event.providerAccountId(), event.providerReference());
+    dunning.reconcilePaymentEvidence(
+        event.providerCode(), event.providerAccountId(), event.providerReference());
     return !inserted.isEmpty();
   }
 
@@ -239,6 +246,19 @@ public class PostgresBillingRepository implements BillingRepository {
   }
 
   private void reconcileUnlinked(String providerCode, String accountId, String reference) {
+    Boolean dunningReferenceExists =
+        jdbc.queryForObject(
+            """
+            SELECT EXISTS (
+              SELECT 1 FROM agendamento.billing_dunning_attempt
+              WHERE provider_code = ? AND provider_account_id = ? AND provider_reference = ?
+            )
+            """,
+            Boolean.class,
+            providerCode,
+            accountId,
+            reference);
+    if (Boolean.TRUE.equals(dunningReferenceExists)) return;
     CheckoutOperation operation =
         jdbc
             .query(
@@ -352,7 +372,6 @@ public class PostgresBillingRepository implements BillingRepository {
     }
 
     if (!operation.state().equals("CONFIRMED")) {
-      activateSubscription(operation, event);
       jdbc.update(
           """
           UPDATE agendamento.billing_checkout_operation
@@ -361,8 +380,10 @@ public class PostgresBillingRepository implements BillingRepository {
           """,
           event.sequence(),
           operation.operationId());
+      String disposition = activateSubscription(operation, event);
       jdbc.update(
-          "UPDATE agendamento.billing_event_inbox SET disposition = 'APPLIED' WHERE provider_code = ? AND provider_account_id = ? AND provider_event_id = ?",
+          "UPDATE agendamento.billing_event_inbox SET disposition = ? WHERE provider_code = ? AND provider_account_id = ? AND provider_event_id = ?",
+          disposition,
           provider,
           account,
           event.eventId());
@@ -371,20 +392,33 @@ public class PostgresBillingRepository implements BillingRepository {
     }
   }
 
-  private void activateSubscription(CheckoutOperation operation, InboxEvent event) {
+  private String activateSubscription(CheckoutOperation operation, InboxEvent event) {
+    if (event.paidThroughAt() == null) return "OLDER";
     agendaLock.acquire(operation.tenantId());
     List<SubscriptionState> current =
         jdbc.query(
-            "SELECT subscription_id, status, version FROM agendamento.subscription WHERE tenant_id = ? FOR UPDATE",
+            "SELECT subscription_id, status, version, paid_through_at FROM agendamento.subscription WHERE tenant_id = ? FOR UPDATE",
             (row, index) ->
                 new SubscriptionState(
                     row.getObject("subscription_id", UUID.class),
                     row.getString("status"),
-                    row.getLong("version")),
+                    row.getLong("version"),
+                    row.getTimestamp("paid_through_at") == null
+                        ? null
+                        : row.getTimestamp("paid_through_at").toInstant()),
             operation.tenantId());
+    Instant evaluatedAt = clock.instant();
+    if (!event.paidThroughAt().isAfter(evaluatedAt)) {
+      jdbc.update(
+          "UPDATE agendamento.billing_checkout_operation SET last_provider_sequence = ?, updated_at = clock_timestamp() WHERE operation_id = ?",
+          event.sequence(),
+          operation.operationId());
+      return "EXPIRED_PERIOD";
+    }
     long newVersion;
     String fromStatus;
     UUID subscriptionId;
+    boolean periodExtension = false;
     if (current.isEmpty()) {
       subscriptionId = UUID.randomUUID();
       newVersion = 1;
@@ -401,39 +435,79 @@ public class PostgresBillingRepository implements BillingRepository {
           Timestamp.from(event.paidThroughAt()));
     } else {
       SubscriptionState state = current.getFirst();
-      if (state.status().equals("ACTIVE")) {
+      if (state.paidThroughAt() != null && !event.paidThroughAt().isAfter(state.paidThroughAt())) {
         jdbc.update(
             "UPDATE agendamento.billing_checkout_operation SET last_provider_sequence = ?, updated_at = clock_timestamp() WHERE operation_id = ?",
             event.sequence(),
             operation.operationId());
-        jdbc.update(
-            "UPDATE agendamento.billing_event_inbox SET disposition = 'OLDER' WHERE provider_code = ? AND provider_account_id = ? AND provider_event_id = ?",
-            operation.providerCode(),
-            operation.providerAccountId(),
-            event.eventId());
-        return;
+        return "OLDER";
       }
       fromStatus = state.status();
       newVersion = state.version() + 1;
       subscriptionId = state.subscriptionId();
-      int changed =
-          jdbc.update(
-              """
-              UPDATE agendamento.subscription
-              SET status = 'ACTIVE', plan_code = ?, paid_through_at = ?, grace_ends_at = NULL,
-                  version = version + 1
-              WHERE tenant_id = ? AND subscription_id = ? AND version = ?
-                AND status IN ('TRIALING', 'PAST_DUE', 'SUSPENDED')
-              """,
-              operation.planCode().name(),
-              Timestamp.from(event.paidThroughAt()),
-              operation.tenantId(),
-              subscriptionId,
-              state.version());
+      periodExtension = state.status().equals("ACTIVE");
+      int changed;
+      if (periodExtension) {
+        changed =
+            jdbc.update(
+                """
+                UPDATE agendamento.subscription
+                SET paid_through_at = ?, version = version + 1
+                WHERE tenant_id = ? AND subscription_id = ? AND version = ?
+                  AND status = 'ACTIVE' AND paid_through_at < ?
+                """,
+                Timestamp.from(event.paidThroughAt()),
+                operation.tenantId(),
+                subscriptionId,
+                state.version(),
+                Timestamp.from(event.paidThroughAt()));
+      } else {
+        changed =
+            jdbc.update(
+                """
+                UPDATE agendamento.subscription
+                SET status = 'ACTIVE', plan_code = ?, paid_through_at = ?, grace_ends_at = NULL,
+                    version = version + 1
+                WHERE tenant_id = ? AND subscription_id = ? AND version = ?
+                  AND status IN ('TRIALING', 'PAST_DUE', 'SUSPENDED')
+                """,
+                operation.planCode().name(),
+                Timestamp.from(event.paidThroughAt()),
+                operation.tenantId(),
+                subscriptionId,
+                state.version());
+      }
       if (changed != 1) throw new IllegalStateException("CAS da assinatura foi perdido");
-      if (state.status().equals("PAST_DUE") || state.status().equals("SUSPENDED")) {
+      if (periodExtension
+          || state.status().equals("PAST_DUE")
+          || state.status().equals("SUSPENDED")) {
         dunning.closeCyclesForPayment(operation.tenantId(), subscriptionId, event.occurredAt());
       }
+    }
+    if (!periodExtension) {
+      jdbc.update(
+          """
+          INSERT INTO agendamento.billing_subscription_contract
+            (subscription_id, tenant_id, source_operation_id, amount_minor_units, currency,
+           terms_version, offer_version, plan_code)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (subscription_id) DO UPDATE
+          SET source_operation_id = EXCLUDED.source_operation_id,
+              amount_minor_units = EXCLUDED.amount_minor_units,
+              currency = EXCLUDED.currency,
+              terms_version = EXCLUDED.terms_version,
+              offer_version = EXCLUDED.offer_version,
+            plan_code = EXCLUDED.plan_code,
+              recorded_at = clock_timestamp()
+          """,
+          subscriptionId,
+          operation.tenantId(),
+          operation.operationId(),
+          operation.amountMinorUnits(),
+          operation.currency(),
+          operation.termsVersion(),
+          operation.offerVersion(),
+          operation.planCode().name());
     }
     jdbc.update(
         """
@@ -475,11 +549,12 @@ public class PostgresBillingRepository implements BillingRepository {
             "SUBSCRIPTION",
             subscriptionId,
             newVersion,
-            "SubscriptionReactivated",
+            periodExtension ? "SubscriptionPeriodExtended" : "SubscriptionReactivated",
             1,
             operation.operationId(),
             traceId,
             "{\"subscriptionId\":\"" + subscriptionId + "\",\"version\":" + newVersion + "}"));
+    return "APPLIED";
   }
 
   private void setDisposition(
@@ -537,5 +612,6 @@ public class PostgresBillingRepository implements BillingRepository {
       java.time.Instant occurredAt,
       java.time.Instant paidThroughAt) {}
 
-  private record SubscriptionState(UUID subscriptionId, String status, long version) {}
+  private record SubscriptionState(
+      UUID subscriptionId, String status, long version, java.time.Instant paidThroughAt) {}
 }

@@ -6,6 +6,7 @@ import com.appagendamento.subscriptions.api.BillingOffer;
 import com.appagendamento.subscriptions.api.BillingOfferCatalog;
 import com.appagendamento.subscriptions.api.HostedCheckoutProvider;
 import com.appagendamento.subscriptions.api.PublicSubscriptionEligibility;
+import com.appagendamento.subscriptions.domain.AnnualRenewalNoticeView;
 import com.appagendamento.subscriptions.domain.DunningAttemptView;
 import com.appagendamento.subscriptions.domain.PlanCatalog;
 import com.appagendamento.subscriptions.domain.Subscription;
@@ -23,6 +24,8 @@ public class GetAdminSubscription {
   private final BillingOfferCatalog billingOffers;
   private final HostedCheckoutProvider checkoutProvider;
   private final SubscriptionDunningRepository dunning;
+  private final AnnualRenewalAuthorization annualAuthorization;
+  private final java.time.Clock clock;
 
   public GetAdminSubscription(
       AdminAccessPolicy access,
@@ -30,13 +33,17 @@ public class GetAdminSubscription {
       PublicSubscriptionEligibility lifecycle,
       BillingOfferCatalog billingOffers,
       HostedCheckoutProvider checkoutProvider,
-      SubscriptionDunningRepository dunning) {
+      SubscriptionDunningRepository dunning,
+      AnnualRenewalAuthorization annualAuthorization,
+      java.time.Clock clock) {
     this.access = access;
     this.subscriptions = subscriptions;
     this.lifecycle = lifecycle;
     this.billingOffers = billingOffers;
     this.checkoutProvider = checkoutProvider;
     this.dunning = dunning;
+    this.annualAuthorization = annualAuthorization;
+    this.clock = clock;
   }
 
   public Overview execute(AuthenticatedAdmin admin) {
@@ -56,6 +63,18 @@ public class GetAdminSubscription {
                 .toList()
             : List.of(),
         dunning.listAttempts(admin.tenantId()),
+        dunning.listAnnualRenewalNotices(admin.tenantId()),
+        subscription
+            .filter(value -> "ANNUAL".equals(value.planCode()))
+            .filter(value -> value.paidThroughAt() != null)
+            .map(
+                value ->
+                    annualAuthorization.isAuthorizedForPeriod(
+                        admin.tenantId(),
+                        value.subscriptionId(),
+                        value.paidThroughAt(),
+                        clock.instant()))
+            .orElse(false),
         subscription.isEmpty() ? "VERIFICATION_UNAVAILABLE" : "VERIFIED");
   }
 
@@ -65,5 +84,7 @@ public class GetAdminSubscription {
       List<SubscriptionPlan> plans,
       List<BillingOffer> checkoutOffers,
       List<DunningAttemptView> dunningAttempts,
+      List<AnnualRenewalNoticeView> annualRenewalNotices,
+      boolean annualRenewalAuthorized,
       String eligibility) {}
 }
