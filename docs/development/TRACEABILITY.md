@@ -611,3 +611,12 @@ O primeiro `verify` completo desta rodada expôs falhas nos fixtures temporais V
 | Recuperar o mesmo job após reload, com DOM sincronizado | Head 040ac92d4e3902ee0fca3a7d1b58cb0a4095b1f7: E2E push [40029553344](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40029553344) e PR [40029558450](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40029558450) passaram; roteiro aguarda documento complete/navigation reload, card AVAILABLE, botão de download e GET 200 do mesmo exportId | O teste prova composição sintética/CI, não storage ou keyring de produção |
 | Classificação da falha anterior | 6580cab: após Page.reload, o roteiro imprimiu sucesso antes de observar jobCard=null; não havia espera da navegação. A correção foi no sincronismo/assertion do roteiro, sem mudar UI | Não atribuir essa falha ao produto; também não inferir causa para a intermitência histórica de remarcação |
 | Demais gates no SHA | App CI verify/frontend/secret scans passaram; CodeQL push [40029553332](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40029553332) e PR [40029558366](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40029558366) passaram | App CI ainda falha apenas no scan Keycloak conhecido |
+
+### AGD-044 — integração final do componente e recuperação após reload
+
+| Evidência | Resultado | Limite |
+|---|---|---|
+| UI até `4d940d8133b037646642cd61b520e7b3be975193`, integrada localmente | 54 testes frontend/5 arquivos, format/lint/typecheck/build passaram; Terminal 2 reportou 31 testes DOM | Testes DOM não substituem E2E backend |
+| E2E PR #26, job `oidc-browser-e2e` | Fluxo completo passou: commit antes de 503, retry idêntico, mesmo `exportId` e efeitos únicos, worker/CSV, reload/recuperação, download e expiração | Storage/keyring sintéticos de E2E não comprovam produção |
+| CI no head `b6b59cf405bc2370b423614e0ea77fc727b828a7` | App CI PR [40030345756](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40030345756): verify/frontend/E2E/secret scans passaram; CodeQL PR [40030345669](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40030345669) passou | Scan Keycloak falhou, bloqueio conhecido |
+| E2E push no mesmo head | Exportação passou; falha posterior em `Administrador desativado não teve a sessão revogada` | E2E PR passou; causa da divergência desconhecida, sem explicar a intermitência antiga de remarcação |
