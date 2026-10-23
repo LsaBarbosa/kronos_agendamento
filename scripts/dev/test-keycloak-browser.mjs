@@ -665,7 +665,7 @@ try {
         const response = await originalFetch(input, init);
         if (url.pathname.startsWith('/api/v1/admin/exports/')) {
           const entry = {method, path:url.pathname, status:response.status, state:null};
-          if (method === 'GET' && response.ok && /\/api\/v1\/admin\/exports\/[^/]+$/.test(url.pathname)) {
+          if (method === 'GET' && response.ok && /\\/api\\/v1\\/admin\\/exports\\/[^/]+$/.test(url.pathname)) {
             const body = await response.clone().json().catch(() => null);
             entry.state = body?.state ?? null;
           }
