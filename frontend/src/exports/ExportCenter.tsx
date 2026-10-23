@@ -690,10 +690,6 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                 setError(
                     'A chave de idempotência já está associada a outro conteúdo. Revise os filtros antes de criar uma nova solicitação.',
                 );
-            } else if (resultKind === 'UNAVAILABLE') {
-                setError(
-                    'A exportação não foi aceita porque o armazenamento protegido está indisponível. Tente novamente mais tarde.',
-                );
             } else if (response.status === 400) {
                 setError(
                     'O servidor rejeitou os filtros. Revise os valores e tente novamente.',

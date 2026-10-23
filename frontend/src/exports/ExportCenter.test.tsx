@@ -72,7 +72,7 @@ describe('ExportCenter contract helpers', () => {
 
     it('preserves the indeterminate classification for timeout, 5xx and malformed acceptance', () => {
         expect(isUncertainCreateResult(null, false)).toBe(true);
-        expect(isUncertainCreateResult(503, false)).toBe(false);
+        expect(isUncertainCreateResult(503, false)).toBe(true);
         expect(isUncertainCreateResult(502, false)).toBe(true);
         expect(isUncertainCreateResult(202, false)).toBe(true);
         expect(isUncertainCreateResult(400, false)).toBe(false);
@@ -86,7 +86,7 @@ describe('ExportCenter contract helpers', () => {
         expect(classifyCreateResult(409, 'IDEMPOTENCY_KEY_REUSED', false)).toBe(
             'KEY_CONFLICT',
         );
-        expect(classifyCreateResult(503, undefined, false)).toBe('UNAVAILABLE');
+        expect(classifyCreateResult(503, undefined, false)).toBe('UNCERTAIN');
         expect(classifyCreateResult(400, undefined, false)).toBe('REJECTED');
     });
 
@@ -503,6 +503,7 @@ describe('ExportCenter DOM interactions', () => {
         ],
         ['408', async () => emptyResponse(408)],
         ['502', async () => emptyResponse(502)],
+        ['503', async () => emptyResponse(503)],
         ['malformed 202', async () => jsonResponse({ broken: true }, 202)],
     ])(
         'preserves the original intent after %s and retries with the same key',
@@ -579,6 +580,39 @@ describe('ExportCenter DOM interactions', () => {
             'A versão mudou antes da expiração',
         );
         expect(button(container, 'Encerrar acesso agora').disabled).toBe(false);
+        await click(button(container, 'Encerrar acesso agora'));
+        expect(deleteHeaders).toEqual(['"4"', '"5"']);
+        expect(getCount).toBe(3);
+    });
+
+    it('requires a fresh job read before enabling expiration when ETag is absent', async () => {
+        sessionStorage.setItem(
+            storedKey,
+            JSON.stringify({ tenantId, exportId: job.exportId }),
+        );
+        let reads = 0;
+        let ifMatch: string | null = null;
+        fetchMock.mockImplementation(async (input, init) => {
+            const url = String(input);
+            if (url.endsWith(`/exports/${job.exportId}`)) {
+                reads++;
+                return jobResponse('AVAILABLE', reads === 1 ? null : '"31"');
+            }
+            if (init?.method === 'DELETE') {
+                ifMatch = new Headers(init.headers).get('If-Match');
+                return emptyResponse(204);
+            }
+            throw new Error(`Unexpected request ${url}`);
+        });
+        await mount();
+        const expireButton = button(container, 'Encerrar acesso agora');
+        expect(expireButton.disabled).toBe(true);
+        expect(reads).toBe(1);
+
+        await click(button(container, 'Atualizar estado'));
+        expect(button(container, 'Encerrar acesso agora').disabled).toBe(false);
+        await click(button(container, 'Encerrar acesso agora'));
+        expect(ifMatch).toBe('"31"');
     });
 
     it('downloads only after obtaining an in-memory handle and stops at 410', async () => {
@@ -848,6 +882,54 @@ describe('ExportCenter DOM interactions', () => {
         ).toBe(false);
         expect(createUrl).not.toHaveBeenCalled();
         expect(container.textContent).not.toContain('Arquivo disponível');
+    });
+
+    it('does not start a delayed download when logout interrupts the content response', async () => {
+        sessionStorage.setItem(
+            storedKey,
+            JSON.stringify({ tenantId, exportId: job.exportId }),
+        );
+        let resolveContent: ((response: Response) => void) | undefined;
+        let contentSignal: AbortSignal | undefined;
+        const createUrl = vi.spyOn(URL, 'createObjectURL');
+        const anchorClick = vi
+            .spyOn(HTMLAnchorElement.prototype, 'click')
+            .mockImplementation(() => undefined);
+        fetchMock.mockImplementation((input, init) => {
+            const url = String(input);
+            if (url.endsWith(`/exports/${job.exportId}`))
+                return Promise.resolve(jobResponse('AVAILABLE'));
+            if (url.endsWith('/download-token'))
+                return Promise.resolve(
+                    jsonResponse({ downloadHandle: 'h'.repeat(40) }),
+                );
+            if (url.endsWith('/content')) {
+                contentSignal = init?.signal ?? undefined;
+                return new Promise((resolve) => {
+                    resolveContent = resolve;
+                });
+            }
+            throw new Error(`Unexpected request ${url}`);
+        });
+        await mount();
+        await click(button(container, 'Baixar arquivo'));
+        await flushPromises();
+        expect(contentSignal?.aborted).toBe(false);
+
+        await mount({ csrf: null });
+        expect(contentSignal?.aborted).toBe(true);
+        resolveContent?.(
+            new Response('private export contents', {
+                status: 200,
+                headers: { 'Content-Type': 'text/csv' },
+            }),
+        );
+        await flushPromises();
+
+        expect(createUrl).not.toHaveBeenCalled();
+        expect(anchorClick).not.toHaveBeenCalled();
+        expect(container.textContent).not.toContain('Download iniciado');
+        expect(sessionStorage.getItem(storedKey)).toBeNull();
     });
 
     it('aborts a pending request on unmount and ignores its late response', async () => {

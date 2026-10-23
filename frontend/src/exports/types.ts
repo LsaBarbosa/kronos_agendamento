@@ -121,18 +121,13 @@ export function isUncertainCreateResult(
     return (
         status === null ||
         status === 408 ||
-        (status >= 500 && status !== 503) ||
+        status >= 500 ||
         (status === 202 && !responseBodyValid)
     );
 }
 
 export type CreateResultKind =
-    | 'ACCEPTED'
-    | 'UNCERTAIN'
-    | 'ACTIVE_CONFLICT'
-    | 'KEY_CONFLICT'
-    | 'UNAVAILABLE'
-    | 'REJECTED';
+    'ACCEPTED' | 'UNCERTAIN' | 'ACTIVE_CONFLICT' | 'KEY_CONFLICT' | 'REJECTED';
 
 export function classifyCreateResult(
     status: number | null,
@@ -147,7 +142,6 @@ export function classifyCreateResult(
     if (status === 409 && code === 'IDEMPOTENCY_KEY_REUSED') {
         return 'KEY_CONFLICT';
     }
-    if (status === 503) return 'UNAVAILABLE';
     return 'REJECTED';
 }
 
