@@ -102,6 +102,7 @@ Qualquer divergência de contrato precisa ser comunicada em novo commit e descri
 - Revalidação completa posterior no SHA `04c05305280a00acf5089e42f8694bbfa54c7113`: JDK 21 `spotless:check verify` passou com 85 unitários/arquiteturais + 310 integrações PostgreSQL 16.13/Testcontainers; validações V41 e grants incluídas. UI continua não entregue na worktree isolada, então esta evidência é exclusivamente backend.
 - OpenAPI explicita envelope de erros, janela de 366 datas, filtros e o ETag de representação como não autorizador. A allowlist de dados permanece limitada a APPOINTMENTS sem nome/telefone de cliente; demais categorias/campos continuam como decisão aberta.
 - E2E OIDC compartilhado ainda não foi alterado nem executado. Será atualizado após a entrega UI, com ambiente descartável e adapter controlado apenas no perfil de teste; não usar o Compose compartilhado.
+- No head documental `bc19d98d2d6d783fb79b4e56594acb78097f4ec0`, App CI push/PR concluiu todos os jobs: verify, frontend, E2E OIDC e secret scans passaram; security falhou somente no scan Keycloak conhecido. CodeQL push/PR passou com analisadores concluídos. O E2E atual não cobre o módulo de exportação. A worktree frontend ainda não tem alterações e os checks do SHA final integrado continuam pendentes.
 
 ## Retomada
 
