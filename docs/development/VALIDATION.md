@@ -1001,3 +1001,9 @@ No SHA funcional `0fa225ac92dbc46233993bc578787b230c1c0115`, App CI push [393364
 - App CI push [39964457631](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39964457631) e PR [39964466502](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39964466502) terminaram; todos os jobs/check-runs estão completos. `verify` PostgreSQL/Testcontainers, frontend, E2E OIDC geral e secret scans passaram; apenas `security / Scan pinned Keycloak image` falhou pelo bloqueio herdado. E2E OIDC não testa exportações.
 - CodeQL push [39964457595](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39964457595) e PR [39964466481](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39964466481) concluíram `success` nos analisadores Java/Kotlin e JavaScript/TypeScript.
 - Estes resultados pertencem ao SHA `ee4d5a1`. A descrição do PR registra a validação backend e a ausência da UI. O bloqueio Keycloak permanece; a integração UI e a prova browser específica continuam pendentes.
+
+#### CI do head documental `b199ef23e9a1058961b82949822d06b9a64f9b50`
+
+- App CI push [39965370133](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39965370133) e PR [39965376456](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39965376456) concluíram todos os jobs/check-runs. Verify PostgreSQL/Testcontainers, frontend, E2E OIDC geral e secret scans passaram; `security` falhou somente no scan Keycloak herdado.
+- CodeQL push [39965370179](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39965370179) e PR [39965376344](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39965376344) concluíram success nos dois analisadores. O E2E continua sem cobrir exportações porque a UI não foi entregue.
+- Estes resultados são do SHA documental `b199ef2`. A implementação backend é idêntica ao SHA localmente testado `04c0530`; nenhum CI está sendo tratado como prova de UI ou produção.
