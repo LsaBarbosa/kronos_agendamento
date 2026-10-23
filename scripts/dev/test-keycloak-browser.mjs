@@ -642,12 +642,18 @@ try {
         if (url.pathname === '/api/v1/admin/exports' && method === 'POST') {
           const headers = new Headers(input instanceof Request ? input.headers : undefined);
           new Headers(init.headers).forEach((value, name) => headers.set(name, value));
-          window.__exportPostAttempts.push({body: init.body, key: headers.get('Idempotency-Key')});
+          const attempt = {body: init.body, key: headers.get('Idempotency-Key'), committedStatus: null, returnedStatus: null};
+          window.__exportPostAttempts.push(attempt);
           const response = await originalFetch(input, init);
           if (window.__exportPostAttempts.length === 1 && response.status === 202) {
             window.__exportFirstResponseLost = true;
-            throw new TypeError('Simulated export response loss after commit');
+            attempt.committedStatus = response.status;
+            const gatewayResponse = new Response(JSON.stringify({error:{code:'GATEWAY_UNAVAILABLE',message:'Resposta substituída pelo gateway E2E'}}), {status:503, headers:{'Content-Type':'application/json'}});
+            attempt.returnedStatus = gatewayResponse.status;
+            return gatewayResponse;
           }
+          attempt.committedStatus = response.status;
+          attempt.returnedStatus = response.status;
           return response;
         }
         const response = await originalFetch(input, init);
@@ -669,8 +675,28 @@ try {
     await waitUntil(() => evaluate('window.__exportFirstResponseLost === true'));
     await waitForText('O resultado da solicitação é incerto.', evaluate);
     const firstExportAttempt = await evaluate('window.__exportPostAttempts[0]');
-    if (!firstExportAttempt?.key || !firstExportAttempt.body) {
-        throw new Error('A primeira intenção de exportação não preservou corpo e chave.');
+    const uncertainExportUi = await evaluate(`({
+      intent: JSON.parse(sessionStorage.getItem('agd044.export-context.v1:' + encodeURIComponent(${JSON.stringify(authenticatedSession.tenantId)}))).intent,
+      fromDisabled: document.querySelector('input[type=date]')?.disabled,
+      retryDisabled: [...document.querySelectorAll('button')].find(button => button.innerText.includes('Recuperar solicitação pendente'))?.disabled,
+      submitDisabled: [...document.querySelectorAll('button')].find(button => button.innerText.includes('Solicitar exportação'))?.disabled
+    })`);
+    const committedExportsBeforeRetry = Number(queryPostgres(
+        `SELECT count(*) FROM agendamento.export_job WHERE tenant_id = '${authenticatedSession.tenantId}' AND category = 'APPOINTMENTS'`,
+        appEnvironment,
+    ));
+    if (
+        !firstExportAttempt?.key ||
+        !firstExportAttempt.body ||
+        firstExportAttempt.committedStatus !== 202 ||
+        firstExportAttempt.returnedStatus !== 503 ||
+        uncertainExportUi.intent?.phase !== 'UNCERTAIN' ||
+        !uncertainExportUi.fromDisabled ||
+        uncertainExportUi.retryDisabled ||
+        !uncertainExportUi.submitDisabled ||
+        committedExportsBeforeRetry !== 1
+    ) {
+        throw new Error(`POST aceito com commit seguido de 503 não preservou intenção/controles no DOM: ${JSON.stringify({firstExportAttempt, uncertainExportUi, committedExportsBeforeRetry})}`);
     }
     await clickButtonByText('Recuperar solicitação pendente', evaluate);
     await waitForText('Solicitação aceita.', evaluate);
@@ -679,6 +705,8 @@ try {
     if (
         exportAttempts[1].key !== firstExportAttempt.key ||
         exportAttempts[1].body !== firstExportAttempt.body ||
+        exportAttempts[1].committedStatus !== 202 ||
+        exportAttempts[1].returnedStatus !== 202 ||
         JSON.parse(exportAttempts[1].body).filters.from !== publicDate ||
         JSON.parse(exportAttempts[1].body).filters.to !== publicDate
     ) {
