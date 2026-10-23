@@ -2,6 +2,7 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { fireEvent } from '@testing-library/dom';
 import {
     afterEach,
     beforeEach,
@@ -74,6 +75,9 @@ describe('ExportCenter contract helpers', () => {
         expect(isUncertainCreateResult(null, false)).toBe(true);
         expect(isUncertainCreateResult(503, false)).toBe(true);
         expect(isUncertainCreateResult(502, false)).toBe(true);
+        for (let status = 500; status <= 599; status++) {
+            expect(isUncertainCreateResult(status, false)).toBe(true);
+        }
         expect(isUncertainCreateResult(202, false)).toBe(true);
         expect(isUncertainCreateResult(400, false)).toBe(false);
     });
@@ -224,9 +228,7 @@ async function changeControl(
     value: string,
 ) {
     await act(async () => {
-        element.value = value;
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        element.dispatchEvent(new Event('change', { bubbles: true }));
+        fireEvent.change(element, { target: { value } });
     });
 }
 
@@ -548,6 +550,53 @@ describe('ExportCenter DOM interactions', () => {
         },
     );
 
+    it('retries the same intent after a simulated commit whose response was lost', async () => {
+        let postCount = 0;
+        let logicalCreateCount = 0;
+        const postBodies: string[] = [];
+        const postKeys: string[] = [];
+        fetchMock.mockImplementation(async (input, init) => {
+            const url = String(input);
+            if (url.endsWith('/exports/active')) return emptyResponse(204);
+            if (init?.method === 'POST' && url.endsWith('/exports')) {
+                postCount++;
+                postBodies.push(String(init.body));
+                postKeys.push(
+                    new Headers(init.headers).get('Idempotency-Key') ?? '',
+                );
+                if (postCount === 1) {
+                    logicalCreateCount++;
+                    throw new TypeError('response lost after server commit');
+                }
+                return jsonResponse({ ...job, state: 'REQUESTED' }, 202);
+            }
+            throw new Error(`Unexpected request ${url}`);
+        });
+        await mount();
+        await fillRequiredDates();
+        await click(button(container, 'Solicitar exportação'));
+        await flushPromises();
+        expect(container.textContent).toContain(
+            'Resultado ainda não confirmado',
+        );
+
+        await click(button(container, 'Recuperar solicitação pendente'));
+        await flushPromises();
+
+        expect(postCount).toBe(2);
+        expect(logicalCreateCount).toBe(1);
+        expect(postKeys[1]).toBe(postKeys[0]);
+        expect(postBodies[1]).toBe(postBodies[0]);
+        expect(JSON.parse(postBodies[0])).toEqual({
+            format: 'CSV',
+            category: 'APPOINTMENTS',
+            filters: { from: '2026-10-01', to: '2026-10-23' },
+        });
+        expect(container.textContent).not.toContain(
+            'Resultado ainda não confirmado',
+        );
+    });
+
     it('recovers a known export after reload and honors 412 without retrying DELETE', async () => {
         sessionStorage.setItem(
             storedKey,
@@ -594,7 +643,7 @@ describe('ExportCenter DOM interactions', () => {
         let ifMatch: string | null = null;
         fetchMock.mockImplementation(async (input, init) => {
             const url = String(input);
-            if (url.endsWith(`/exports/${job.exportId}`)) {
+            if (url.endsWith(`/exports/${job.exportId}`) && !init?.method) {
                 reads++;
                 return jobResponse('AVAILABLE', reads === 1 ? null : '"31"');
             }
@@ -610,6 +659,7 @@ describe('ExportCenter DOM interactions', () => {
         expect(reads).toBe(1);
 
         await click(button(container, 'Atualizar estado'));
+        expect(reads).toBe(2);
         expect(button(container, 'Encerrar acesso agora').disabled).toBe(false);
         await click(button(container, 'Encerrar acesso agora'));
         expect(ifMatch).toBe('"31"');
