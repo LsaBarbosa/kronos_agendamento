@@ -22,6 +22,8 @@ public interface SubscriptionDunningRepository {
 
   void closeCyclesForPayment(UUID tenantId, UUID subscriptionId, Instant paidAt);
 
+  boolean hasUnresolvedPayment(UUID tenantId, UUID subscriptionId);
+
   List<DunningAttemptView> listAttempts(UUID tenantId);
 
   List<AnnualRenewalNoticeView> listAnnualRenewalNotices(UUID tenantId);

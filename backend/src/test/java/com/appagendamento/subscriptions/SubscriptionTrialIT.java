@@ -549,7 +549,7 @@ class SubscriptionTrialIT {
                 "SELECT count(*) FROM agendamento.subscription_history WHERE tenant_id = ? AND event_type = 'PAYMENT_CONFIRMED'",
                 Integer.class,
                 tenant.tenantId()))
-        .isEqualTo(1);
+        .isEqualTo(2);
     assertThat(
             jdbc.queryForObject(
                 "SELECT count(*) FROM agendamento.audit_event WHERE tenant_id = ? AND action = 'SUBSCRIPTION_PAYMENT_CONFIRMED'",
@@ -1200,11 +1200,7 @@ class SubscriptionTrialIT {
                 attemptId))
         .isTrue();
 
-    jdbc.update(
-        "UPDATE agendamento.billing_subscription_contract SET amount_minor_units = 250, terms_version = 'synthetic-terms-v2', offer_version = 'synthetic-offer-v2', recorded_at = ? WHERE tenant_id = ? AND subscription_id = ?",
-        java.sql.Timestamp.from(NOW.plusSeconds(1)),
-        tenant.tenantId(),
-        subscriptionId);
+    persistRevisedContractTerms(tenant.tenantId(), subscriptionId);
     billingRepository.recordAuthenticatedEvent(
         new com.appagendamento.subscriptions.api.AuthenticatedPaymentEvent(
             "synthetic",
@@ -1235,7 +1231,7 @@ class SubscriptionTrialIT {
                 "SELECT count(*) FROM agendamento.subscription_history WHERE tenant_id = ? AND event_type = 'PAYMENT_CONFIRMED'",
                 Integer.class,
                 tenant.tenantId()))
-        .isEqualTo(1);
+        .isEqualTo(2);
   }
 
   @Test
@@ -1430,25 +1426,105 @@ class SubscriptionTrialIT {
         INSERT INTO agendamento.billing_checkout_operation
           (operation_id, tenant_id, plan_code, amount_minor_units, currency, terms_version,
            offer_version, expected_subscription_version, provider_code, provider_account_id,
-           provider_reference, state)
+           provider_reference, state, last_provider_sequence, updated_at)
         VALUES (?, ?, ?, 100, 'XTS', 'synthetic-terms-v1', 'synthetic-offer-v1', 0,
-                'synthetic', 'synthetic-account', ?, 'CONFIRMED')
+                'synthetic', 'synthetic-account', ?, 'CONFIRMED', 1, ?)
         """,
         sourceOperationId,
         tenantId,
         planCode,
-        "fixture-ref-" + sourceOperationId);
+        "fixture-ref-" + sourceOperationId,
+        java.sql.Timestamp.from(NOW.minusSeconds(2)));
+    jdbc.update(
+        """
+        INSERT INTO agendamento.billing_event_inbox
+          (provider_code, provider_account_id, provider_event_id, provider_reference,
+           provider_sequence, outcome, amount_minor_units, currency, occurred_at,
+           paid_through_at, tenant_id, operation_id, disposition)
+        VALUES ('synthetic', 'synthetic-account', ?, ?, 1, 'CONFIRMED', 100, 'XTS', ?, ?, ?, ?, 'PENDING')
+        """,
+        "fixture-event-" + sourceOperationId,
+        "fixture-ref-" + sourceOperationId,
+        java.sql.Timestamp.from(NOW.minusSeconds(2)),
+        java.sql.Timestamp.from(paidThroughAt),
+        tenantId,
+        sourceOperationId);
+    jdbc.update(
+        """
+        INSERT INTO agendamento.subscription_history
+          (event_id, tenant_id, subscription_id, event_type, from_status, to_status,
+           event_at, version, operation_id)
+        VALUES (?, ?, ?, 'PAYMENT_CONFIRMED', NULL, 'ACTIVE', ?, 1, ?)
+        """,
+        UUID.randomUUID(),
+        tenantId,
+        id,
+        java.sql.Timestamp.from(NOW.minusSeconds(1)),
+        sourceOperationId);
     jdbc.update(
         """
         INSERT INTO agendamento.billing_subscription_contract
           (subscription_id, tenant_id, source_operation_id, amount_minor_units, currency,
-           terms_version, offer_version)
-        VALUES (?, ?, ?, 100, 'XTS', 'synthetic-terms-v1', 'synthetic-offer-v1')
+           terms_version, offer_version, plan_code, recorded_at)
+        VALUES (?, ?, ?, 100, 'XTS', 'synthetic-terms-v1', 'synthetic-offer-v1', ?, ?)
         """,
         id,
         tenantId,
-        sourceOperationId);
+        sourceOperationId,
+        planCode,
+        java.sql.Timestamp.from(NOW));
+    jdbc.update(
+        "UPDATE agendamento.billing_event_inbox SET disposition = 'APPLIED' WHERE provider_code = 'synthetic' AND provider_account_id = 'synthetic-account' AND provider_event_id = ?",
+        "fixture-event-" + sourceOperationId);
     return id;
+  }
+
+  private void persistRevisedContractTerms(UUID tenantId, UUID subscriptionId) {
+    UUID sourceOperationId = UUID.randomUUID();
+    String reference = "fixture-revised-ref-" + sourceOperationId;
+    String eventId = "fixture-revised-event-" + sourceOperationId;
+    jdbc.update(
+        """
+        INSERT INTO agendamento.billing_checkout_operation
+          (operation_id, tenant_id, plan_code, amount_minor_units, currency, terms_version,
+           offer_version, expected_subscription_version, provider_code, provider_account_id,
+           provider_reference, state, last_provider_sequence, updated_at)
+        VALUES (?, ?, 'MONTHLY', 250, 'XTS', 'synthetic-terms-v2', 'synthetic-offer-v2',
+                2, 'synthetic', 'synthetic-account', ?, 'CONFIRMED', 1, ?)
+        """,
+        sourceOperationId,
+        tenantId,
+        reference,
+        java.sql.Timestamp.from(NOW.plusSeconds(1)));
+    jdbc.update(
+        """
+        INSERT INTO agendamento.billing_event_inbox
+          (provider_code, provider_account_id, provider_event_id, provider_reference,
+           provider_sequence, outcome, amount_minor_units, currency, occurred_at,
+           paid_through_at, tenant_id, operation_id, disposition)
+        VALUES ('synthetic', 'synthetic-account', ?, ?, 1, 'CONFIRMED', 250, 'XTS', ?, ?, ?, ?, 'PENDING')
+        """,
+        eventId,
+        reference,
+        java.sql.Timestamp.from(NOW.plusSeconds(1)),
+        java.sql.Timestamp.from(NOW.plus(Duration.ofDays(60))),
+        tenantId,
+        sourceOperationId);
+    jdbc.update(
+        """
+        UPDATE agendamento.billing_subscription_contract
+        SET source_operation_id = ?, amount_minor_units = 250, currency = 'XTS',
+            terms_version = 'synthetic-terms-v2', offer_version = 'synthetic-offer-v2',
+            plan_code = 'MONTHLY', recorded_at = ?
+        WHERE tenant_id = ? AND subscription_id = ?
+        """,
+        sourceOperationId,
+        java.sql.Timestamp.from(NOW.plusSeconds(2)),
+        tenantId,
+        subscriptionId);
+    jdbc.update(
+        "UPDATE agendamento.billing_event_inbox SET disposition = 'APPLIED' WHERE provider_code = 'synthetic' AND provider_account_id = 'synthetic-account' AND provider_event_id = ?",
+        eventId);
   }
 
   private int count(String table, UUID tenantId) {

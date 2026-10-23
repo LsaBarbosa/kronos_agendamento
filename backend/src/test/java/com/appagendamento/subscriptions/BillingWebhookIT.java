@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.appagendamento.identityaccess.api.AdminAccessPolicy;
@@ -24,10 +26,12 @@ import com.appagendamento.subscriptions.application.SubscriptionDunningWorker;
 import com.appagendamento.subscriptions.application.SubscriptionTrialLifecycle;
 import com.appagendamento.subscriptions.domain.CheckoutOperation;
 import com.appagendamento.subscriptions.domain.PlanCode;
+import com.appagendamento.subscriptions.domain.Subscription;
 import com.appagendamento.support.PostgresTestEnvironment;
 import com.appagendamento.tenant.application.CreateTenant;
 import com.appagendamento.tenant.domain.Tenant;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.UUID;
@@ -166,6 +170,704 @@ class BillingWebhookIT {
     assertThat(historyCount(tenant.tenantId())).isEqualTo(1);
     assertThat(paymentAuditCount(tenant.tenantId())).isEqualTo(1);
     assertThat(outboxCount(tenant.tenantId())).isEqualTo(1);
+  }
+
+  @Test
+  void checkoutCannotStartNewLogicalChargeWhileDunningOutcomeIsUnresolved() {
+    Tenant tenant = tenant("checkout-blocked-by-dunning-unknown");
+    UUID subscriptionId = UUID.randomUUID();
+    Instant paidThrough = NOW.minusSeconds(60);
+    jdbc.update(
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'MONTHLY', ?, 1)",
+        subscriptionId,
+        tenant.tenantId(),
+        java.sql.Timestamp.from(paidThrough));
+    CheckoutOperation contractOperation = operation(tenant.tenantId());
+    billing.createCheckout(contractOperation);
+    persistContractTerms(tenant.tenantId(), subscriptionId, contractOperation);
+    assertThat(
+            dunning.markPastDue(
+                new Subscription(
+                    subscriptionId,
+                    tenant.tenantId(),
+                    "ACTIVE",
+                    null,
+                    null,
+                    "MONTHLY",
+                    paidThrough,
+                    null,
+                    1),
+                NOW))
+        .isTrue();
+    isolateOtherDunningCycles(tenant.tenantId());
+    when(chargeAuthorization.isAuthorized(any(), any(), any(), any())).thenReturn(true);
+    when(chargeTransport.submit(any()))
+        .thenReturn(
+            new DunningChargeTransport.TransportResult(
+                DunningChargeTransport.Outcome.OUTCOME_UNKNOWN,
+                PROVIDER,
+                null,
+                "PROVIDER_TIMEOUT"));
+
+    // The shared integration database may contain unrelated due rows. Assert
+    // the target attempt's durable result below, not the global batch size.
+    dunningWorker.processBatch();
+    UUID attemptId =
+        jdbc.queryForObject(
+            "SELECT attempt_id FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND logical_sequence = 0",
+            UUID.class,
+            tenant.tenantId());
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state FROM agendamento.billing_dunning_attempt WHERE attempt_id = ?",
+                String.class,
+                attemptId))
+        .isEqualTo("OUTCOME_UNKNOWN");
+
+    Instant graceEnd = paidThrough.plus(Duration.ofHours(168));
+    when(clock.instant()).thenReturn(graceEnd);
+    assertThat(
+            dunning.suspendPastDue(
+                new Subscription(
+                    subscriptionId,
+                    tenant.tenantId(),
+                    "PAST_DUE",
+                    null,
+                    null,
+                    "MONTHLY",
+                    paidThrough,
+                    graceEnd,
+                    2),
+                graceEnd))
+        .isTrue();
+    assertThat(status(tenant.tenantId())).isEqualTo("SUSPENDED:3");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state FROM agendamento.billing_dunning_attempt WHERE attempt_id = ?",
+                String.class,
+                attemptId))
+        .isEqualTo("OUTCOME_UNKNOWN");
+
+    AuthenticatedAdmin admin = admin(tenant.tenantId());
+    when(adminAccessPolicy.isCurrent(admin)).thenReturn(true);
+    when(checkoutProvider.isConfigured()).thenReturn(true);
+    when(offerCatalog.findApprovedOffer(PlanCode.MONTHLY))
+        .thenReturn(
+            java.util.Optional.of(new BillingOffer(PlanCode.MONTHLY, 1, "XTS", "terms", "offer")));
+
+    assertThatThrownBy(
+            () ->
+                startCheckout.execute(
+                    admin,
+                    tenant.tenantId(),
+                    PlanCode.MONTHLY,
+                    3,
+                    "new-checkout-after-ambiguous-dunning"))
+        .isInstanceOf(
+            com.appagendamento.subscriptions.application.SubscriptionCheckoutConflictException
+                .class)
+        .hasMessage("DUNNING_PAYMENT_OUTCOME_UNRESOLVED");
+
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.billing_checkout_operation WHERE tenant_id = ?",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.idempotency_record WHERE tenant_id = ? AND command_scope = 'subscriptions.checkout.v1'",
+                Integer.class,
+                tenant.tenantId()))
+        .isZero();
+    verify(checkoutProvider, never()).create(any());
+  }
+
+  @Test
+  void checkoutAndDunningSendAuthorizationCannotStartParallelLogicalCharges() {
+    Tenant claimedTenant = tenant("checkout-races-claimed-dunning");
+    UUID claimedSubscription = UUID.randomUUID();
+    Instant paidThrough = NOW.minusSeconds(60);
+    jdbc.update(
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'MONTHLY', ?, 1)",
+        claimedSubscription,
+        claimedTenant.tenantId(),
+        java.sql.Timestamp.from(paidThrough));
+    assertThat(
+            dunning.markPastDue(
+                new Subscription(
+                    claimedSubscription,
+                    claimedTenant.tenantId(),
+                    "ACTIVE",
+                    null,
+                    null,
+                    "MONTHLY",
+                    paidThrough,
+                    null,
+                    1),
+                NOW))
+        .isTrue();
+    var claimedAttempt = dunning.claimNextAttempt(Duration.ofMinutes(1), false).orElseThrow();
+    AuthenticatedAdmin claimedAdmin = admin(claimedTenant.tenantId());
+    when(adminAccessPolicy.isCurrent(claimedAdmin)).thenReturn(true);
+    when(checkoutProvider.isConfigured()).thenReturn(true);
+    when(offerCatalog.findApprovedOffer(PlanCode.MONTHLY))
+        .thenReturn(
+            java.util.Optional.of(new BillingOffer(PlanCode.MONTHLY, 1, "XTS", "terms", "offer")));
+
+    assertThatThrownBy(
+            () ->
+                startCheckout.execute(
+                    claimedAdmin,
+                    claimedTenant.tenantId(),
+                    PlanCode.MONTHLY,
+                    2,
+                    "checkout-race-claimed-key"))
+        .isInstanceOf(
+            com.appagendamento.subscriptions.application.SubscriptionCheckoutConflictException
+                .class)
+        .hasMessage("DUNNING_PAYMENT_OUTCOME_UNRESOLVED");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND attempt_id = ?",
+                String.class,
+                claimedTenant.tenantId(),
+                claimedAttempt.attemptId()))
+        .isEqualTo("CLAIMED");
+    verify(checkoutProvider, never()).create(any());
+
+    Tenant checkoutTenant = tenant("dunning-races-open-checkout");
+    UUID checkoutSubscription = UUID.randomUUID();
+    jdbc.update(
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'MONTHLY', ?, 1)",
+        checkoutSubscription,
+        checkoutTenant.tenantId(),
+        java.sql.Timestamp.from(paidThrough));
+    assertThat(
+            dunning.markPastDue(
+                new Subscription(
+                    checkoutSubscription,
+                    checkoutTenant.tenantId(),
+                    "ACTIVE",
+                    null,
+                    null,
+                    "MONTHLY",
+                    paidThrough,
+                    null,
+                    1),
+                NOW))
+        .isTrue();
+    AuthenticatedAdmin checkoutAdmin = admin(checkoutTenant.tenantId());
+    when(adminAccessPolicy.isCurrent(checkoutAdmin)).thenReturn(true);
+    when(checkoutProvider.providerCode()).thenReturn(PROVIDER);
+    when(checkoutProvider.providerAccountId()).thenReturn(ACCOUNT);
+    when(checkoutProvider.create(any()))
+        .thenReturn(
+            new CheckoutSession(
+                "open-checkout-" + checkoutTenant.tenantId(),
+                "https://checkout.example.invalid/session"));
+    var checkout =
+        startCheckout.execute(
+            checkoutAdmin,
+            checkoutTenant.tenantId(),
+            PlanCode.MONTHLY,
+            2,
+            "checkout-race-open-key");
+    assertThat(checkout.state()).isEqualTo("CHECKOUT_READY");
+    assertThat(dunning.claimNextAttempt(Duration.ofMinutes(1), false)).isEmpty();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND logical_sequence = 0",
+                String.class,
+                checkoutTenant.tenantId()))
+        .isEqualTo("SCHEDULED");
+  }
+
+  @Test
+  void concurrentCheckoutAndDunningClaimChooseOnlyOneLogicalCharge() throws Exception {
+    Tenant tenant = tenant("checkout-dunning-lock-race");
+    UUID subscriptionId = UUID.randomUUID();
+    Instant paidThrough = NOW.minusSeconds(60);
+    jdbc.update(
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'MONTHLY', ?, 1)",
+        subscriptionId,
+        tenant.tenantId(),
+        java.sql.Timestamp.from(paidThrough));
+    CheckoutOperation contractSource = operation(tenant.tenantId());
+    billing.createCheckout(contractSource);
+    persistContractTerms(tenant.tenantId(), subscriptionId, contractSource);
+    assertThat(
+            dunning.markPastDue(
+                new Subscription(
+                    subscriptionId,
+                    tenant.tenantId(),
+                    "ACTIVE",
+                    null,
+                    null,
+                    "MONTHLY",
+                    paidThrough,
+                    null,
+                    1),
+                NOW))
+        .isTrue();
+    isolateOtherDunningCycles(tenant.tenantId());
+
+    AuthenticatedAdmin admin = admin(tenant.tenantId());
+    when(adminAccessPolicy.isCurrent(admin)).thenReturn(true);
+    when(checkoutProvider.isConfigured()).thenReturn(true);
+    when(checkoutProvider.providerCode()).thenReturn(PROVIDER);
+    when(checkoutProvider.providerAccountId()).thenReturn(ACCOUNT);
+    when(checkoutProvider.create(any()))
+        .thenReturn(
+            new CheckoutSession(
+                "parallel-checkout-" + tenant.tenantId(),
+                "https://checkout.example.invalid/session"));
+    when(offerCatalog.findApprovedOffer(PlanCode.MONTHLY))
+        .thenReturn(
+            java.util.Optional.of(new BillingOffer(PlanCode.MONTHLY, 1, "XTS", "terms", "offer")));
+
+    CountDownLatch ready = new CountDownLatch(2);
+    CountDownLatch start = new CountDownLatch(1);
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var checkout =
+          executor.submit(
+              () -> {
+                ready.countDown();
+                if (!start.await(5, TimeUnit.SECONDS))
+                  throw new IllegalStateException("Checkout race did not start");
+                try {
+                  startCheckout.execute(
+                      admin, tenant.tenantId(), PlanCode.MONTHLY, 2, "checkout-dunning-race-key");
+                  return true;
+                } catch (
+                    com.appagendamento.subscriptions.application
+                            .SubscriptionCheckoutConflictException
+                        expectedLoser) {
+                  return false;
+                }
+              });
+      var claim =
+          executor.submit(
+              () -> {
+                ready.countDown();
+                if (!start.await(5, TimeUnit.SECONDS))
+                  throw new IllegalStateException("Dunning race did not start");
+                return dunning.claimNextAttempt(Duration.ofMinutes(1), false);
+              });
+      assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+      start.countDown();
+      boolean checkoutWon = checkout.get(20, TimeUnit.SECONDS);
+      boolean dunningWon = claim.get(20, TimeUnit.SECONDS).isPresent();
+
+      assertThat(checkoutWon).isNotEqualTo(dunningWon);
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT count(*) FROM agendamento.billing_checkout_operation WHERE tenant_id = ? AND state IN ('REQUESTED', 'SUBMITTING', 'CHECKOUT_READY', 'OUTCOME_UNKNOWN')",
+                  Integer.class,
+                  tenant.tenantId()))
+          .isEqualTo(checkoutWon ? 1 : 0);
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT state FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND logical_sequence = 0",
+                  String.class,
+                  tenant.tenantId()))
+          .isEqualTo(dunningWon ? "CLAIMED" : "SCHEDULED");
+    }
+  }
+
+  @Test
+  void dunningAuthorizationUsesPlanSnapshotAfterCurrentContractChanges() {
+    Tenant tenant = tenant("immutable-dunning-plan-snapshot");
+    UUID subscriptionId = UUID.randomUUID();
+    Instant paidThrough = NOW.minusSeconds(60);
+    jdbc.update(
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'MONTHLY', ?, 1)",
+        subscriptionId,
+        tenant.tenantId(),
+        java.sql.Timestamp.from(paidThrough));
+    CheckoutOperation monthly = operation(tenant.tenantId());
+    billing.createCheckout(monthly);
+    persistContractTerms(tenant.tenantId(), subscriptionId, monthly);
+    assertThat(
+            dunning.markPastDue(
+                new Subscription(
+                    subscriptionId,
+                    tenant.tenantId(),
+                    "ACTIVE",
+                    null,
+                    null,
+                    "MONTHLY",
+                    paidThrough,
+                    null,
+                    1),
+                NOW))
+        .isTrue();
+    isolateOtherDunningCycles(tenant.tenantId());
+
+    jdbc.update(
+        "UPDATE agendamento.subscription SET plan_code = 'ANNUAL' WHERE tenant_id = ? AND subscription_id = ?",
+        tenant.tenantId(),
+        subscriptionId);
+    CheckoutOperation annualRevision =
+        new CheckoutOperation(
+            UUID.randomUUID(),
+            tenant.tenantId(),
+            PlanCode.ANNUAL,
+            monthly.amountMinorUnits(),
+            monthly.currency(),
+            "synthetic-annual-terms",
+            "synthetic-annual-offer",
+            1,
+            "REQUESTED",
+            PROVIDER,
+            ACCOUNT,
+            null,
+            0,
+            NOW.plusSeconds(1));
+    billing.createCheckout(annualRevision);
+    persistRevisedContractTerms(
+        tenant.tenantId(), subscriptionId, annualRevision, "contract-revision-event");
+    when(chargeAuthorization.isAuthorized(any(), any(), any(), any())).thenReturn(true);
+
+    var claim = dunning.claimNextAttempt(Duration.ofMinutes(1), false).orElseThrow();
+    assertThat(claim.planCode()).isEqualTo("MONTHLY");
+    assertThat(dunning.authorizeAttemptSend(claim)).isTrue();
+    verify(chargeAuthorization).isAuthorized(tenant.tenantId(), subscriptionId, "MONTHLY", NOW);
+  }
+
+  @Test
+  void authenticatedLaterPeriodFromStartedDunningAttemptExtendsActiveSubscriptionOnce() {
+    Tenant tenant = tenant("late-dunning-payment-extends-active-period");
+    Instant originalPaidThrough = NOW.minusSeconds(60);
+    CheckoutOperation dunningTerms = operation(tenant.tenantId());
+    billing.createCheckout(dunningTerms);
+    UUID sourceClaim =
+        billing.claimProviderCall(tenant.tenantId(), dunningTerms.operationId()).orElseThrow();
+    String sourceReference = "dunning-terms-source-" + dunningTerms.operationId();
+    billing.markCheckoutReady(
+        tenant.tenantId(),
+        dunningTerms.operationId(),
+        sourceClaim,
+        PROVIDER,
+        ACCOUNT,
+        new CheckoutSession(sourceReference, "https://checkout.example.invalid/session"));
+    assertThat(
+            billing.recordAuthenticatedEvent(
+                confirmed("dunning-terms-source-event", sourceReference, 1, 1)))
+        .isTrue();
+    UUID subscriptionId =
+        jdbc.queryForObject(
+            "SELECT subscription_id FROM agendamento.subscription WHERE tenant_id = ?",
+            UUID.class,
+            tenant.tenantId());
+    jdbc.update(
+        "UPDATE agendamento.subscription SET paid_through_at = ? WHERE tenant_id = ? AND subscription_id = ?",
+        java.sql.Timestamp.from(originalPaidThrough),
+        tenant.tenantId(),
+        subscriptionId);
+    assertThat(
+            dunning.markPastDue(
+                new Subscription(
+                    subscriptionId,
+                    tenant.tenantId(),
+                    "ACTIVE",
+                    null,
+                    null,
+                    "MONTHLY",
+                    originalPaidThrough,
+                    null,
+                    1),
+                NOW))
+        .isTrue();
+    UUID attemptId =
+        jdbc.queryForObject(
+            "SELECT attempt_id FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND logical_sequence = 0",
+            UUID.class,
+            tenant.tenantId());
+    String dunningReference = "late-dunning-" + attemptId;
+    jdbc.update(
+        "UPDATE agendamento.billing_dunning_attempt SET state = 'ACCEPTED', ever_started = TRUE, technical_attempts = 1, provider_code = ?, provider_account_id = ?, provider_reference = ? WHERE tenant_id = ? AND attempt_id = ?",
+        PROVIDER,
+        ACCOUNT,
+        dunningReference,
+        tenant.tenantId(),
+        attemptId);
+
+    CheckoutOperation checkout = operation(tenant.tenantId());
+    billing.createCheckout(checkout);
+    UUID checkoutClaim =
+        billing.claimProviderCall(tenant.tenantId(), checkout.operationId()).orElseThrow();
+    String checkoutReference = "active-period-checkout-" + checkout.operationId();
+    billing.markCheckoutReady(
+        tenant.tenantId(),
+        checkout.operationId(),
+        checkoutClaim,
+        PROVIDER,
+        ACCOUNT,
+        new CheckoutSession(checkoutReference, "https://checkout.example.invalid/session"));
+    assertThat(
+            billing.recordAuthenticatedEvent(
+                confirmed("checkout-period-confirmation", checkoutReference, 1, 1)))
+        .isTrue();
+    Instant checkoutPeriod = NOW.plus(Duration.ofDays(30));
+    assertThat(
+            jdbc.queryForObject(
+                    "SELECT paid_through_at FROM agendamento.subscription WHERE tenant_id = ? AND subscription_id = ?",
+                    java.sql.Timestamp.class,
+                    tenant.tenantId(),
+                    subscriptionId)
+                .toInstant())
+        .isEqualTo(checkoutPeriod);
+
+    Instant dunningPeriod = NOW.plus(Duration.ofDays(60));
+    AuthenticatedPaymentEvent dunningConfirmation =
+        new AuthenticatedPaymentEvent(
+            PROVIDER,
+            ACCOUNT,
+            "late-dunning-confirmation",
+            dunningReference,
+            1,
+            "CONFIRMED",
+            1,
+            "XTS",
+            NOW,
+            dunningPeriod);
+    assertThat(billing.recordAuthenticatedEvent(dunningConfirmation)).isTrue();
+    assertThat(status(tenant.tenantId())).isEqualTo("ACTIVE:4");
+    assertThat(
+            jdbc.queryForObject(
+                    "SELECT paid_through_at FROM agendamento.subscription WHERE tenant_id = ? AND subscription_id = ?",
+                    java.sql.Timestamp.class,
+                    tenant.tenantId(),
+                    subscriptionId)
+                .toInstant())
+        .isEqualTo(dunningPeriod);
+    assertThat(eventDisposition("late-dunning-confirmation")).isEqualTo("APPLIED");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state FROM agendamento.billing_dunning_attempt WHERE attempt_id = ?",
+                String.class,
+                attemptId))
+        .isEqualTo("CONFIRMED");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.subscription_history WHERE tenant_id = ? AND subscription_id = ? AND event_type = 'PAYMENT_CONFIRMED' AND from_status = 'ACTIVE' AND to_status = 'ACTIVE'",
+                Integer.class,
+                tenant.tenantId(),
+                subscriptionId))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.outbox_event WHERE tenant_id = ? AND operation_id = ? AND event_type = 'SubscriptionPeriodExtended'",
+                Integer.class,
+                tenant.tenantId(),
+                attemptId))
+        .isEqualTo(1);
+    assertThat(billing.recordAuthenticatedEvent(dunningConfirmation)).isFalse();
+    assertThat(status(tenant.tenantId())).isEqualTo("ACTIVE:4");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.subscription_history WHERE tenant_id = ? AND subscription_id = ? AND event_type = 'PAYMENT_CONFIRMED' AND from_status = 'ACTIVE' AND to_status = 'ACTIVE'",
+                Integer.class,
+                tenant.tenantId(),
+                subscriptionId))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void laterCheckoutEvidenceExtendsActivePeriodWithoutReplacingCurrentPlanTerms() {
+    Tenant tenant = tenant("checkout-evidence-extends-active-period");
+    Instant currentPeriod = NOW.plus(Duration.ofDays(10));
+    CheckoutOperation annualTerms =
+        new CheckoutOperation(
+            UUID.randomUUID(),
+            tenant.tenantId(),
+            PlanCode.ANNUAL,
+            1200,
+            "XTS",
+            "annual-terms-v1",
+            "annual-offer-v1",
+            0,
+            "REQUESTED",
+            PROVIDER,
+            ACCOUNT,
+            null,
+            0,
+            NOW);
+    billing.createCheckout(annualTerms);
+    UUID annualClaim =
+        billing.claimProviderCall(tenant.tenantId(), annualTerms.operationId()).orElseThrow();
+    String annualReference = "initial-annual-checkout-" + annualTerms.operationId();
+    billing.markCheckoutReady(
+        tenant.tenantId(),
+        annualTerms.operationId(),
+        annualClaim,
+        PROVIDER,
+        ACCOUNT,
+        new CheckoutSession(annualReference, "https://checkout.example.invalid/annual"));
+    assertThat(
+            billing.recordAuthenticatedEvent(
+                new AuthenticatedPaymentEvent(
+                    PROVIDER,
+                    ACCOUNT,
+                    "initial-annual-confirmation",
+                    annualReference,
+                    1,
+                    "CONFIRMED",
+                    1200,
+                    "XTS",
+                    NOW,
+                    currentPeriod)))
+        .isTrue();
+
+    CheckoutOperation olderMonthlyOperation = operation(tenant.tenantId());
+    billing.createCheckout(olderMonthlyOperation);
+    UUID claim =
+        billing
+            .claimProviderCall(tenant.tenantId(), olderMonthlyOperation.operationId())
+            .orElseThrow();
+    String reference = "late-monthly-checkout-" + olderMonthlyOperation.operationId();
+    billing.markCheckoutReady(
+        tenant.tenantId(),
+        olderMonthlyOperation.operationId(),
+        claim,
+        PROVIDER,
+        ACCOUNT,
+        new CheckoutSession(reference, "https://checkout.example.invalid/session"));
+
+    Instant providerPeriod = NOW.plus(Duration.ofDays(30));
+    assertThat(
+            billing.recordAuthenticatedEvent(
+                new AuthenticatedPaymentEvent(
+                    PROVIDER,
+                    ACCOUNT,
+                    "late-monthly-checkout-confirmation",
+                    reference,
+                    1,
+                    "CONFIRMED",
+                    1,
+                    "XTS",
+                    NOW,
+                    providerPeriod)))
+        .isTrue();
+
+    assertThat(status(tenant.tenantId())).isEqualTo("ACTIVE:2");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT plan_code FROM agendamento.subscription WHERE tenant_id = ?",
+                String.class,
+                tenant.tenantId()))
+        .isEqualTo("ANNUAL");
+    assertThat(
+            jdbc.queryForObject(
+                    "SELECT paid_through_at FROM agendamento.subscription WHERE tenant_id = ?",
+                    java.sql.Timestamp.class,
+                    tenant.tenantId())
+                .toInstant())
+        .isEqualTo(providerPeriod);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT source_operation_id FROM agendamento.billing_subscription_contract WHERE tenant_id = ?",
+                UUID.class,
+                tenant.tenantId()))
+        .isEqualTo(annualTerms.operationId());
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT terms_version FROM agendamento.billing_subscription_contract WHERE tenant_id = ?",
+                String.class,
+                tenant.tenantId()))
+        .isEqualTo("annual-terms-v1");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.subscription_history WHERE tenant_id = ? AND event_type = 'PAYMENT_CONFIRMED' AND from_status = 'ACTIVE' AND to_status = 'ACTIVE' AND version = 2",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.outbox_event WHERE tenant_id = ? AND event_type = 'SubscriptionPeriodExtended' AND aggregate_version = 2",
+                Integer.class,
+                tenant.tenantId()))
+        .isEqualTo(1);
+    assertThat(
+            billing.recordAuthenticatedEvent(
+                new AuthenticatedPaymentEvent(
+                    PROVIDER,
+                    ACCOUNT,
+                    "late-monthly-checkout-confirmation",
+                    reference,
+                    1,
+                    "CONFIRMED",
+                    1,
+                    "XTS",
+                    NOW,
+                    providerPeriod)))
+        .isFalse();
+    assertThat(status(tenant.tenantId())).isEqualTo("ACTIVE:2");
+  }
+
+  @Test
+  void expiredCheckoutEvidenceNeverCreatesReactivatesOrExtendsSubscription() {
+    Tenant neverSubscribed = tenant("expired-checkout-no-subscription");
+    assertExpiredCheckoutEventDoesNotGrantAccess(neverSubscribed, null, 0);
+
+    Tenant suspended = tenant("expired-checkout-suspended");
+    Instant oldPeriod = NOW.minus(Duration.ofDays(20));
+    UUID suspendedId = UUID.randomUUID();
+    jdbc.update(
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, plan_code, paid_through_at, grace_ends_at, version) VALUES (?, ?, 'SUSPENDED', 'MONTHLY', ?, ?, 3)",
+        suspendedId,
+        suspended.tenantId(),
+        java.sql.Timestamp.from(oldPeriod),
+        java.sql.Timestamp.from(oldPeriod.plus(Duration.ofHours(168))));
+    assertExpiredCheckoutEventDoesNotGrantAccess(suspended, "SUSPENDED:3", 1);
+
+    Tenant active = tenant("expired-checkout-active");
+    UUID activeId = UUID.randomUUID();
+    jdbc.update(
+        "INSERT INTO agendamento.subscription (subscription_id, tenant_id, status, plan_code, paid_through_at, version) VALUES (?, ?, 'ACTIVE', 'ANNUAL', ?, 4)",
+        activeId,
+        active.tenantId(),
+        java.sql.Timestamp.from(oldPeriod));
+    assertExpiredCheckoutEventDoesNotGrantAccess(active, "ACTIVE:4", 1);
+  }
+
+  private void assertExpiredCheckoutEventDoesNotGrantAccess(
+      Tenant tenant, String previousStatus, int previousSubscriptionCount) {
+    CheckoutOperation operation = operation(tenant.tenantId());
+    billing.createCheckout(operation);
+    UUID claim =
+        billing.claimProviderCall(tenant.tenantId(), operation.operationId()).orElseThrow();
+    String reference = "expired-provider-period-" + operation.operationId();
+    billing.markCheckoutReady(
+        tenant.tenantId(),
+        operation.operationId(),
+        claim,
+        PROVIDER,
+        ACCOUNT,
+        new CheckoutSession(reference, "https://checkout.example.invalid/session"));
+
+    assertThat(
+            billing.recordAuthenticatedEvent(
+                new AuthenticatedPaymentEvent(
+                    PROVIDER,
+                    ACCOUNT,
+                    "expired-event-" + tenant.tenantId(),
+                    reference,
+                    1,
+                    "CONFIRMED",
+                    1,
+                    "XTS",
+                    NOW,
+                    NOW)))
+        .isTrue();
+
+    assertThat(eventDisposition("expired-event-" + tenant.tenantId())).isEqualTo("EXPIRED_PERIOD");
+    assertThat(statusOrNull(tenant.tenantId())).isEqualTo(previousStatus);
+    assertThat(subscriptionCount(tenant.tenantId())).isEqualTo(previousSubscriptionCount);
+    assertThat(historyCount(tenant.tenantId())).isZero();
+    assertThat(paymentAuditCount(tenant.tenantId())).isZero();
+    assertThat(outboxCount(tenant.tenantId())).isZero();
   }
 
   @Test
@@ -407,17 +1109,6 @@ class BillingWebhookIT {
     persistContractTerms(tenant.tenantId(), subscriptionId, checkout);
     assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
     isolateOtherDunningCycles(tenant.tenantId());
-    UUID checkoutClaim =
-        billing.claimProviderCall(tenant.tenantId(), checkout.operationId()).orElseThrow();
-    String checkoutReference = "dunning-race-payment-" + checkout.operationId();
-    billing.markCheckoutReady(
-        tenant.tenantId(),
-        checkout.operationId(),
-        checkoutClaim,
-        PROVIDER,
-        ACCOUNT,
-        new CheckoutSession(checkoutReference, "https://checkout.example.invalid/session"));
-
     CountDownLatch authorizationEntered = new CountDownLatch(1);
     CountDownLatch releaseAuthorization = new CountDownLatch(1);
     CountDownLatch transportEntered = new CountDownLatch(1);
@@ -435,19 +1126,22 @@ class BillingWebhookIT {
     when(chargeTransport.submit(any()))
         .thenAnswer(
             invocation -> {
+              assertThat(
+                      billing.recordAuthenticatedEvent(
+                          confirmed(
+                              "dunning-race-confirmed", "accepted-during-payment-race", 1, 1)))
+                  .isTrue();
               transportEntered.countDown();
               assertThat(releaseTransport.await(10, TimeUnit.SECONDS)).isTrue();
               return new DunningChargeTransport.TransportResult(
                   DunningChargeTransport.Outcome.ACCEPTED,
-                  "synthetic",
+                  PROVIDER,
                   ACCOUNT,
                   "accepted-during-payment-race",
                   null);
             });
 
     Instant graceEnd = NOW.minusSeconds(60).plusSeconds(7 * 24 * 60 * 60L);
-    AuthenticatedPaymentEvent payment =
-        confirmed("dunning-race-confirmed", checkoutReference, 1, 1);
     try (var executor = Executors.newFixedThreadPool(3)) {
       var worker = executor.submit(dunningWorker::processBatch);
       assertThat(authorizationEntered.await(10, TimeUnit.SECONDS)).isTrue();
@@ -455,28 +1149,15 @@ class BillingWebhookIT {
       releaseAuthorization.countDown();
       assertThat(transportEntered.await(10, TimeUnit.SECONDS)).isTrue();
       controlledNow.set(graceEnd);
-      CountDownLatch ready = new CountDownLatch(2);
-      CountDownLatch start = new CountDownLatch(1);
+      CountDownLatch suspensionReady = new CountDownLatch(1);
       var suspension =
           executor.submit(
               () -> {
-                ready.countDown();
-                if (!start.await(5, TimeUnit.SECONDS))
-                  throw new IllegalStateException("Largada da suspensão expirou");
+                suspensionReady.countDown();
                 return lifecycle.materializeBillingBatch(10);
               });
-      var confirmation =
-          executor.submit(
-              () -> {
-                ready.countDown();
-                if (!start.await(5, TimeUnit.SECONDS))
-                  throw new IllegalStateException("Largada do pagamento expirou");
-                return billing.recordAuthenticatedEvent(payment);
-              });
-      assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
-      start.countDown();
+      assertThat(suspensionReady.await(5, TimeUnit.SECONDS)).isTrue();
       suspension.get(15, TimeUnit.SECONDS);
-      assertThat(confirmation.get(15, TimeUnit.SECONDS)).isTrue();
       releaseTransport.countDown();
       assertThat(worker.get(15, TimeUnit.SECONDS)).isEqualTo(1);
     } finally {
@@ -493,7 +1174,7 @@ class BillingWebhookIT {
         .isEqualTo("PAID");
     assertThat(
             jdbc.queryForObject(
-                "SELECT state = 'ACCEPTED' AND provider_reference = 'accepted-during-payment-race' AND ever_started FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND logical_sequence = 0",
+                "SELECT state = 'CONFIRMED' AND provider_reference = 'accepted-during-payment-race' AND ever_started FROM agendamento.billing_dunning_attempt WHERE tenant_id = ? AND logical_sequence = 0",
                 Boolean.class,
                 tenant.tenantId()))
         .isTrue();
@@ -529,17 +1210,6 @@ class BillingWebhookIT {
     persistContractTerms(tenant.tenantId(), subscriptionId, checkout);
     assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
     isolateOtherDunningCycles(tenant.tenantId());
-    UUID checkoutClaim =
-        billing.claimProviderCall(tenant.tenantId(), checkout.operationId()).orElseThrow();
-    billing.markCheckoutReady(
-        tenant.tenantId(),
-        checkout.operationId(),
-        checkoutClaim,
-        PROVIDER,
-        ACCOUNT,
-        new CheckoutSession(
-            "dunning-boundary-" + checkout.operationId(),
-            "https://checkout.example.invalid/session"));
 
     CountDownLatch authorizationEntered = new CountDownLatch(1);
     CountDownLatch releaseAuthorization = new CountDownLatch(1);
@@ -636,6 +1306,7 @@ class BillingWebhookIT {
     billing.createCheckout(contractOperation);
     persistContractTerms(tenant.tenantId(), subscriptionId, contractOperation);
     assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+    isolateOtherDunningCycles(tenant.tenantId());
     AtomicReference<Instant> controlledNow = new AtomicReference<>(graceEnd.minusSeconds(5));
     when(clock.instant()).thenAnswer(invocation -> controlledNow.get());
     when(chargeAuthorization.isAuthorized(any(), any(), any(), any())).thenReturn(true);
@@ -841,12 +1512,33 @@ class BillingWebhookIT {
 
   private void persistContractTerms(
       UUID tenantId, UUID subscriptionId, CheckoutOperation sourceOperation) {
+    // Models a confirmed checkout using a synthetic linked inbox fact without leaving
+    // a live checkout that would block a parallel logical dunning charge.
+    String reference = "confirmed-terms-" + sourceOperation.operationId();
+    jdbc.update(
+        "UPDATE agendamento.billing_checkout_operation SET state = 'CONFIRMED', provider_reference = ?, last_provider_sequence = 1, updated_at = ? WHERE tenant_id = ? AND operation_id = ?",
+        reference,
+        java.sql.Timestamp.from(NOW.minusSeconds(2)),
+        tenantId,
+        sourceOperation.operationId());
+    jdbc.update(
+        "INSERT INTO agendamento.billing_event_inbox (provider_code, provider_account_id, provider_event_id, provider_reference, provider_sequence, outcome, amount_minor_units, currency, occurred_at, paid_through_at, tenant_id, operation_id, disposition) VALUES (?, ?, ?, ?, 1, 'CONFIRMED', ?, ?, ?, ?, ?, ?, 'PENDING')",
+        PROVIDER,
+        ACCOUNT,
+        "confirmed-terms-event-" + sourceOperation.operationId(),
+        reference,
+        sourceOperation.amountMinorUnits(),
+        sourceOperation.currency(),
+        java.sql.Timestamp.from(NOW.minusSeconds(2)),
+        java.sql.Timestamp.from(NOW.plus(Duration.ofDays(30))),
+        tenantId,
+        sourceOperation.operationId());
     jdbc.update(
         """
         INSERT INTO agendamento.billing_subscription_contract
           (subscription_id, tenant_id, source_operation_id, amount_minor_units, currency,
-           terms_version, offer_version)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+           terms_version, offer_version, plan_code, recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         subscriptionId,
         tenantId,
@@ -854,7 +1546,55 @@ class BillingWebhookIT {
         sourceOperation.amountMinorUnits(),
         sourceOperation.currency(),
         sourceOperation.termsVersion(),
-        sourceOperation.offerVersion());
+        sourceOperation.offerVersion(),
+        sourceOperation.planCode().name(),
+        java.sql.Timestamp.from(NOW.minusSeconds(1)));
+    jdbc.update(
+        "UPDATE agendamento.billing_event_inbox SET disposition = 'APPLIED' WHERE provider_code = ? AND provider_account_id = ? AND provider_event_id = ?",
+        PROVIDER,
+        ACCOUNT,
+        "confirmed-terms-event-" + sourceOperation.operationId());
+  }
+
+  private void persistRevisedContractTerms(
+      UUID tenantId, UUID subscriptionId, CheckoutOperation sourceOperation, String eventId) {
+    // The new terms are linked to a separate synthetic confirmed checkout fact;
+    // the pre-existing Dunning attempt must continue to use its immutable snapshot.
+    String reference = "confirmed-revised-terms-" + sourceOperation.operationId();
+    jdbc.update(
+        "UPDATE agendamento.billing_checkout_operation SET state = 'CONFIRMED', provider_reference = ?, last_provider_sequence = 2, updated_at = ? WHERE tenant_id = ? AND operation_id = ?",
+        reference,
+        java.sql.Timestamp.from(NOW.plusSeconds(2)),
+        tenantId,
+        sourceOperation.operationId());
+    jdbc.update(
+        "INSERT INTO agendamento.billing_event_inbox (provider_code, provider_account_id, provider_event_id, provider_reference, provider_sequence, outcome, amount_minor_units, currency, occurred_at, paid_through_at, tenant_id, operation_id, disposition) VALUES (?, ?, ?, ?, 2, 'CONFIRMED', ?, ?, ?, ?, ?, ?, 'PENDING')",
+        PROVIDER,
+        ACCOUNT,
+        eventId,
+        reference,
+        sourceOperation.amountMinorUnits(),
+        sourceOperation.currency(),
+        java.sql.Timestamp.from(NOW.plusSeconds(1)),
+        java.sql.Timestamp.from(NOW.plus(Duration.ofDays(60))),
+        tenantId,
+        sourceOperation.operationId());
+    jdbc.update(
+        "UPDATE agendamento.billing_subscription_contract SET source_operation_id = ?, amount_minor_units = ?, currency = ?, terms_version = ?, offer_version = ?, plan_code = ?, recorded_at = ? WHERE tenant_id = ? AND subscription_id = ?",
+        sourceOperation.operationId(),
+        sourceOperation.amountMinorUnits(),
+        sourceOperation.currency(),
+        sourceOperation.termsVersion(),
+        sourceOperation.offerVersion(),
+        sourceOperation.planCode().name(),
+        java.sql.Timestamp.from(NOW.plusSeconds(3)),
+        tenantId,
+        subscriptionId);
+    jdbc.update(
+        "UPDATE agendamento.billing_event_inbox SET disposition = 'APPLIED' WHERE provider_code = ? AND provider_account_id = ? AND provider_event_id = ?",
+        PROVIDER,
+        ACCOUNT,
+        eventId);
   }
 
   private void isolateOtherDunningCycles(UUID targetTenantId) {
@@ -908,6 +1648,17 @@ class BillingWebhookIT {
         "SELECT status || ':' || version FROM agendamento.subscription WHERE tenant_id = ?",
         String.class,
         tenantId);
+  }
+
+  private String statusOrNull(UUID tenantId) {
+    return jdbc
+        .queryForList(
+            "SELECT status || ':' || version FROM agendamento.subscription WHERE tenant_id = ?",
+            String.class,
+            tenantId)
+        .stream()
+        .findFirst()
+        .orElse(null);
   }
 
   private int historyCount(UUID tenantId) {

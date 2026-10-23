@@ -24,6 +24,7 @@ class StartSubscriptionCheckoutTest {
 
   @Mock private AdminAccessPolicy access;
   @Mock private SubscriptionRepository subscriptions;
+  @Mock private SubscriptionDunningRepository dunning;
   @Mock private BillingRepository billing;
   @Mock private BillingOfferCatalog offers;
   @Mock private HostedCheckoutProvider provider;
@@ -42,6 +43,7 @@ class StartSubscriptionCheckoutTest {
         new StartSubscriptionCheckout(
             access,
             subscriptions,
+            dunning,
             billing,
             offers,
             provider,
@@ -58,7 +60,8 @@ class StartSubscriptionCheckoutTest {
         .hasMessage("TENANT_CONTEXT_CHANGED");
 
     verify(access).isCurrent(admin);
-    verifyNoInteractions(subscriptions, billing, offers, provider, idempotency, tenantLock, clock);
+    verifyNoInteractions(
+        subscriptions, dunning, billing, offers, provider, idempotency, tenantLock, clock);
   }
 
   private static AuthenticatedAdmin admin(UUID tenantId) {

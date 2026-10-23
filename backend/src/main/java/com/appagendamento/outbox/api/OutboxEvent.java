@@ -47,6 +47,7 @@ public record OutboxEvent(
         aggregateType.equals("SUBSCRIPTION")
             && java.util.Set.of(
                     "SubscriptionReactivated",
+                    "SubscriptionPeriodExtended",
                     "SubscriptionPastDue",
                     "SubscriptionPaymentSuspended")
                 .contains(eventType);

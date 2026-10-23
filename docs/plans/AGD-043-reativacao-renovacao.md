@@ -11,7 +11,7 @@
 - AGD-041 já autentica eventos financeiros, registra inbox, correlaciona operações de checkout e atualiza estado/histórico/auditoria/outbox numa transação.
 - AGD-042 já fornece ciclo de inadimplência, tentativas lógicas D0/D+3/D+6, identidade externa estável, claim/lease/fencing e autorização local revalidada sob lock. Uma tentativa só é iniciada com autorização e transporte presentes.
 - A confirmação de webhook atualmente correlaciona apenas `billing_checkout_operation`; o resultado aceito de uma tentativa Dunning não tem caminho autoritativo de liquidação correlacionado.
-- V1–V37 permanecem imutáveis. V37 é a migration funcional inicial desta branch: vínculo entre attempt e inbox, snapshot contratual imutável por tentativa, intenção anual, preflight de legado e privilégios de correlação mínimos. V38 acrescenta o motivo terminal de período expirado e a disposição explícita de evidência de pagamento vencida.
+- V1–V38 permanecem imutáveis desde os heads publicados. Esta branch acrescenta V39 (extensão monotônica do período e outbox `SubscriptionPeriodExtended`) e V40 (plano comercial imutável por tentativa). V37 é a migration funcional inicial desta branch: vínculo entre attempt e inbox, snapshot contratual imutável por tentativa, intenção anual, preflight de legado e privilégios de correlação mínimos. V38 acrescenta o motivo terminal de período expirado e a disposição explícita de evidência de pagamento vencida.
 - Revisão do preflight V37: a tabela contratual é reconstruída somente a partir de `PAYMENT_CONFIRMED` ligado a operação `CONFIRMED`; os termos da tentativa só são copiados quando `recorded_at <= cycle.created_at`. Tentativa já iniciada sem evidência temporal suficiente faz a migração falhar. A migração não usa o contrato corrente como prova retroativa.
 - Fornecedor, preço/moeda/oferta, autorização recorrente confiável, credenciais gerenciadas e homologação permanecem ausentes; produção continua fail-closed.
 
@@ -42,7 +42,7 @@
 | Pagamento confirmado para período já expirado não reabre acesso | PostgreSQL: encerra somente ciclo correlacionado, preserva assinatura sem ACTIVE e não gera `SubscriptionReactivated` |
 | UI comunica estado sem afirmar pagamento/entrega | testes React e browser E2E sintético, reload e isolamento do contexto |
 | Produção sem integrações continua sem efeitos externos | teste de ausência de transport/verifier e E2E isolado |
-| V37/V38 e privilégios são seguros | instalação limpa, V36→V38, Flyway validate/rerun, preflight/grants e estados terminais |
+| V37–V40 e privilégios são seguros | instalação limpa, V36/V38/V39→V40, Flyway validate/rerun, preflight/grants, extensão monotônica e estados terminais |
 
 ## Decisões técnicas e limites
 
@@ -74,6 +74,24 @@
 5. Atualizar OpenAPI, especificação, ADR, STATUS, VALIDATION e TRACEABILITY; revisar achados de requisito/segurança independentemente quando houver revisores disponíveis.
 
 ## Progresso
+
+### Consolidação de revisão — 23/10/2026
+
+- Checkout novo é bloqueado enquanto qualquer tentativa financeira Dunning da assinatura estiver iniciada, aceita ou sem resultado resolvido, mesmo se seu ciclo foi encerrado. O worker também impede outro ciclo de iniciar cobrança lógica enquanto essa tentativa continuar pendente.
+- Checkout e Dunning só ativam/estendem quando o período autenticado ainda está vigente (`paidThroughAt > Clock.instant()`), depois dos locks e da releitura atuais. Evidência vencida fica explicada como `EXPIRED_PERIOD` e não concede acesso. Evidência mais recente pode estender assinatura ativa sem substituir plano/termos correntes nem reduzir o período.
+- V40 persiste o plano da tentativa junto aos termos financeiros. Claim, autorização e reconciliação usam esse snapshot. Preflight deriva contrato somente de checkout confirmado com termos coincidentes e attempt somente de snapshot cujo vínculo anteceda o ciclo; legado sem prova falha sem reescrita.
+- A linhagem V40 inclui fato `PAYMENT_CONFIRMED` ligado ao checkout que forneceu os termos; contrato corrente não é reconstruído de checkout sem histórico. Alterações futuras passam por trigger que exige operação confirmada e evidência correlacionada ainda `PENDING`; UPDATE runtime foi reduzido às colunas contratuais necessárias. O trigger usa o schema de origem da linha, inclusive em migrações isoladas.
+- Checkout e claim Dunning são mutuamente exclusivos sob lock tenant-scoped. O teste usa threads/latches e verifica que apenas um lado persiste uma nova intenção lógica; não é uma verificação sequencial disfarçada de corrida.
+- V39 exige correspondência entre `aggregate_version` e versão do payload allowlisted de `SubscriptionPeriodExtended`. A inbox financeira mantém grants somente nas colunas de correlação; nenhum UPDATE amplo de payload foi acrescentado.
+- Esta revisão não habilita fonte/autorização financeira, transporte, notificações, oferta, preço ou moeda reais. A imagem Keycloak e seu gate de segurança permanecem intocados.
+
+### Follow-up de revisão final — 23/10/2026
+
+- O revisor de persistência apontou que o preflight V40 podia inferir o plano a partir de checkout confirmado/termos sem exigir o fato histórico correlacionado. V40 foi reforçada para exigir `PAYMENT_CONFIRMED` ligado ao `source_operation_id`, tenant/subscription corretos e timestamp não posterior ao registro do contrato/ciclo. Legado sem prova falha sem alteração.
+- O mesmo revisor apontou que o UPDATE amplo de `billing_subscription_contract` permitiria mutar qualquer campo. V40 agora revoga UPDATE de tabela e concede somente colunas contratuais; um trigger exige origem confirmada e evidência autenticada correlacionada. Os testes verificam grant e rejeição de mudança de plano sem evidência.
+- O revisor de pagamentos apontou que a antiga prova checkout/Dunning era sequencial. Foi substituída/acrescida regressão concorrente com duas tarefas e latch/barreira para iniciar simultaneamente; testa que só checkout aberto ou claim Dunning pode vencer. Pagamento/suspensão e tentativa iniciada permanecem cobertos.
+- Um primeiro verify direcionado revelou o trigger sem resolução de relações no schema de teste; a exceção era capturada como resultado incerto na recuperação de checkout. O trigger passou a qualificar as tabelas com `TG_TABLE_SCHEMA`; a regressão de recuperação de inbox pré-associada e os testes de schema isolado foram repetidos. Outra falha era uma fixture que mutava `plan_code` diretamente; a fixture agora representa revisão contratual por nova operação/evidência sintética e preserva o assert do snapshot antigo.
+- A revisão final sequencial confirmou os caminhos de pagamento, ordem de locks, preflight, trigger/grants e testes. A capacidade de subagentes estava esgotada para uma nova rodada independente; as revisões independentes anteriores ocorreram antes destas correções, portanto não são apresentadas como revisão independente do delta final nem como aprovação humana.
 
 - [x] Base remota confirmada: PR #24 draft aberto, head `1d434a83ba63b4e247b0ca675c5db1a2b13c600e`; branch de trabalho derivada desse head.
 - [x] Mapeados GAPs: inbox não correlaciona attempts Dunning; a autorização genérica atual pode aceitar plano anual; intenção anual ainda não existe.
