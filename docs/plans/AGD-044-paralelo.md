@@ -121,3 +121,9 @@ Qualquer divergência de contrato precisa ser comunicada em novo commit e descri
 ## Retomada
 
 Trabalho backend continua em `/tmp/kronos-agd044`, branch `agd-044-exportacoes`. Não trocar a branch nem editar os arquivos de frontend do acordo. Base e PRs predecessores permanecem sem merge.
+
+### Revalidação do backend e CI — head `65e9d2f5c4bc2d7860f245180239f81b349aa898`
+
+- A suíte completa local repetida em JDK 21 passou: 85 testes unitários/arquiteturais e 310 integrações PostgreSQL 16.13/Testcontainers.
+- App CI push [39969591995](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39969591995) e PR [39969600408](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39969600408) estão terminais: verify, frontend, OIDC E2E geral e secret scans passaram; security falhou somente no scan Keycloak conhecido. CodeQL push [39969591967](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39969591967) e PR [39969600389](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/39969600389) passaram.
+- A branch/worktree UI está separada e continua sob ownership do outro terminal; o head observado avançou para `86add0b0a5e4d4a4c1738e086f2cd42f666e7478`, mas o handoff para integração ainda não foi recebido. Este registro não presume integração: aguardar `FRONTEND PRONTO PARA INTEGRAÇÃO`; a prova E2E de exportação permanece pendente.
