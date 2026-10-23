@@ -161,6 +161,10 @@ export function canDownloadExport(
     return Number.isFinite(expiration) && now < expiration;
 }
 
+export function isStrongJobEtag(value: string | null): value is string {
+    return value !== null && /^"[0-9]+"$/.test(value);
+}
+
 export function isCurrentStatusRequest(
     requestSequence: number,
     latestSequence: number,

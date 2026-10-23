@@ -12,6 +12,7 @@ import {
     classifyCreateResult,
     isExportJob,
     isCurrentStatusRequest,
+    isStrongJobEtag,
     isTerminalExportState,
     recoverIntentPhase,
     statusLabel,
@@ -138,6 +139,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
     const [statuses, setStatuses] = useState<ExportStatus[]>([]);
     const [serviceId, setServiceId] = useState('');
     const [job, setJob] = useState<ExportJob | null>(null);
+    const [jobEtag, setJobEtag] = useState<string | null>(null);
     const [intent, setIntent] = useState<ExportIntent | null>(
         initialContext?.intent ?? null,
     );
@@ -147,16 +149,36 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
     const [notice, setNotice] = useState('');
     const [now, setNow] = useState(Date.now());
     const [pollGeneration, setPollGeneration] = useState(0);
+    const [activeLookupRequired, setActiveLookupRequired] = useState(false);
     const contextEpoch = useRef(0);
     const contextRef = useRef(tenantId);
     const csrfRef = useRef(csrf);
     const csrfContextRef = useRef(csrfContextKey);
     const jobIdRef = useRef(initialContext?.exportId ?? '');
+    const jobEtagRef = useRef<string | null>(null);
     const recoveryExportIdRef = useRef(initialContext?.exportId ?? '');
+    const recoveryAllowedRef = useRef(true);
     const intentRef = useRef(intent);
     const requestLock = useRef(false);
     const statusRequestSequence = useRef(0);
     const downloadUrl = useRef<string | null>(null);
+    const downloadCleanupTimer = useRef<number | null>(null);
+    const requestControllers = useRef(new Set<AbortController>());
+
+    function createRequestController() {
+        const controller = new AbortController();
+        requestControllers.current.add(controller);
+        return controller;
+    }
+
+    function releaseRequestController(controller: AbortController) {
+        requestControllers.current.delete(controller);
+    }
+
+    function abortRequests() {
+        for (const controller of requestControllers.current) controller.abort();
+        requestControllers.current.clear();
+    }
 
     function persist(next: StoredExportContext): boolean {
         if (typeof window === 'undefined') return false;
@@ -212,8 +234,36 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
     }
 
     function clearDownloadUrl() {
+        if (downloadCleanupTimer.current !== null) {
+            window.clearTimeout(downloadCleanupTimer.current);
+            downloadCleanupTimer.current = null;
+        }
         if (downloadUrl.current) URL.revokeObjectURL(downloadUrl.current);
         downloadUrl.current = null;
+    }
+
+    function applyJob(value: ExportJob, etag: string | null) {
+        const strongEtag = isStrongJobEtag(etag) ? etag : null;
+        jobIdRef.current = value.exportId;
+        jobEtagRef.current = strongEtag;
+        setJob(value);
+        setJobEtag(strongEtag);
+    }
+
+    function clearJob(contextId?: string) {
+        jobIdRef.current = '';
+        jobEtagRef.current = null;
+        setJob(null);
+        setJobEtag(null);
+        if (contextId) {
+            const current = readStoredContext(contextId);
+            if (current) {
+                persist({
+                    tenantId: contextId,
+                    intent: current.intent,
+                });
+            }
+        }
     }
 
     function invalidateContextEpoch() {
@@ -230,6 +280,8 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
         csrfContextRef.current = csrfContextKey;
         contextEpoch.current++;
         if (contextChanged || sessionChanged || loggedOut) {
+            abortRequests();
+            recoveryAllowedRef.current = false;
             statusRequestSequence.current++;
             recoveryExportIdRef.current = '';
             if (previousTenant) removeStoredContext(previousTenant);
@@ -240,6 +292,8 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
             requestLock.current = false;
             setIntent(null);
             setJob(null);
+            jobEtagRef.current = null;
+            setJobEtag(null);
             setFormat('CSV');
             setFrom('');
             setTo('');
@@ -247,6 +301,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
             setServiceId('');
             setBusy(false);
             setLoading(false);
+            setActiveLookupRequired(false);
             setError('');
             setNotice('');
         }
@@ -255,21 +310,31 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [tenantId, csrfContextKey]);
 
+    useEffect(
+        () => () => {
+            abortRequests();
+            clearDownloadUrl();
+        },
+        [],
+    );
+
     useEffect(() => {
         const id = recoveryExportIdRef.current;
-        if (!csrf || !id) return;
-        jobIdRef.current = id;
+        if (!csrf || !recoveryAllowedRef.current || intentRef.current) return;
         const epoch = contextEpoch.current;
         const sequence = ++statusRequestSequence.current;
+        const lookupPath = id ? jobPath(id) : '/v1/admin/exports/active';
+        const controller = createRequestController();
         let cancelled = false;
         setLoading(true);
-        void fetch(apiBaseUrl + jobPath(id), {
+        void fetch(apiBaseUrl + lookupPath, {
             credentials: 'same-origin',
             cache: 'no-store',
+            signal: controller.signal,
         })
             .then(async (response) => {
                 if (
-                    !isCurrent(tenantId, epoch, id, sequence) ||
+                    !isCurrent(tenantId, epoch, id || undefined, sequence) ||
                     sequence !== statusRequestSequence.current ||
                     cancelled
                 )
@@ -278,13 +343,20 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                     onSessionInvalid(response.status);
                     return;
                 }
+                if (response.status === 204 && !id) {
+                    clearJob(tenantId);
+                    setNotice(
+                        'Nenhuma exportação ativa foi encontrada para esta sessão.',
+                    );
+                    return;
+                }
                 if (!response.ok)
                     throw new Error(
                         'Não foi possível recuperar a exportação anterior.',
                     );
                 const value: unknown = await response.json();
                 if (
-                    !isCurrent(tenantId, epoch, id, sequence) ||
+                    !isCurrent(tenantId, epoch, id || undefined, sequence) ||
                     sequence !== statusRequestSequence.current ||
                     cancelled
                 )
@@ -293,13 +365,14 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                     throw new Error(
                         'A resposta de recuperação não corresponde ao contrato de exportação.',
                     );
-                setJob(value);
+                applyJob(value, response.headers.get('ETag'));
+                if (!id) updateStoredExportId(value.exportId, tenantId);
                 setError('');
             })
             .catch((cause: unknown) => {
                 if (
                     cancelled ||
-                    !isCurrent(tenantId, epoch, id, sequence) ||
+                    !isCurrent(tenantId, epoch, id || undefined, sequence) ||
                     sequence !== statusRequestSequence.current
                 )
                     return;
@@ -310,17 +383,20 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                 );
             })
             .finally(() => {
+                releaseRequestController(controller);
                 if (
                     !cancelled &&
-                    isCurrent(tenantId, epoch, id, sequence) &&
+                    isCurrent(tenantId, epoch, id || undefined, sequence) &&
                     sequence === statusRequestSequence.current
                 )
                     setLoading(false);
             });
         return () => {
             cancelled = true;
+            controller.abort();
+            releaseRequestController(controller);
         };
-        // The initial recovery is deliberately bound to the mount-time session context.
+        // Only the initial authenticated context may restore a stored operation.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [tenantId, csrf === null]);
 
@@ -330,6 +406,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
         const id = job.exportId;
         const epoch = contextEpoch.current;
         const sequence = ++statusRequestSequence.current;
+        const controller = createRequestController();
         let cancelled = false;
         let timer = 0;
         const poll = async () => {
@@ -337,6 +414,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                 const response = await fetch(apiBaseUrl + jobPath(id), {
                     credentials: 'same-origin',
                     cache: 'no-store',
+                    signal: controller.signal,
                 });
                 if (
                     !isCurrent(contextId, epoch, id, sequence) ||
@@ -358,7 +436,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                         return;
                     if (!isExportJob(value))
                         throw new Error('Resposta de estado inválida.');
-                    setJob(value);
+                    applyJob(value, response.headers.get('ETag'));
                     setError('');
                 } else {
                     setError(
@@ -389,6 +467,8 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
         return () => {
             cancelled = true;
             window.clearTimeout(timer);
+            controller.abort();
+            releaseRequestController(controller);
         };
     }, [csrf, job, onSessionInvalid, pollGeneration, tenantId]);
 
@@ -415,6 +495,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
 
     function updateStoredExportId(exportId: string, contextId: string) {
         jobIdRef.current = exportId;
+        recoveryExportIdRef.current = exportId;
         const current = readStoredContext(contextId) ?? { tenantId: contextId };
         persist({
             ...current,
@@ -426,9 +507,72 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
         setIntent(null);
     }
 
+    async function discoverActive() {
+        if (!csrf || intentRef.current) return;
+        const contextId = tenantId;
+        const epoch = contextEpoch.current;
+        const sequence = ++statusRequestSequence.current;
+        const controller = createRequestController();
+        setLoading(true);
+        setError('');
+        try {
+            const response = await fetch(
+                apiBaseUrl + '/v1/admin/exports/active',
+                {
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    signal: controller.signal,
+                },
+            );
+            if (!isCurrent(contextId, epoch, undefined, sequence)) return;
+            if (response.status === 401 || response.status === 403) {
+                onSessionInvalid(response.status);
+                return;
+            }
+            if (response.status === 204) {
+                clearJob(contextId);
+                setActiveLookupRequired(false);
+                setNotice(
+                    'Nenhuma exportação está ativa agora. Você pode iniciar uma nova solicitação quando quiser.',
+                );
+                return;
+            }
+            if (!response.ok)
+                throw new Error(
+                    `Não foi possível consultar a exportação ativa (HTTP ${response.status}).`,
+                );
+            const value: unknown = await response.json();
+            if (!isCurrent(contextId, epoch, undefined, sequence)) return;
+            if (!isExportJob(value))
+                throw new Error(
+                    'A consulta da exportação ativa retornou dados inválidos.',
+                );
+            applyJob(value, response.headers.get('ETag'));
+            updateStoredExportId(value.exportId, contextId);
+            setActiveLookupRequired(false);
+            setNotice('Exportação ativa recuperada.');
+        } catch (cause) {
+            if (isCurrent(contextId, epoch, undefined, sequence)) {
+                setError(
+                    cause instanceof Error
+                        ? cause.message
+                        : 'Falha ao consultar a exportação ativa.',
+                );
+            }
+        } finally {
+            releaseRequestController(controller);
+            if (isCurrent(contextId, epoch, undefined, sequence)) {
+                setLoading(false);
+                setPollGeneration((current) => current + 1);
+            }
+        }
+    }
+
     async function requestExport(retryIntent?: ExportIntent) {
         if (
             !csrf ||
+            loading ||
+            activeLookupRequired ||
             requestLock.current ||
             !isCurrent(tenantId, contextEpoch.current)
         )
@@ -459,6 +603,9 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
         setError('');
         setNotice('');
         jobIdRef.current = '';
+        recoveryExportIdRef.current = '';
+        jobEtagRef.current = null;
+        setJobEtag(null);
         statusRequestSequence.current++;
         setJob(null);
         if (
@@ -473,11 +620,13 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
             setBusy(false);
             return;
         }
+        const controller = createRequestController();
         try {
             const response = await fetch(apiBaseUrl + '/v1/admin/exports', {
                 method: 'POST',
                 credentials: 'same-origin',
                 cache: 'no-store',
+                signal: controller.signal,
                 headers: {
                     'Content-Type': 'application/json',
                     [csrf.headerName]: csrf.token,
@@ -487,10 +636,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
             });
             if (!isCurrent(contextId, epoch)) return;
             if (response.status === 401 || response.status === 403) {
-                setIntentForContext(
-                    { ...activeIntent, phase: 'UNCERTAIN' },
-                    contextId,
-                );
+                setIntentForContext(null, contextId);
                 onSessionInvalid(response.status);
                 return;
             }
@@ -508,7 +654,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                     return;
                 }
                 updateStoredExportId(value.exportId, contextId);
-                setJob(value);
+                applyJob(value, response.headers.get('ETag'));
                 setNotice(
                     'Solicitação aceita. O arquivo ainda está sendo preparado.',
                 );
@@ -535,9 +681,11 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
             }
             setIntentForContext(null, contextId);
             if (resultKind === 'ACTIVE_CONFLICT') {
+                setActiveLookupRequired(true);
                 setNotice(
-                    'Já existe uma exportação ativa para este tenant. O servidor não forneceu o identificador do job ativo para acompanhá-lo.',
+                    'Já existe uma exportação ativa. Consultando o estado desse job.',
                 );
+                await discoverActive();
             } else if (resultKind === 'KEY_CONFLICT') {
                 setError(
                     'A chave de idempotência já está associada a outro conteúdo. Revise os filtros antes de criar uma nova solicitação.',
@@ -567,6 +715,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                 'A resposta não chegou. O resultado é incerto; repita a mesma solicitação com a chave preservada.',
             );
         } finally {
+            releaseRequestController(controller);
             if (isCurrent(contextId, epoch)) {
                 requestLock.current = false;
                 setBusy(false);
@@ -580,12 +729,14 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
         const epoch = contextEpoch.current;
         const id = job.exportId;
         const sequence = ++statusRequestSequence.current;
+        const controller = createRequestController();
         setLoading(true);
         setError('');
         try {
             const response = await fetch(apiBaseUrl + jobPath(id), {
                 credentials: 'same-origin',
                 cache: 'no-store',
+                signal: controller.signal,
             });
             if (
                 !isCurrent(contextId, epoch, id, sequence) ||
@@ -605,7 +756,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                 return;
             if (!isExportJob(value))
                 throw new Error('Resposta de estado inválida.');
-            setJob(value);
+            applyJob(value, response.headers.get('ETag'));
         } catch (cause) {
             if (
                 isCurrent(contextId, epoch, id, sequence) &&
@@ -618,6 +769,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                 );
             }
         } finally {
+            releaseRequestController(controller);
             if (
                 isCurrent(contextId, epoch, id, sequence) &&
                 sequence === statusRequestSequence.current
@@ -633,6 +785,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
         const contextId = tenantId;
         const epoch = contextEpoch.current;
         const id = job.exportId;
+        const controller = createRequestController();
         requestLock.current = true;
         setBusy(true);
         setError('');
@@ -643,6 +796,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                     method: 'POST',
                     credentials: 'same-origin',
                     cache: 'no-store',
+                    signal: controller.signal,
                     headers: { [csrf.headerName]: csrf.token },
                 },
             );
@@ -686,6 +840,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                 {
                     credentials: 'same-origin',
                     cache: 'no-store',
+                    signal: controller.signal,
                     headers: { 'X-Export-Download-Handle': handle },
                 },
             );
@@ -724,7 +879,10 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
             document.body.appendChild(anchor);
             anchor.click();
             anchor.remove();
-            window.setTimeout(clearDownloadUrl, 60_000);
+            downloadCleanupTimer.current = window.setTimeout(() => {
+                downloadCleanupTimer.current = null;
+                clearDownloadUrl();
+            }, 60_000);
             setNotice(
                 'Download iniciado. O arquivo ficou somente na memória do navegador.',
             );
@@ -737,6 +895,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                 );
             }
         } finally {
+            releaseRequestController(controller);
             if (isCurrent(contextId, epoch, id)) {
                 requestLock.current = false;
                 setBusy(false);
@@ -750,12 +909,15 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
             !job ||
             job.state !== 'AVAILABLE' ||
             expiredByClock ||
+            !isStrongJobEtag(jobEtagRef.current) ||
             requestLock.current
         )
             return;
         const contextId = tenantId;
         const epoch = contextEpoch.current;
         const id = job.exportId;
+        const etag = jobEtagRef.current;
+        const controller = createRequestController();
         requestLock.current = true;
         setBusy(true);
         setError('');
@@ -764,9 +926,10 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                 method: 'DELETE',
                 credentials: 'same-origin',
                 cache: 'no-store',
+                signal: controller.signal,
                 headers: {
                     [csrf.headerName]: csrf.token,
-                    'If-Match': `"${job.version}"`,
+                    'If-Match': etag,
                 },
             });
             if (!isCurrent(contextId, epoch, id)) return;
@@ -775,6 +938,8 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                 return;
             }
             if (response.status === 204) {
+                jobEtagRef.current = null;
+                setJobEtag(null);
                 setJob((current) =>
                     current?.exportId === id
                         ? { ...current, state: 'EXPIRED' }
@@ -787,7 +952,9 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
             }
             if (response.status === 412 || response.status === 409) {
                 setNotice(
-                    'O estado da exportação mudou. Estou consultando a versão atual.',
+                    response.status === 412
+                        ? 'A versão mudou antes da expiração. Estou recarregando o job; revise o estado antes de confirmar novamente.'
+                        : 'O estado atual não permite encerrar o acesso. Estou recarregando o job.',
                 );
                 await refreshJob();
                 return;
@@ -805,6 +972,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                 );
             }
         } finally {
+            releaseRequestController(controller);
             if (isCurrent(contextId, epoch, id)) {
                 requestLock.current = false;
                 setBusy(false);
@@ -924,6 +1092,8 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                         type="submit"
                         disabled={
                             !csrf ||
+                            loading ||
+                            activeLookupRequired ||
                             busy ||
                             !!currentIntent ||
                             (!!job && !isTerminalExportState(job.state))
@@ -956,6 +1126,15 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                 <output className="export-center__message">{notice}</output>
             )}
             {loading && <output>Carregando estado da exportação…</output>}
+            {!job && !currentIntent && csrf && (
+                <button
+                    type="button"
+                    disabled={loading || busy}
+                    onClick={() => void discoverActive()}
+                >
+                    Consultar exportação ativa
+                </button>
+            )}
             {!loading && !job && !currentIntent && !error && (
                 <p className="export-center__empty">
                     Nenhuma exportação nesta sessão. Escolha os filtros para
@@ -1074,6 +1253,12 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                             exclusão física do objeto.
                         </output>
                     )}
+                    {job.state === 'AVAILABLE' && !isStrongJobEtag(jobEtag) && (
+                        <output>
+                            ETag forte da versão do job indisponível. Atualize o
+                            estado antes de encerrar o acesso.
+                        </output>
+                    )}
                     <div className="export-center__actions">
                         <button
                             type="button"
@@ -1092,7 +1277,12 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
                         <button
                             type="button"
                             className="export-center__secondary"
-                            disabled={!csrf || !canDownload || busy}
+                            disabled={
+                                !csrf ||
+                                !canDownload ||
+                                !isStrongJobEtag(jobEtag) ||
+                                busy
+                            }
                             onClick={() => void expireEarly()}
                         >
                             Encerrar acesso agora
