@@ -297,3 +297,10 @@ Revisão de integração AGD-010 em 15/10/2026: corrigida a identidade idempoten
 - App CI PR [40030345756](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40030345756): verify, frontend, OIDC browser E2E e secret scans passaram; security falhou somente no scan Keycloak conhecido. CodeQL PR [40030345669](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40030345669) passou.
 - E2E PR com Keycloak/PostgreSQL/Chrome comprovou exportação ponta a ponta, incluindo POST aceito antes do 503, retry idêntico, efeitos únicos, worker/CSV, `/active`, reload, download e expiração. App CI push [40030340838](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40030340838) passou pelo mesmo fluxo, mas falhou depois na asserção de revogação de sessão de administrador desativado; o E2E PR passou nessa asserção. Causa da divergência não determinada.
 - PR #26 segue draft e dependente de AGD-043. Storage/keyring reais, segurança Keycloak, homologação e gates comerciais/legais permanecem pendentes; sem merge ou deploy.
+
+### AGD-044 — correções P2 de backend (25/10/2026)
+
+- V43 rejeita detalhes ausentes/JSON null nas ações novas de exportação, exigindo expressão verdadeira e preservando a expressão anterior para ações legadas. Preflight e migration falham fechados sem reescrever auditoria.
+- Falha `ExportStorageException` em `ArtifactStore.get()` retorna 503/no-store sem conteúdo ou `EXPORT_DOWNLOADED`; job fica preservado e nova tentativa funciona após recuperação. Erros de programação não são mascarados; autorização/expiração continuam revalidadas.
+- Validação focal final: 71 integrações PostgreSQL (26 `ExportLifecycleIT`, 45 `TenantPersistenceIT`) e 3 testes unitários; frontend integrado: 54 testes/5 arquivos, format/lint/typecheck/build aprovados. E2E de exportação passou no CI do head remoto `ab12fd5`; CI do head com V43 ainda pendente.
+- PR #26 permanece draft. O scan Keycloak continua conhecido e falho; nenhum scanner, severidade ou pin foi alterado. Storage/keyring de produção, retenção e homologação permanecem pendentes.

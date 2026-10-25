@@ -620,3 +620,12 @@ O primeiro `verify` completo desta rodada expôs falhas nos fixtures temporais V
 | E2E PR #26, job `oidc-browser-e2e` | Fluxo completo passou: commit antes de 503, retry idêntico, mesmo `exportId` e efeitos únicos, worker/CSV, reload/recuperação, download e expiração | Storage/keyring sintéticos de E2E não comprovam produção |
 | CI no head `b6b59cf405bc2370b423614e0ea77fc727b828a7` | App CI PR [40030345756](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40030345756): verify/frontend/E2E/secret scans passaram; CodeQL PR [40030345669](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40030345669) passou | Scan Keycloak falhou, bloqueio conhecido |
 | E2E push no mesmo head | Exportação passou; falha posterior em `Administrador desativado não teve a sessão revogada` | E2E PR passou; causa da divergência desconhecida, sem explicar a intermitência antiga de remarcação |
+
+### AGD-044 — CHECK de auditoria e indisponibilidade de leitura (V43)
+
+| Critério/invariante | Implementação e evidência | Limite |
+|---|---|---|
+| Novas ações de exportação rejeitam detalhes ausentes/JSON null | V43 exige TRUE para EXPORT_REQUESTED/AVAILABLE/EXPIRED. `TenantPersistenceIT` exercita SQL PostgreSQL como runtime, ações válidas e compatibilidade de `TENANT_CREATED` | A expressão legada para ações anteriores é preservada; não há reparo de registros |
+| Upgrade falha sem alterar trilha incompatível | Preflight somente leitura e migration identificam evento inválido; teste V42→V43 compara detalhes e versão Flyway após falha | Legado incompatível exige resolução operacional explícita |
+| Leitura de storage indisponível não serve arquivo nem registra sucesso | `DownloadExport` captura somente `ExportStorageException` e mapeia 503/no-store. `ExportLifecycleIT` prova job preservado, zero bytes/auditoria e retry após recuperação | Exceções não classificadas continuam propagando para não ocultar defeito de código |
+| Integração de UI e fluxo de recuperação | SHA UI autorizado `4d940d8133b037646642cd61b520e7b3be975193` é ancestral do merge local `3835ba2`; 54 testes frontend passam. CI no head `ab12fd5` comprovou E2E DOM/API/worker/PostgreSQL com resposta 503 após commit, retry idêntico e efeitos únicos | O CI do head contendo V43 ainda precisa terminar; infraestrutura E2E não comprova storage/keyring de produção |
