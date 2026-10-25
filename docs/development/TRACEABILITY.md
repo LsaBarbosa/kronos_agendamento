@@ -630,3 +630,11 @@ O primeiro `verify` completo desta rodada expôs falhas nos fixtures temporais V
 | Leitura de storage indisponível não serve arquivo nem registra sucesso | `DownloadExport` captura somente `ExportStorageException` e mapeia 503/no-store. `ExportLifecycleIT` prova job preservado, zero bytes/auditoria e retry após recuperação | Exceções não classificadas continuam propagando para não ocultar defeito de código |
 | Integração de UI e fluxo de recuperação | SHA UI autorizado `4d940d8133b037646642cd61b520e7b3be975193` é ancestral do merge local `3835ba2`; 54 testes frontend passam. App CI push/PR no `2d9e05d` comprovou E2E DOM/API/worker/PostgreSQL com resposta 503 após commit, retry idêntico e efeitos únicos | Infraestrutura E2E não comprova storage/keyring de produção |
 | Gates do head `2d9e05d0fa58eed4cb6683d9956379f851fcdada` | App CI push [40185898850](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40185898850) e PR [40185895240](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40185895240): verify/frontend/E2E/secret scans passaram; CodeQL push [40185898836](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40185898836) e PR [40185895302](https://github.com/LsaBarbosa/kronos_agendamento/actions/runs/40185895302) passaram | App CI integral continua bloqueado exclusivamente pelo scan Keycloak conhecido |
+
+### AGD-044 — fallback de filename e retry de `/content` (handoff `da026529`)
+
+| Critério | Evidência local integrada | Limite |
+|---|---|---|
+| Nome seguro para CSV/PDF | 35 testes DOM provam fallback por formato para header ausente/inválido e preservação do nome válido | Não altera allowlist de conteúdo exportado |
+| 503 de leitura sem arquivo servido | DOM mantém estado AVAILABLE/ação Baixar após 503, sem download, e permite retry após 200; verificado no teste de `ExportCenter` | Esta falha de GET `/content` é distinta do POST comprometido e resposta 503 simulada no E2E de recuperação |
+| Regressões de contexto e CAS | Suíte completa 58/58, incluindo logout, tenant, expiração, If-Match, sessão e respostas tardias; format/lint/typecheck/build passaram | E2E integrado do merge local aguarda o resultado do CI publicado; nenhuma garantia de storage real |

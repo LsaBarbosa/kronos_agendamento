@@ -305,3 +305,9 @@ Revisão de integração AGD-010 em 15/10/2026: corrigida a identidade idempoten
 - Validação focal final: 71 integrações PostgreSQL (26 `ExportLifecycleIT`, 45 `TenantPersistenceIT`) e 3 testes unitários; frontend integrado: 54 testes/5 arquivos, format/lint/typecheck/build aprovados. E2E de exportação passou no CI do head remoto `ab12fd5`; CI do head com V43 ainda pendente.
 - PR #26 permanece draft. O scan Keycloak continua conhecido e falho; nenhum scanner, severidade ou pin foi alterado. Storage/keyring de produção, retenção e homologação permanecem pendentes.
 - No SHA `2d9e05d0fa58eed4cb6683d9956379f851fcdada`, App CI push/PR terminou com verify, frontend, E2E e secret scans aprovados; o único job falho foi o scan Keycloak conhecido. CodeQL push/PR passou com todos os analisadores concluídos. PR #26 permanece draft; nenhum scanner, severidade ou pin foi alterado. Storage/keyring real, retenção e homologação permanecem pendentes.
+
+### AGD-044 — handoff UI corrigido integrado (25/10/2026)
+
+- Integrados localmente, até `da026529d68a6d80f42b761e2082803eead81b4d`, os commits do fallback de filename e respectivo handoff. Merge local `3b3af89`; backend V43 e demais commits foram preservados; worktree UI permanece inalterada.
+- UI validada localmente: 58 testes/5 arquivos; componente de exportação DOM 35/35; format/lint/TypeScript/build passaram. Fallback cobre CSV/PDF sem header, rejeição de nome inválido e preservação de nome válido. 503 no GET `/content` não inicia download e mantém retry disponível.
+- A regressão de storage em GET `/content` é distinta do E2E de POST com commit seguido de 503. Novo E2E integrado aguarda CI do merge; bloqueio conhecido Keycloak permanece separado.
