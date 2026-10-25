@@ -785,6 +785,7 @@ export function ExportCenter(props: ExportCenterProps): ReactElement {
         requestLock.current = true;
         setBusy(true);
         setError('');
+        setNotice('');
         try {
             const tokenResponse = await fetch(
                 apiBaseUrl + jobPath(id) + '/download-token',
