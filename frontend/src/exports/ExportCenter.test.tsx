@@ -25,6 +25,7 @@ import {
     validateExportRequest,
     type ExportJob,
     type ExportIntent,
+    type ExportFormat,
     type ExportRequest,
 } from './types';
 
@@ -711,6 +712,86 @@ describe('ExportCenter DOM interactions', () => {
         expect(revokeUrl).not.toHaveBeenCalled();
     });
 
+    it.each([
+        {
+            name: 'CSV without Content-Disposition',
+            format: 'CSV' as ExportFormat,
+            contentDisposition: null,
+            expected: 'exportacao-agendamentos.csv',
+        },
+        {
+            name: 'PDF without Content-Disposition',
+            format: 'PDF' as ExportFormat,
+            contentDisposition: null,
+            expected: 'exportacao-agendamentos.pdf',
+        },
+        {
+            name: 'sanitization-rejected filename',
+            format: 'CSV' as ExportFormat,
+            contentDisposition: 'attachment; filename="../relatorio.csv"',
+            expected: 'exportacao-agendamentos.csv',
+        },
+        {
+            name: 'valid filename from Content-Disposition',
+            format: 'PDF' as ExportFormat,
+            contentDisposition: 'attachment; filename="relatorio-final.pdf"',
+            expected: 'relatorio-final.pdf',
+        },
+    ])(
+        'uses the correct safe filename for $name',
+        async ({ format, contentDisposition, expected }) => {
+            sessionStorage.setItem(
+                storedKey,
+                JSON.stringify({ tenantId, exportId: job.exportId }),
+            );
+            vi.spyOn(URL, 'createObjectURL').mockReturnValue(
+                'blob:filename-test',
+            );
+            const clickedFilenames: string[] = [];
+            const anchorClick = vi
+                .spyOn(HTMLAnchorElement.prototype, 'click')
+                .mockImplementation(function (this: HTMLAnchorElement) {
+                    clickedFilenames.push(this.download);
+                });
+            fetchMock.mockImplementation(async (input) => {
+                const url = String(input);
+                if (url.endsWith(`/exports/${job.exportId}`))
+                    return jsonResponse(
+                        {
+                            ...job,
+                            format,
+                            state: 'AVAILABLE',
+                            expiresAt: '2099-10-23T12:31:00Z',
+                            updatedAt: '2026-10-23T12:02:00Z',
+                        },
+                        200,
+                        { ETag: '"4"' },
+                    );
+                if (url.endsWith('/download-token'))
+                    return jsonResponse({ downloadHandle: 'h'.repeat(40) });
+                if (url.endsWith('/content')) {
+                    const headers: Record<string, string> = {
+                        'Content-Type':
+                            format === 'CSV' ? 'text/csv' : 'application/pdf',
+                    };
+                    if (contentDisposition)
+                        headers['Content-Disposition'] = contentDisposition;
+                    return new Response('synthetic export content', {
+                        status: 200,
+                        headers,
+                    });
+                }
+                throw new Error(`Unexpected request ${url}`);
+            });
+            await mount();
+            await click(button(container, 'Baixar arquivo'));
+            await flushPromises();
+
+            expect(anchorClick).toHaveBeenCalledOnce();
+            expect(clickedFilenames).toEqual([expected]);
+        },
+    );
+
     it('streams an authorized download from memory and revokes its temporary URL', async () => {
         sessionStorage.setItem(
             storedKey,
@@ -789,20 +870,41 @@ describe('ExportCenter DOM interactions', () => {
             JSON.stringify({ tenantId, exportId: job.exportId }),
         );
         const createUrl = vi.spyOn(URL, 'createObjectURL');
+        const anchorClick = vi
+            .spyOn(HTMLAnchorElement.prototype, 'click')
+            .mockImplementation(() => undefined);
+        let contentAttempts = 0;
         fetchMock.mockImplementation(async (input) => {
             const url = String(input);
             if (url.endsWith(`/exports/${job.exportId}`))
                 return jobResponse('AVAILABLE', '"4"');
             if (url.endsWith('/download-token'))
                 return jsonResponse({ downloadHandle: 'h'.repeat(40) });
-            if (url.endsWith('/content')) return emptyResponse(503);
+            if (url.endsWith('/content')) {
+                contentAttempts++;
+                return contentAttempts === 1
+                    ? emptyResponse(503)
+                    : new Response('valid retry content', {
+                          status: 200,
+                          headers: { 'Content-Type': 'text/csv' },
+                      });
+            }
             throw new Error(`Unexpected request ${url}`);
         });
         await mount();
         await click(button(container, 'Baixar arquivo'));
         await flushPromises();
         expect(container.textContent).toContain('HTTP 503');
+        expect(container.textContent).toContain('Arquivo disponível');
+        expect(button(container, 'Baixar arquivo').disabled).toBe(false);
         expect(createUrl).not.toHaveBeenCalled();
+        expect(anchorClick).not.toHaveBeenCalled();
+
+        await click(button(container, 'Baixar arquivo'));
+        await flushPromises();
+        expect(contentAttempts).toBe(2);
+        expect(createUrl).toHaveBeenCalledOnce();
+        expect(anchorClick).toHaveBeenCalledOnce();
     });
 
     it('ignores an older polling response after a newer manual refresh wins', async () => {

@@ -9,6 +9,7 @@
 - Commit de preservação da intenção em todo 5xx e novos casos de sessão/download: `57ac5db397aac22615cde6a8bee6b75bbb161bff`.
 - Configuração DOM sincronizada exatamente do snapshot `2ce63feb1f41d9ed607ff63102061d72ea58b8c0` nos três arquivos autorizados; commit local: `dae59e8032bd37d36ff6f3406e91f932d7faad2a`.
 - Commit dos testes DOM executados: `49df83d5d829317a3f41ed0fcc36b170444c0d41`.
+- Correção de `safeFilename`, regressões de nomes e retry de download após 503: `2fe6dd390a78c705fc993560480c219ad4dc7b13`.
 - Componente: `frontend/src/exports/ExportCenter.tsx`, export nomeado `ExportCenter`.
 - Montagem: importar `{ ExportCenter, type ExportCenterProps }`; passar `tenantId`, `csrf` (`{ headerName, token } | null`) e `onSessionInvalid`. O tenant serve somente para contexto local e nunca é enviado à API.
 - API relativa a `apiBaseUrl`: `/v1/admin/exports`, `/v1/admin/exports/active` e endpoints por `exportId`.
@@ -24,12 +25,13 @@
 - Contexto/sessão invalidados abortam requisições pendentes, liberam locks, removem estado privado e impedem resposta tardia de iniciar download. Timers e URL temporária do Blob são limpos no unmount/context change.
 - Resultado HTTP de todos os status 500–599 permanece incerto e conserva body/chave; resposta perdida após simulação de commit também é recuperada com retry da mesma intenção.
 - Os testes DOM usam `fireEvent.change` do Testing Library para alterar campos controlados por React; respostas simuladas existem somente na suíte.
+- O fallback de `safeFilename` compara diretamente o `ExportFormat` e escolhe a extensão CSV/PDF correta; a sanitização do header continua aplicada antes de preservar o nome proposto.
 
 ## Testes e validação
 
 - Configuração importada de `2ce63feb1f41d9ed607ff63102061d72ea58b8c0`: `npm ci` passou e instalou 110 pacotes.
-- `npm test -- src/exports/ExportCenter.test.tsx` — 1 arquivo, 31 testes passaram; Vitest descobriu e executou a suíte DOM `happy-dom` dedicada.
-- `npm test` — 5 arquivos, 54 testes passaram, incluindo os `.test.tsx` e os testes `.test.ts` existentes.
+- `npm test -- src/exports/ExportCenter.test.tsx` — 1 arquivo, 35 testes passaram; Vitest descobriu e executou a suíte DOM `happy-dom` dedicada.
+- `npm test` — 5 arquivos, 58 testes passaram, incluindo os `.test.tsx` e os testes `.test.ts` existentes.
 - `npm run format:check` — passou após formatar o teste atualizado.
 - `npm run lint` — passou.
 - `npm run check` — `tsc --noEmit -p tsconfig.json` e Vite build passaram.
@@ -43,6 +45,7 @@
 - Falha de transporte, resposta perdida após commit simulado, 408, 502, 503 e 202 inválido preservam intenção; os status 500–599 são verificados exaustivamente; retry mantém chave/body; 400 conhecido libera intenção.
 - ETag forte de `/active`/GET é enviado literal em `If-Match`; sem ETag, o comando aguarda GET atualizado; 412 recarrega ETag e só envia nova mutação após ação do usuário.
 - Download autorizado via handle em memória, falha 503, expiração 410, cleanup de URL e resposta tardia de `/content` após logout sem iniciar download.
+- CSV e PDF sem `Content-Disposition`, nome inseguro rejeitado pela sanitização e nome de header válido preservado; resposta 503 de `/content` conserva estado disponível, não inicia download e permite retry bem-sucedido.
 - Polling, criação e download em voo não restauram dados após logout/troca; abort de requests pendentes no logout/unmount, timers e URL temporária no ciclo de vida.
 - As respostas de teste são sintéticas e ficam exclusivamente nos testes.
 

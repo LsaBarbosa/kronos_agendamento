@@ -124,7 +124,7 @@ function safeFilename(response: Response, format: ExportFormat): string {
         filename.includes('/') ||
         filename.includes('\\')
     ) {
-        return `exportacao-agendamentos.${format.toLowerCase() === 'CSV' ? 'csv' : 'pdf'}`;
+        return `exportacao-agendamentos.${format === 'CSV' ? 'csv' : 'pdf'}`;
     }
     return filename;
 }
