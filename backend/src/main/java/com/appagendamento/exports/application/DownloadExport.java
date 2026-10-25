@@ -30,7 +30,12 @@ public class DownloadExport {
     var authorized = authorize.execute(actor, exportId, handle);
     var artifact = authorized.artifact();
     if (!store.available() || !cryptography.available()) throw new ExportUnavailableException();
-    byte[] encrypted = store.get(artifact.artifactKey());
+    byte[] encrypted;
+    try {
+      encrypted = store.get(artifact.artifactKey());
+    } catch (ExportStorageException failure) {
+      throw new ExportUnavailableException();
+    }
     if (!sha256(encrypted).equals(artifact.artifactDigest())
         || encrypted.length != artifact.artifactSize()) {
       throw new ExportUnavailableException();

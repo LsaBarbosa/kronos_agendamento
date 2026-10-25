@@ -356,8 +356,8 @@ class ExportLifecycleIT {
   }
 
   @Test
-  void v42FreshInstallValidatesAndFlywayRerunIsIdempotent() {
-    assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("42");
+  void v43FreshInstallValidatesAndFlywayRerunIsIdempotent() {
+    assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("43");
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -453,7 +453,7 @@ class ExportLifecycleIT {
   }
 
   @Test
-  void v42SuccessfulUpgradeKeepsSingleAvailableJobAndRuntimePrivilegesMinimal() {
+  void v41ToV43SuccessfulUpgradeKeepsSingleAvailableJobAndRuntimePrivilegesMinimal() {
     String schema = "exports_v42_ok_" + UUID.randomUUID().toString().replace("-", "");
     Flyway v41 = isolatedFlyway(schema, org.flywaydb.core.api.MigrationVersion.fromVersion("41"));
     assertThat(v41.migrate().migrationsExecuted).isEqualTo(41);
@@ -487,10 +487,10 @@ class ExportLifecycleIT {
         tenantId + "/exports/" + exportId);
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(1);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(2);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("42");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("43");
     assertThat(
             migrationJdbc.queryForObject(
                 "SELECT count(*) FROM "
@@ -829,6 +829,118 @@ class ExportLifecycleIT {
                     own.admin(), request.job().exportId(), handle.downloadHandle()))
         .isInstanceOf(com.appagendamento.exports.domain.ExportAuthorizationDeniedException.class);
     assertThat(countAction("EXPORT_DOWNLOADED", own.tenantId())).isZero();
+  }
+
+  @Test
+  void storageReadFailureIsNormalizedAndRetryAfterRecoveryDoesNotServeOrAuditPartialContent()
+      throws Exception {
+    Fixture fixture = fixture("storage-read-failure");
+    var requested =
+        requestExport.execute(
+            fixture.admin(),
+            "storage-read-" + UUID.randomUUID(),
+            ExportFormat.CSV,
+            "APPOINTMENTS",
+            filters());
+    processUntilAvailable(fixture, requested.job().exportId());
+    var handle = issueHandle.execute(fixture.admin(), requested.job().exportId());
+    String artifactKey =
+        appJdbc.queryForObject(
+            "SELECT artifact_key FROM agendamento.export_job WHERE export_id = ?",
+            String.class,
+            requested.job().exportId());
+    byte[] encrypted = objects.get(artifactKey).bytes().clone();
+    when(artifactStore.get(artifactKey))
+        .thenThrow(new com.appagendamento.exports.application.ExportStorageException(true))
+        .thenReturn(encrypted);
+
+    mvc.perform(
+            get("/api/v1/admin/exports/{exportId}/content", requested.job().exportId())
+                .with(authentication(auth(fixture.admin())))
+                .header("X-Export-Download-Handle", handle.downloadHandle()))
+        .andExpect(status().isServiceUnavailable())
+        .andExpect(header().string("Cache-Control", "no-store"))
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+        .andExpect(jsonPath("$.error.code").value("EXPORT_INFRASTRUCTURE_UNAVAILABLE"))
+        .andExpect(header().doesNotExist("Content-Disposition"));
+
+    assertThat(getExport.execute(fixture.admin(), requested.job().exportId()).state())
+        .isEqualTo(ExportState.AVAILABLE);
+    assertThat(countAction("EXPORT_DOWNLOADED", fixture.tenantId())).isZero();
+
+    mvc.perform(
+            get("/api/v1/admin/exports/{exportId}/content", requested.job().exportId())
+                .with(authentication(auth(fixture.admin())))
+                .header("X-Export-Download-Handle", handle.downloadHandle()))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Cache-Control", "no-store, private"))
+        .andExpect(header().exists("Content-Disposition"))
+        .andExpect(content().contentTypeCompatibleWith(new MediaType("text", "csv")));
+
+    assertThat(countAction("EXPORT_DOWNLOADED", fixture.tenantId())).isEqualTo(1);
+  }
+
+  @Test
+  void runtimeAuditDetailsCheckRejectsMissingAndJsonNullExportFieldsButPreservesValidActions() {
+    Fixture fixture = fixture("audit-details-check");
+
+    assertAuditRejected(
+        fixture,
+        "EXPORT_REQUESTED",
+        "{\"changed_fields\":[\"export\"],\"format\":\"CSV\",\"version_before\":0,\"version_after\":1}");
+    assertAuditRejected(
+        fixture,
+        "EXPORT_REQUESTED",
+        "{\"changed_fields\":[\"export\"],\"category\":null,\"format\":\"CSV\",\"version_before\":0,\"version_after\":1}");
+    assertAuditRejected(
+        fixture,
+        "EXPORT_AVAILABLE",
+        "{\"changed_fields\":[\"export\"],\"version_after\":2,\"row_count\":1}");
+    assertAuditRejected(
+        fixture,
+        "EXPORT_AVAILABLE",
+        "{\"changed_fields\":[\"export\"],\"version_before\":1,\"version_after\":2,\"row_count\":null}");
+    assertAuditRejected(fixture, "EXPORT_EXPIRED", "{\"changed_fields\":[\"export\"]}");
+    assertAuditRejected(
+        fixture,
+        "EXPORT_EXPIRED",
+        "{\"changed_fields\":[\"export\"],\"version_before\":null,\"version_after\":3}");
+
+    insertAudit(
+        fixture,
+        "EXPORT_REQUESTED",
+        "ADMIN",
+        "TENANT_ADMIN",
+        fixture.admin().adminUserId(),
+        "{\"changed_fields\":[\"export\"],\"category\":\"APPOINTMENTS\",\"format\":\"CSV\",\"version_before\":0,\"version_after\":1}");
+    insertAudit(
+        fixture,
+        "EXPORT_AVAILABLE",
+        "SYSTEM",
+        "EXPORT_LIFECYCLE",
+        null,
+        "{\"changed_fields\":[\"export\"],\"version_before\":1,\"version_after\":2,\"row_count\":4}");
+    insertAudit(
+        fixture,
+        "EXPORT_DOWNLOADED",
+        "ADMIN",
+        "TENANT_ADMIN",
+        fixture.admin().adminUserId(),
+        "{\"changed_fields\":[\"export_download\"]}");
+    insertAudit(
+        fixture,
+        "EXPORT_EXPIRED",
+        "SYSTEM",
+        "EXPORT_LIFECYCLE",
+        null,
+        "{\"changed_fields\":[\"export\"],\"version_before\":2,\"version_after\":3}");
+    insertAudit(
+        fixture,
+        "TENANT_CREATED",
+        "SYSTEM",
+        "CONTROLLED_TENANT_PROVISIONER",
+        null,
+        "{\"changed_fields\":[\"name\",\"slug\",\"timezone\"]}");
   }
 
   @Test
@@ -1302,6 +1414,42 @@ class ExportLifecycleIT {
         Integer.class,
         tenant,
         action);
+  }
+
+  private void assertAuditRejected(Fixture fixture, String action, String details) {
+    assertThatThrownBy(
+            () ->
+                insertAudit(
+                    fixture,
+                    action,
+                    action.equals("EXPORT_REQUESTED") ? "ADMIN" : "SYSTEM",
+                    action.equals("EXPORT_REQUESTED") ? "TENANT_ADMIN" : "EXPORT_LIFECYCLE",
+                    action.equals("EXPORT_REQUESTED") ? fixture.admin().adminUserId() : null,
+                    details))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+  }
+
+  private void insertAudit(
+      Fixture fixture,
+      String action,
+      String actorType,
+      String actorRef,
+      UUID actorId,
+      String details) {
+    appJdbc.update(
+        "INSERT INTO agendamento.audit_event (event_id, tenant_id, actor_id, actor_type, actor_ref, action, target_type, target_id, result, correlation_id, trace_id, details) "
+            + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'COMMITTED', ?, ?, ?::jsonb)",
+        UUID.randomUUID(),
+        fixture.tenantId(),
+        actorId,
+        actorType,
+        actorRef,
+        action,
+        action.equals("TENANT_CREATED") ? "TENANT" : "EXPORT",
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        details);
   }
 
   private int countOutbox(String eventType, UUID tenant) {
