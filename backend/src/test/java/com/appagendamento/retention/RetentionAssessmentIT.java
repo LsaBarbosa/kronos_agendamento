@@ -9,6 +9,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import com.appagendamento.support.PostgresTestEnvironment;
+import java.sql.Connection;
+import java.sql.Statement;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -282,6 +284,86 @@ class RetentionAssessmentIT {
         "UPDATE agendamento.admin_tenant_membership SET status='DISABLED' WHERE user_id=?",
         adminId);
     mvc.perform(get(PATH).with(authentication(token(actor)))).andExpect(status().isForbidden());
+  }
+
+  @Test
+  void reportsExactCountAtLimitAndLowerBoundAboveIt() throws Exception {
+    appJdbc.update(
+        """
+        INSERT INTO agendamento.client
+          (client_id,tenant_id,display_name,normalized_phone)
+        SELECT gen_random_uuid(), ?, 'SYNTHETIC RETENTION COUNT',
+               '+1555' || lpad(sequence_number::text, 7, '0')
+        FROM generate_series(1, 10000) AS sequence_number
+        """,
+        tenantId);
+
+    MvcResult exactResult =
+        mvc.perform(get(PATH).with(authentication(token(actor))))
+            .andExpect(status().isOk())
+            .andExpect(
+                jsonPath("$.categories[?(@.code=='CLIENT_RECORDS')].counts.records.value")
+                    .value(10000))
+            .andExpect(
+                jsonPath("$.categories[?(@.code=='CLIENT_RECORDS')].counts.records.status")
+                    .value("EXACT"))
+            .andReturn();
+    assertThat(exactResult.getResponse().getContentAsString()).contains("\"status\":\"EXACT\"");
+
+    appJdbc.update(
+        "INSERT INTO agendamento.client (client_id,tenant_id,display_name,normalized_phone) VALUES (?,?,'SYNTHETIC RETENTION COUNT','+15559999999')",
+        UUID.randomUUID(),
+        tenantId);
+
+    MvcResult cappedResult =
+        mvc.perform(get(PATH).with(authentication(token(actor))))
+            .andExpect(status().isOk())
+            .andExpect(
+                jsonPath("$.categories[?(@.code=='CLIENT_RECORDS')].counts.records.value")
+                    .value(10000))
+            .andExpect(
+                jsonPath("$.categories[?(@.code=='CLIENT_RECORDS')].counts.records.status")
+                    .value("AT_LEAST_LIMIT"))
+            .andReturn();
+    assertThat(cappedResult.getResponse().getContentAsString())
+        .contains("\"reasons\":[\"COUNT_LIMIT_REACHED\"]");
+  }
+
+  @Test
+  void timesOutOneLockedSourceAndContinuesEvaluatingLaterSources() throws Exception {
+    try (Connection blocker = migrationJdbc.getDataSource().getConnection()) {
+      blocker.setAutoCommit(false);
+      try (Statement lock = blocker.createStatement()) {
+        lock.execute("LOCK TABLE agendamento.client IN ACCESS EXCLUSIVE MODE");
+      }
+
+      assertThat(
+              migrationJdbc.queryForObject(
+                  "SELECT count(*) FROM pg_locks WHERE relation = 'agendamento.client'::regclass AND mode = 'AccessExclusiveLock' AND granted",
+                  Integer.class))
+          .isEqualTo(1);
+
+      MvcResult result =
+          mvc.perform(get(PATH).with(authentication(token(actor))))
+              .andExpect(status().isOk())
+              .andExpect(
+                  jsonPath("$.categories[?(@.code=='CLIENT_RECORDS')].evaluationStatus")
+                      .value("SOURCE_UNAVAILABLE"))
+              .andExpect(
+                  jsonPath("$.categories[?(@.code=='CLIENT_RECORDS')].sourceStatus")
+                      .value("UNAVAILABLE"))
+              .andExpect(
+                  jsonPath("$.categories[?(@.code=='CLIENT_RECORDS')].counts.records")
+                      .doesNotExist())
+              .andExpect(
+                  jsonPath("$.categories[?(@.code=='APPOINTMENTS')].evaluationStatus")
+                      .value("ASSESSED"))
+              .andExpect(
+                  jsonPath("$.categories[?(@.code=='APPOINTMENTS')].counts.records.value").value(0))
+              .andReturn();
+      assertThat(result.getResponse().getContentAsString())
+          .contains("\"reasons\":[\"SOURCE_UNAVAILABLE\"]");
+    }
   }
 
   private UUID insertOutbox(String state, String eventType) {
