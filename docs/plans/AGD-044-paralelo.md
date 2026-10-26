@@ -194,3 +194,8 @@ No head 040ac92, App CI push [40029553344](https://github.com/LsaBarbosa/kronos_
 - Frontend integrado: format, lint, TypeScript/build passaram; Vitest 58/58 em 5 arquivos e teste DOM de export center 35/35. `node --check scripts/dev/test-keycloak-browser.mjs` e `git diff --check` passaram.
 - O E2E de CI do novo SHA integrado ainda precisa confirmar a composição; sua execução usará ambiente descartável, sem Compose compartilhado. O E2E existente de POST confirmado seguido de 503 e retry permanece distinto da nova regressão de GET `/content` que recebe 503 do storage.
 - PR #26 continua draft e sem merge/deploy. O scan Keycloak conhecido mantém App CI integral bloqueado; controles não foram alterados. Storage/chaves reais, retenção, homologação e gates legais/comerciais permanecem pendentes. Revisão sequencial, sem alegar revisão independente ou aprovação humana.
+
+### Regressão P3 de aviso de download — handoff `3e5372d`
+
+- Integrados localmente `c7eb973` e `3e5372d` por merge commit; V43/backend preservado e worktree UI sem alteração. Iniciar tentativa válida limpa aviso/erro anterior depois dos guards; o aviso de sucesso só aparece quando o download inicia.
+- Frontend revalidado: 59 testes/5 arquivos, 36 DOM de exportação; format/lint/TypeScript/build passaram. A regressão cobre sucesso → nova tentativa pendente → 503 sem novo download → job disponível → retry bem-sucedido. O E2E CI do merge ainda precisa terminar; POST aceito seguido de resposta 503 continua distinto de GET `/content` indisponível.

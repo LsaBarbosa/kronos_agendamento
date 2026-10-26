@@ -309,5 +309,5 @@ Revisão de integração AGD-010 em 15/10/2026: corrigida a identidade idempoten
 ### AGD-044 — handoff UI corrigido integrado (25/10/2026)
 
 - Integrados localmente, até `da026529d68a6d80f42b761e2082803eead81b4d`, os commits do fallback de filename e respectivo handoff. Merge local `3b3af89`; backend V43 e demais commits foram preservados; worktree UI permanece inalterada.
-- UI validada localmente: 58 testes/5 arquivos; componente de exportação DOM 35/35; format/lint/TypeScript/build passaram. Fallback cobre CSV/PDF sem header, rejeição de nome inválido e preservação de nome válido. 503 no GET `/content` não inicia download e mantém retry disponível.
+- UI validada localmente até o handoff `3e5372d`: 59 testes/5 arquivos; componente de exportação DOM 36/36; format/lint/TypeScript/build passaram. Inclui limpeza do aviso anterior ao iniciar tentativa válida e retry após 503. Fallback cobre CSV/PDF sem header, rejeição de nome inválido e preservação de nome válido.
 - A regressão de storage em GET `/content` é distinta do E2E de POST com commit seguido de 503. Novo E2E integrado aguarda CI do merge; bloqueio conhecido Keycloak permanece separado.
