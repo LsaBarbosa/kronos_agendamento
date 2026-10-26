@@ -6,7 +6,7 @@
 - **Preparação original:** inventário e plano. **Continuação autorizada:** AGD-050-A, avaliação administrativa somente leitura. Nenhuma exclusão, anonimização, expurgo, hold, scheduler destrutivo ou migration foi implementado.
 - **Resultado esperado da história:** políticas/base por categoria registradas; retenção inicial pós-cancelamento/suspensão aplicada subordinada a pedido de exclusão e hold válido; exclusão de conteúdo sem base remanescente; hold preservando o mínimo e com validade/autoridade; trilha residual sem conteúdo excluído. AGD-051 precisa reaplicar tombstones externos ao backup antes de permitir leituras.
 - **Snapshot de referência/base:** `e8dedd0fa8c9d94e28bbe5bdd0b7c18d87d71cdf`.
-- **Branch de implementação do incremento:** `agd-050a-retention-assessment`, criada sobre a base indicada. SHA final: será preenchido após o commit de implementação.
+- **Branch de implementação do incremento:** `agd-050a-retention-assessment`, criada sobre a base indicada. Commit funcional: `157807312dfff7e0fba140599e6664c3b51b2611` (`feat(agd-050a): add retention assessment API`).
 - **Worktree/branch original preservadas:** `/tmp/kronos-agd044-ui`, `agd-044-exportacoes-ui`; nenhum arquivo dessa worktree foi alterado.
 - **Limites:** não presumir lei, base legal, duração além do texto vigente, autoridade aprovadora, finalidade, consentimento ou direito a excluir evidências necessárias. Documento 05 descreve alguns controles de alta garantia; somente os fundamentos MVP da seção 22 e os critérios P0 são tratados como obrigatórios.
 
@@ -176,4 +176,4 @@ O caminho de implementação não deve adicionar migration até requisitos/decis
 - [ ] Definir política/ledger externo e runbook AGD-051; avaliação atual não cobre restore nem é prova de conformidade.
 - [ ] Expandir categorias não avaliadas somente com contrato e queries minimizadas dos módulos proprietários.
 
-**Retomada exata:** branch `agd-050a-retention-assessment`, base `e8dedd0fa8c9d94e28bbe5bdd0b7c18d87d71cdf`; SHA final será atualizado após o commit. A API atual não altera conteúdo e as migrations V1–V43 permanecem intactas.
+**Retomada exata:** branch `agd-050a-retention-assessment`, base `e8dedd0fa8c9d94e28bbe5bdd0b7c18d87d71cdf`, commit funcional `157807312dfff7e0fba140599e6664c3b51b2611`; o commit de registro deste SHA completa o handoff. A API atual não altera conteúdo e as migrations V1–V43 permanecem intactas.
