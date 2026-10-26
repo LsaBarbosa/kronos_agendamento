@@ -162,7 +162,7 @@ O caminho de implementação não deve adicionar migration até requisitos/decis
 |---|---|---|---|
 | Avaliação AGD-050-A e isolamento | `RetentionAssessmentIT` em PostgreSQL 16.13/Testcontainers, tenant primário e segundo tenant | Contagens tenant-scoped, associação inválida negada, body sem conteúdo privado e leitura sem writes | Passou: `./mvnw -B -ntp -Dtest=NoUnitTests -Dsurefire.failIfNoSpecifiedTests=false -Dit.test=RetentionAssessmentIT verify`; 3 testes, zero falhas/erros/skips. |
 | Zero, fonte indisponível, categoria fora do escopo e limite | `GetRetentionAssessmentTest` + fixture de ausência em PostgreSQL | Estados distintos; erro não vira zero; contagem limitada não vira exata | Passou: `./mvnw -B -ntp spotless:apply spotless:check test`; 88 unitários/arquiteturais, zero falhas/erros/skips; os 2 testes novos passaram. |
-| Sintaxe YAML do contrato | Parser YAML local | Documento OpenAPI parseável | Não validado por parser: Ruby e PyYAML não estão instalados; tentativa com SnakeYAML via JShell não carregou a classe. O arquivo foi revisado visualmente, mas isso não substitui validação automatizada. |
+| Sintaxe YAML/OpenAPI, referências e exemplo | `ruamel.yaml==0.18.15`, `openapi-spec-validator==0.9.0` e `openapi-schema-validator==0.9.0`, instalados em venv temporário fora do repositório | YAML sem chaves duplicadas; OpenAPI 3.1 estruturalmente válido e referências locais resolvidas; exemplo validado contra o schema | Passou: `YAML syntax and duplicate keys: valid`; `docs/openapi/admin-retention.yaml: OK`; um exemplo do response 200 validado por `OAS31Validator`. Nenhuma incompatibilidade de contrato encontrada. |
 | Política/base por categoria, exclusão e legal hold válidos | Deliberação operacional + testes futuros de domínio | Nenhuma exclusão sem regra/base/âncora/autoridade; hold somente conforme decisão aprovada | Não implementado. Requisitos legais/operacionais pendentes; API só informa. |
 | Auditoria residual e AGD-051 restore | Teste futuro de exclusão + restore drill com backup anterior a tombstone e ledger externo | Auditoria minimizada; conteúdo não reaparece; ledger inválido mantém restore selado | Não executado; fora do AGD-050-A. |
 
@@ -172,8 +172,29 @@ O caminho de implementação não deve adicionar migration até requisitos/decis
 - [x] 2026-10-26 — plano original criado e preservado; continuação registrada em `agd-050a-retention-assessment`.
 - [x] 2026-10-26 — API GET read-only, OpenAPI e consultas reais por ports dos módulos; nenhuma migration ou comando destrutivo.
 - [x] 2026-10-26 — `spotless:apply spotless:check test`: 88 unitários/arquiteturais passaram; `RetentionAssessmentIT`: 3 integrações PostgreSQL 16.13 passaram; `GetRetentionAssessmentTest`: 2 unitários cobriram fonte indisponível e limite de contagem.
+- [x] 2026-10-26 — OpenAPI 3.1 validado isoladamente: parser YAML com rejeição de duplicatas, validador de estrutura/referências e validação do exemplo do response contra schema; ferramenta e comandos reproduzíveis abaixo.
 - [ ] Deliberar as decisões mínimas de prazo/base, âncora, reservas futuras, autoridade/validade de hold e auditoria residual antes de qualquer escrita destrutiva.
 - [ ] Definir política/ledger externo e runbook AGD-051; avaliação atual não cobre restore nem é prova de conformidade.
 - [ ] Expandir categorias não avaliadas somente com contrato e queries minimizadas dos módulos proprietários.
 
-**Retomada exata:** branch `agd-050a-retention-assessment`, base `e8dedd0fa8c9d94e28bbe5bdd0b7c18d87d71cdf`, commit funcional `157807312dfff7e0fba140599e6664c3b51b2611`; o commit de registro deste SHA completa o handoff. A API atual não altera conteúdo e as migrations V1–V43 permanecem intactas.
+**Retomada exata:** branch `agd-050a-retention-assessment`, base `e8dedd0fa8c9d94e28bbe5bdd0b7c18d87d71cdf`, commit funcional `157807312dfff7e0fba140599e6664c3b51b2611`; commits posteriores registram o handoff e a validação OpenAPI. A API atual não altera conteúdo e as migrations V1–V43 permanecem intactas.
+
+### Validação OpenAPI complementar
+
+Ferramentas instaladas somente no ambiente temporário `/tmp/agd050a-openapi-validator`; nenhuma dependência, configuração compartilhada ou baseline do projeto foi alterada. `openapi-spec-validator 0.9.0` declara suporte a OpenAPI 3.1; `ruamel.yaml 0.18.15` rejeita chaves duplicadas por padrão. Instalação reproduzível:
+
+```sh
+python3 -m venv /tmp/agd050a-openapi-validator
+/tmp/agd050a-openapi-validator/bin/python -m pip install openapi-spec-validator==0.9.0 openapi-schema-validator==0.9.0 ruamel.yaml==0.18.15
+```
+
+Validações executadas na raiz do repositório:
+
+```sh
+/tmp/agd050a-openapi-validator/bin/python -c 'from ruamel.yaml import YAML; YAML(typ="safe").load(open("docs/openapi/admin-retention.yaml")); print("YAML syntax and duplicate keys: valid")'
+/tmp/agd050a-openapi-validator/bin/openapi-spec-validator docs/openapi/admin-retention.yaml
+```
+
+O primeiro comando passou sem sintaxe inválida ou chave duplicada; o segundo respondeu `docs/openapi/admin-retention.yaml: OK` para a versão declarada `3.1.0`, verificando a estrutura OpenAPI e referências. Um script pontual com `OAS31Validator` validou o único exemplo embutido (response 200) contra o schema resolvido; resultado `Example example: valid` e `1 validated`. A validação não executa a aplicação nem prova que respostas em runtime sempre respeitam o contrato.
+
+Correspondência estática conferida com `AdminRetentionAssessmentController`, `RetentionAssessment`, `GetRetentionAssessment`, os adapters SQL e testes existentes: método/rota GET, cookie `AGDSESSION`, campos serialized, política de 12 meses com marco `UNRESOLVED`, limites `countLimit=10000` e timeout 2s, estados de categoria e respostas de autenticação/autorização. Categorias não avaliadas omitem contagens; fonte indisponível usa `SOURCE_UNAVAILABLE`/`UNAVAILABLE` e mapas vazios, nunca zero; contagem truncada usa valor 10.000 e `AT_LEAST_LIMIT`. Os testes `GetRetentionAssessmentTest` e `RetentionAssessmentIT` previamente executados cobrem esses estados e o response HTTP; não foram repetidos porque esta continuação alterou somente o plano/handoff. Não foi executado linter de estilo OpenAPI; nenhum aviso/recomendação de estilo foi tratado como incompatibilidade.
