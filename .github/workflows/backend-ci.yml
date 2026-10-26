@@ -159,6 +159,7 @@ jobs:
       - name: Provision linked and unlinked OIDC users
         env:
           AGD_E2E_TRIAL_FIXTURE: 'true'
+          AGD_E2E_RETENTION_FIXTURE: 'true'
         run: bash scripts/dev/provision-demo-admin.sh demo-clinica "Clínica Demonstração"
       - name: Install frontend and start Vite proxy
         working-directory: frontend

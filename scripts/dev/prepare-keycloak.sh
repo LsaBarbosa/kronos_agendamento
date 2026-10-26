@@ -17,11 +17,16 @@ set -a
 source .env.keycloak
 set +a
 
-compose=(docker compose -p agendamento -f compose.keycloak.yaml --env-file .env.keycloak)
+compose_project=${AGD_COMPOSE_PROJECT:-agendamento}
+compose=(docker compose -p "$compose_project" -f compose.keycloak.yaml --env-file .env.keycloak)
+if [[ -n "${AGD_COMPOSE_OVERRIDE:-}" ]]; then
+  compose+=(-f "$AGD_COMPOSE_OVERRIDE")
+fi
 "${compose[@]}" up -d
 
+keycloak_external_url=${AGD_KEYCLOAK_EXTERNAL_URL:-http://localhost:8180}
 for attempt in $(seq 1 90); do
-  if curl --fail --silent http://localhost:8180/realms/agendamento/.well-known/openid-configuration >/dev/null; then
+  if curl --fail --silent "$keycloak_external_url/realms/agendamento/.well-known/openid-configuration" >/dev/null; then
     break
   fi
   if [[ "$attempt" == 90 ]]; then
@@ -57,5 +62,5 @@ else
   "${kc[@]}" update "clients/$client_id" "${client_args[@]}" >/dev/null
 fi
 
-echo "Keycloak pronto em http://localhost:8180/realms/agendamento"
+echo "Keycloak pronto em $keycloak_external_url/realms/agendamento"
 echo "Cliente OIDC confidencial configurado; secrets permanecem em .env.keycloak (ignorado pelo Git)."

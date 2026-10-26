@@ -311,3 +311,11 @@ Revisão de integração AGD-010 em 15/10/2026: corrigida a identidade idempoten
 - Integrados localmente, até `da026529d68a6d80f42b761e2082803eead81b4d`, os commits do fallback de filename e respectivo handoff. Merge local `3b3af89`; backend V43 e demais commits foram preservados; worktree UI permanece inalterada.
 - UI validada localmente até o handoff `3e5372d`: 59 testes/5 arquivos; componente de exportação DOM 36/36; format/lint/TypeScript/build passaram. Inclui limpeza do aviso anterior ao iniciar tentativa válida e retry após 503. Fallback cobre CSV/PDF sem header, rejeição de nome inválido e preservação de nome válido.
 - A regressão de storage em GET `/content` é distinta do E2E de POST com commit seguido de 503. Novo E2E integrado aguarda CI do merge; bloqueio conhecido Keycloak permanece separado.
+
+### AGD-050-A — integração frontend no PR #28 (26/10/2026)
+
+- Base backend recebida: `233b54000f1ff1d246958828e5eab94e3660af59`. Handoff UI `4503e05f7b6d09a00e9b922c198932f55b175dd7` integrado como ancestral preservado; worktree/branch do Terminal 1 não foram alteradas. `App.tsx` monta o painel apenas na sessão autenticada e particiona-o por tenant/papel; as chaves irmãs de assinatura, avaliação e exportação foram prefixadas para serem únicas após uma regressão reproduzida no logout.
+- Local: Node 24.14.1, `npm ci`; `npm test` passou 66 testes/6 arquivos (inclui os 7 DOM de retenção); `npm run format:check`, `npm run lint`, `npm run check` e `git diff --check` passaram. Não repetido o `verify` backend local, já concluído no incremento PostgreSQL anterior.
+- E2E local passou em projeto Compose separado `agd050a-e2e`, portas dedicadas e volume PostgreSQL novo; containers do Compose compartilhado `agendamento-*` foram preservados. Fixture persistida sintética e prova de resposta real do endpoint no DOM; GET real retido até após logout e liberado sem restaurar painéis.
+- PR #28 segue draft, base `agd-044-exportacoes`, dependente do PR #26. O CI normal inclui verify completo. O scan Keycloak permanece gate falho conhecido, separado dos resultados funcionais; PR #27 não foi incorporado.
+- AGD-050 segue parcial: avaliação é informativa e não atômica; não abrange as categorias declaradas fora do recorte, não aprova base/prazos adicionais ou legal hold e não implementa descarte, anonimização, restore ou tombstones AGD-051.
