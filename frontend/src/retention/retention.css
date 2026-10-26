@@ -1,0 +1,219 @@
+.retention-assessment {
+    display: grid;
+    gap: 1.25rem;
+    color: #1d2939;
+}
+
+.retention-assessment__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.retention-assessment__header h2,
+.retention-assessment__header p,
+.retention-assessment h3,
+.retention-assessment h4 {
+    margin-top: 0;
+}
+
+.retention-assessment__header p,
+.retention-assessment__muted,
+.retention-assessment__observed,
+.retention-assessment__fact {
+    color: #475467;
+}
+
+.retention-assessment__refresh {
+    min-height: 2.75rem;
+    padding: 0.55rem 0.9rem;
+    border: 1px solid #344054;
+    border-radius: 0.5rem;
+    background: #fff;
+    color: #1d2939;
+    font: inherit;
+    font-weight: 650;
+    cursor: pointer;
+}
+
+.retention-assessment__refresh:focus-visible {
+    outline: 3px solid #1570ef;
+    outline-offset: 2px;
+}
+
+.retention-assessment__refresh:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+}
+
+.retention-assessment__notice,
+.retention-assessment__error {
+    display: grid;
+    gap: 0.35rem;
+    padding: 0.9rem 1rem;
+    border-radius: 0.5rem;
+}
+
+.retention-assessment__notice {
+    border: 1px solid #f0b429;
+    background: #fffaeb;
+    color: #533f03;
+}
+
+.retention-assessment__error {
+    border: 1px solid #fda29b;
+    background: #fef3f2;
+    color: #912018;
+}
+
+.retention-assessment__result {
+    display: grid;
+    gap: 1.5rem;
+}
+
+.retention-assessment__summary,
+.retention-assessment__policy,
+.retention-assessment__category {
+    padding: 1rem;
+    border: 1px solid #d0d5dd;
+    border-radius: 0.65rem;
+    background: #fff;
+}
+
+.retention-assessment__summary p:last-child,
+.retention-assessment__category p:last-child {
+    margin-bottom: 0;
+}
+
+.retention-assessment__policy,
+.retention-assessment__counts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+    gap: 0.8rem 1.25rem;
+    margin: 0;
+}
+
+.retention-assessment__policy > div,
+.retention-assessment__counts > div {
+    min-width: 0;
+}
+
+.retention-assessment__policy dt,
+.retention-assessment__counts dt {
+    color: #475467;
+    font-size: 0.9rem;
+}
+
+.retention-assessment__policy dd,
+.retention-assessment__counts dd {
+    margin: 0.25rem 0 0;
+    font-weight: 650;
+    overflow-wrap: anywhere;
+}
+
+.retention-assessment__blockers,
+.retention-assessment__reasons {
+    display: grid;
+    gap: 0.4rem;
+    padding-left: 1.35rem;
+}
+
+.retention-assessment__categories {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+    gap: 0.85rem;
+}
+
+.retention-assessment__category {
+    min-width: 0;
+}
+
+.retention-assessment__category-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.retention-assessment__category-heading h4 {
+    margin-bottom: 0.75rem;
+    overflow-wrap: anywhere;
+}
+
+.retention-assessment__status {
+    flex: 0 0 auto;
+    padding: 0.2rem 0.5rem;
+    border: 1px solid #98a2b3;
+    border-radius: 999px;
+    color: #344054;
+    font-size: 0.8rem;
+    font-weight: 650;
+}
+
+.retention-assessment__status--assessed {
+    border-color: #6ce9a6;
+    background: #ecfdf3;
+    color: #05603a;
+}
+
+.retention-assessment__status--source_unavailable {
+    border-color: #fda29b;
+    background: #fef3f2;
+    color: #912018;
+}
+
+.retention-assessment__status--not_evaluated {
+    border-color: #d0d5dd;
+    background: #f2f4f7;
+    color: #344054;
+}
+
+.retention-assessment__counts {
+    grid-template-columns: 1fr;
+    gap: 0.55rem;
+    margin: 0.5rem 0;
+}
+
+.retention-assessment__counts small {
+    display: block;
+    margin-top: 0.15rem;
+    color: #475467;
+    font-size: 0.8rem;
+    font-weight: 400;
+}
+
+.retention-assessment__lower-bound {
+    color: #7a2e0e;
+}
+
+.retention-assessment__fact,
+.retention-assessment__observed {
+    margin: 0.55rem 0 0;
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
+}
+
+.retention-assessment__reasons {
+    margin-bottom: 0;
+    color: #475467;
+    font-size: 0.9rem;
+}
+
+@media (max-width: 40rem) {
+    .retention-assessment__header {
+        display: grid;
+    }
+
+    .retention-assessment__refresh {
+        width: 100%;
+    }
+
+    .retention-assessment__category-heading {
+        display: grid;
+    }
+
+    .retention-assessment__status {
+        justify-self: start;
+    }
+}
