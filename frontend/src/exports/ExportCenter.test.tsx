@@ -907,6 +907,72 @@ describe('ExportCenter DOM interactions', () => {
         expect(anchorClick).toHaveBeenCalledOnce();
     });
 
+    it('clears an earlier success notice during retry, keeps 503 retryable, then reports the next success', async () => {
+        sessionStorage.setItem(
+            storedKey,
+            JSON.stringify({ tenantId, exportId: job.exportId }),
+        );
+        const createUrl = vi
+            .spyOn(URL, 'createObjectURL')
+            .mockReturnValue('blob:download-notice');
+        const anchorClick = vi
+            .spyOn(HTMLAnchorElement.prototype, 'click')
+            .mockImplementation(() => undefined);
+        let contentAttempts = 0;
+        let releaseSecondContent: ((response: Response) => void) | undefined;
+        fetchMock.mockImplementation(async (input) => {
+            const url = String(input);
+            if (url.endsWith(`/exports/${job.exportId}`))
+                return jobResponse('AVAILABLE', '"4"');
+            if (url.endsWith('/download-token'))
+                return jsonResponse({ downloadHandle: 'h'.repeat(40) });
+            if (url.endsWith('/content')) {
+                contentAttempts++;
+                if (contentAttempts === 2) {
+                    return new Promise((resolve) => {
+                        releaseSecondContent = resolve;
+                    });
+                }
+                return new Response('valid export content', {
+                    status: 200,
+                    headers: { 'Content-Type': 'text/csv' },
+                });
+            }
+            throw new Error(`Unexpected request ${url}`);
+        });
+        await mount();
+
+        await click(button(container, 'Baixar arquivo'));
+        await flushPromises();
+        expect(container.textContent).toContain('Download iniciado');
+        expect(anchorClick).toHaveBeenCalledOnce();
+        expect(createUrl).toHaveBeenCalledOnce();
+
+        await click(button(container, 'Baixar arquivo'));
+        await flushPromises();
+        expect(contentAttempts).toBe(2);
+        expect(container.textContent).not.toContain('Download iniciado');
+        expect(button(container, 'Baixar arquivo').disabled).toBe(true);
+
+        releaseSecondContent?.(emptyResponse(503));
+        await flushPromises();
+        expect(
+            container.querySelector('[role="alert"]')?.textContent,
+        ).toContain('HTTP 503');
+        expect(container.textContent).not.toContain('Download iniciado');
+        expect(container.textContent).toContain('Arquivo disponível');
+        expect(button(container, 'Baixar arquivo').disabled).toBe(false);
+        expect(anchorClick).toHaveBeenCalledOnce();
+        expect(createUrl).toHaveBeenCalledOnce();
+
+        await click(button(container, 'Baixar arquivo'));
+        await flushPromises();
+        expect(contentAttempts).toBe(3);
+        expect(anchorClick).toHaveBeenCalledTimes(2);
+        expect(createUrl).toHaveBeenCalledTimes(2);
+        expect(container.textContent).toContain('Download iniciado');
+    });
+
     it('ignores an older polling response after a newer manual refresh wins', async () => {
         sessionStorage.setItem(
             storedKey,
