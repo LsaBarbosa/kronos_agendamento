@@ -1,0 +1,390 @@
+groups:
+  - name: agd052-application
+    interval: 15s
+    rules:
+      - alert: KronosApplicationScrapeUnavailable
+        expr: up{job="kronos-application"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          responsible_role: platform-operations
+          runbook: application-scrape
+        annotations:
+          summary: Endpoint Prometheus da aplicação indisponível
+          description: >-
+            O target configurado de /actuator/prometheus falha há dois minutos.
+            Sem target cadastrado não existe série e nenhuma saúde é inferida.
+          runbook_path: docs/runbooks/AGD-052/application-scrape.md
+
+      - alert: MetricsSourceUnavailable
+        expr: agd_metrics_source_available == 0 and on (instance) (up{job="kronos-application"} == 1)
+        for: 1m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Coleta de uma fonte de métricas falha
+          description: >-
+            A fonte {{ $labels.source }} reporta falha observada; gauges de negócio
+            mantêm o último sucesso e não são substituídos por zero.
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+      - alert: MetricsSourceLastSuccessStale
+        expr: |
+          (time() - agd_metrics_source_last_success_timestamp_seconds > 120)
+          and on (instance) (up{job="kronos-application"} == 1)
+        for: 1m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Último sucesso de coleta está obsoleto
+          description: "A fonte {{ $labels.source }} está sem coleta completa bem-sucedida há mais de dois minutos."
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+      - alert: MetricsSourceStateMissingPostgresql
+        expr: |
+          label_replace(up{job="kronos-application"} == 1, "source", "postgresql", "job", ".*")
+          unless on (instance, source) agd_metrics_source_available{source="postgresql"}
+        for: 3m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Estado da fonte PostgreSQL ausente
+          description: >-
+            A instância é scrapeada, mas não expõe estado da fonte. Ausência não é
+            zero nem coleta saudável.
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+      - alert: MetricsSourceLastSuccessMissingPostgresql
+        expr: |
+          label_replace(up{job="kronos-application"} == 1, "source", "postgresql", "job", ".*")
+          unless on (instance, source) agd_metrics_source_last_success_timestamp_seconds{source="postgresql"}
+        for: 3m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Fonte PostgreSQL nunca concluiu coleta
+          description: Ausência de timestamp de sucesso não é contagem zero.
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+      - alert: MetricsSourceLastSuccessMissingAppointments
+        expr: |
+          label_replace(up{job="kronos-application"} == 1, "source", "appointments", "job", ".*")
+          unless on (instance, source) agd_metrics_source_last_success_timestamp_seconds{source="appointments"}
+        for: 3m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Fonte appointments nunca concluiu coleta
+          description: Ausência de timestamp de sucesso não é contagem zero.
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+      - alert: MetricsSourceLastSuccessMissingOutbox
+        expr: |
+          label_replace(up{job="kronos-application"} == 1, "source", "outbox", "job", ".*")
+          unless on (instance, source) agd_metrics_source_last_success_timestamp_seconds{source="outbox"}
+        for: 3m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Fonte outbox nunca concluiu coleta
+          description: Ausência de timestamp de sucesso não é contagem zero.
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+      - alert: MetricsSourceLastSuccessMissingNotifications
+        expr: |
+          label_replace(up{job="kronos-application"} == 1, "source", "notifications", "job", ".*")
+          unless on (instance, source) agd_metrics_source_last_success_timestamp_seconds{source="notifications"}
+        for: 3m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Fonte notifications nunca concluiu coleta
+          description: Ausência de timestamp de sucesso não é contagem zero.
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+      - alert: MetricsSourceLastSuccessMissingSubscriptions
+        expr: |
+          label_replace(up{job="kronos-application"} == 1, "source", "subscriptions", "job", ".*")
+          unless on (instance, source) agd_metrics_source_last_success_timestamp_seconds{source="subscriptions"}
+        for: 3m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Fonte subscriptions nunca concluiu coleta
+          description: Ausência de timestamp de sucesso não é contagem zero.
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+      - alert: MetricsSourceLastSuccessMissingExports
+        expr: |
+          label_replace(up{job="kronos-application"} == 1, "source", "exports", "job", ".*")
+          unless on (instance, source) agd_metrics_source_last_success_timestamp_seconds{source="exports"}
+        for: 3m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Fonte exports nunca concluiu coleta
+          description: Ausência de timestamp de sucesso não é contagem zero.
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+      - alert: MetricsSourceStateMissingAppointments
+        expr: |
+          label_replace(up{job="kronos-application"} == 1, "source", "appointments", "job", ".*")
+          unless on (instance, source) agd_metrics_source_available{source="appointments"}
+        for: 3m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Estado da fonte appointments ausente
+          description: >-
+            A instância é scrapeada, mas não expõe estado da fonte. Ausência não é
+            zero nem coleta saudável.
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+      - alert: MetricsSourceStateMissingOutbox
+        expr: |
+          label_replace(up{job="kronos-application"} == 1, "source", "outbox", "job", ".*")
+          unless on (instance, source) agd_metrics_source_available{source="outbox"}
+        for: 3m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Estado da fonte outbox ausente
+          description: >-
+            A instância é scrapeada, mas não expõe estado da fonte. Ausência não é
+            zero nem coleta saudável.
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+      - alert: MetricsSourceStateMissingNotifications
+        expr: |
+          label_replace(up{job="kronos-application"} == 1, "source", "notifications", "job", ".*")
+          unless on (instance, source) agd_metrics_source_available{source="notifications"}
+        for: 3m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Estado da fonte notifications ausente
+          description: >-
+            A instância é scrapeada, mas não expõe estado da fonte. Ausência não é
+            zero nem coleta saudável.
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+      - alert: MetricsSourceStateMissingSubscriptions
+        expr: |
+          label_replace(up{job="kronos-application"} == 1, "source", "subscriptions", "job", ".*")
+          unless on (instance, source) agd_metrics_source_available{source="subscriptions"}
+        for: 3m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Estado da fonte subscriptions ausente
+          description: >-
+            A instância é scrapeada, mas não expõe estado da fonte. Ausência não é
+            zero nem coleta saudável.
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+      - alert: MetricsSourceStateMissingExports
+        expr: |
+          label_replace(up{job="kronos-application"} == 1, "source", "exports", "job", ".*")
+          unless on (instance, source) agd_metrics_source_available{source="exports"}
+        for: 3m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Estado da fonte exports ausente
+          description: >-
+            A instância é scrapeada, mas não expõe estado da fonte. Ausência não é
+            zero nem coleta saudável.
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+  - name: agd052-api-and-workers
+    interval: 15s
+    rules:
+      - alert: ApiServerErrorRatioHigh
+        expr: |
+          (sum(rate(http_server_requests_seconds_count{status=~"5.."}[5m]))
+            / sum(rate(http_server_requests_seconds_count[5m])) > 0.05)
+          and (sum(rate(http_server_requests_seconds_count[5m])) > 0)
+        for: 5m
+        labels:
+          severity: warning
+          responsible_role: application-operations
+          runbook: api-errors
+        annotations:
+          summary: Proporção de respostas HTTP 5xx acima de 5%
+          description: >-
+            O limiar local de demonstração é 5% por cinco minutos com tráfego
+            observado; não é SLO nem SLA.
+          runbook_path: docs/runbooks/AGD-052/api-errors.md
+
+      - alert: WorkerEnabledWithoutProgress
+        expr: |
+          (
+            (
+              (time() - agd_worker_progress_timestamp_seconds > 300)
+              or
+              (
+              agd_worker_configuration{state="enabled"} == 1
+              unless on (worker, instance) agd_worker_progress_timestamp_seconds
+              )
+            )
+            and on (worker, instance)
+              (agd_worker_configuration{state="enabled"} == 1)
+          )
+          and on (worker)
+            (max by (worker) (agd_workers_backlog_eligible) > 0)
+        for: 2m
+        labels:
+          severity: warning
+          responsible_role: application-operations
+          runbook: worker-progress
+        annotations:
+          summary: Worker habilitado sem progresso com itens elegíveis
+          description: >-
+            O limiar local é cinco minutos sem progresso mais dois minutos de
+            persistência do alerta. Exige estado enabled e backlog maior que zero.
+          runbook_path: docs/runbooks/AGD-052/worker-progress.md
+
+      - alert: WorkerEligibleBacklogOld
+        expr: |
+          (max by (worker) (agd_workers_backlog_oldest_age_seconds) > 600)
+          and on (worker) (max by (worker) (agd_workers_backlog_eligible) > 0)
+          and on (worker)
+            (max by (worker) (agd_worker_configuration{state="enabled"} == 1) == 1)
+        for: 5m
+        labels:
+          severity: warning
+          responsible_role: application-operations
+          runbook: worker-backlog
+        annotations:
+          summary: Item elegível de worker com idade superior a dez minutos
+          description: >-
+            O limiar local é idade acima de dez minutos por cinco minutos. Backlog
+            e idade globais duplicados entre instâncias usam max por worker, nunca sum.
+          runbook_path: docs/runbooks/AGD-052/worker-backlog.md
+
+      - alert: WorkerRepeatedExecutionFailures
+        expr: |
+          (sum by (worker) (increase(agd_worker_executions_total{result="failed",worker=~"outbox|reminders|subscription_dunning|trial_expiry"}[10m])) >= 3)
+          and on (worker) (max by (worker) (agd_workers_backlog_eligible) > 0)
+          and on (worker)
+            (max by (worker) (agd_worker_configuration{state="enabled"} == 1) == 1)
+        for: 2m
+        labels:
+          severity: warning
+          responsible_role: application-operations
+          runbook: worker-backlog
+        annotations:
+          summary: Worker acumula três ciclos com falha em dez minutos
+          description: >-
+            Contador por processo usa increase para tolerar reset/restart; o alerta
+            exige worker habilitado e trabalho elegível no snapshot atual.
+          runbook_path: docs/runbooks/AGD-052/worker-backlog.md
+
+  - name: agd052-reconciliation
+    interval: 15s
+    rules:
+      - alert: FinancialOutcomeUnknownPending
+        expr: max by (subsystem) (agd_reconciliation_outcome_unknown{subsystem="payments"}) > 0
+        for: 1m
+        labels:
+          severity: critical
+          responsible_role: financial-operations
+          runbook: financial-reconciliation
+        annotations:
+          summary: Resultado financeiro ambíguo aguarda reconciliação
+          description: >-
+            O gauge global persistido é reduzido com max, não soma. Não autoriza
+            cobrança nova, retry cego nem inferência de pagamento.
+          runbook_path: docs/runbooks/AGD-052/financial-reconciliation.md
+
+      - alert: NotificationOutcomeUnknownPending
+        expr: max by (subsystem) (agd_reconciliation_outcome_unknown{subsystem="notifications"}) > 0
+        for: 1m
+        labels:
+          severity: warning
+          responsible_role: notification-operations
+          runbook: notification-reconciliation
+        annotations:
+          summary: Resultado de notificação ambíguo aguarda reconciliação
+          description: >-
+            Contagem de estado persistido quando suportada. Aceite do transporte
+            não significa entrega; não repetir mensagem às cegas.
+          runbook_path: docs/runbooks/AGD-052/notification-reconciliation.md
+
+      - alert: ExportOutcomeUnknownPending
+        expr: max by (subsystem) (agd_reconciliation_outcome_unknown{subsystem="exports"}) > 0
+        for: 1m
+        labels:
+          severity: warning
+          responsible_role: export-operations
+          runbook: export-reconciliation
+        annotations:
+          summary: Resultado de exportação ambíguo aguarda reconciliação
+          description: >-
+            Contagem de estado persistido quando suportada; preserve o job e não
+            crie nova identidade de exportação para contornar resultado incerto.
+          runbook_path: docs/runbooks/AGD-052/export-reconciliation.md
+
+      - alert: NotificationWorkerRepeatedFailures
+        expr: |
+          (sum by (worker) (increase(agd_worker_executions_total{worker="notifications",result="failed"}[10m])) >= 3)
+          and on (worker) (max by (worker) (agd_workers_backlog_eligible) > 0)
+          and on (worker)
+            (max by (worker) (agd_worker_configuration{state="enabled"} == 1) == 1)
+        for: 2m
+        labels:
+          severity: warning
+          responsible_role: notification-operations
+          runbook: notification-reconciliation
+        annotations:
+          summary: Worker de notificações falha repetidamente com itens elegíveis
+          description: >-
+            Alerta sobre ciclos do worker, não sobre entrega de mensagens. Exige
+            trabalho elegível e estado enabled; fornecedor continua independente.
+          runbook_path: docs/runbooks/AGD-052/notification-reconciliation.md
+
+      - alert: ExportWorkerRepeatedFailures
+        expr: |
+          (sum by (worker) (increase(agd_worker_executions_total{worker="exports",result="failed"}[10m])) >= 3)
+          and on (worker) (max by (worker) (agd_workers_backlog_eligible) > 0)
+          and on (worker)
+            (max by (worker) (agd_worker_configuration{state="enabled"} == 1) == 1)
+        for: 2m
+        labels:
+          severity: warning
+          responsible_role: export-operations
+          runbook: export-reconciliation
+        annotations:
+          summary: Worker de exportação falha repetidamente com itens elegíveis
+          description: >-
+            Alerta sobre ciclos do worker, não sobre falha final de cada job. Exige
+            trabalho elegível e estado enabled.
+          runbook_path: docs/runbooks/AGD-052/export-reconciliation.md
