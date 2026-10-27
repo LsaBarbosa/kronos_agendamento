@@ -1,6 +1,6 @@
 # AGD-052 — Contrato compartilhado de métricas
 
-Versão 1.1 — 2026-10-26. Base de implementação: `d453c1dc8853a6762039e2b5209065de9b0963b2`.
+Versão 1.2 — 2026-10-27. Base de implementação: `d453c1dc8853a6762039e2b5209065de9b0963b2`.
 
 Este contrato descreve nomes Micrometer e nomes normalizados no exposition Prometheus. Métricas não são API de tenant nem fonte de decisão de negócio. Todos os nomes abaixo têm prefixo `agd.` no Micrometer; o Prometheus exporter normaliza pontos para sublinhados.
 
@@ -48,7 +48,7 @@ Workers permitidos: `outbox`, `reminders`, `notifications`, `subscription_dunnin
 | `agd.worker.heartbeat.timestamp` | `agd_worker_heartbeat_timestamp_seconds` | Gauge, epoch seconds | `worker` | Última execução do ciclo de polling, inclusive sem trabalho. Não é progresso. Ausência de série significa nunca amostrado/instrumentado, não zero saudável. |
 | `agd.worker.progress.timestamp` | `agd_worker_progress_timestamp_seconds` | Gauge, epoch seconds | `worker` | Última mudança persistida ou etapa completada pelo worker. Não avança em ciclo no-work. Ausência de amostra é distinta de valor zero. |
 | `agd.worker.configuration` | `agd_worker_configuration` | Gauge, 0/1 | `worker,state={enabled,disabled}` | Estado efetivo one-hot, incluindo defaults já existentes. `agd.worker.configuration.present` (`agd_worker_configuration_present`, label `worker`) vale 1 quando a propriedade foi explicitamente configurada e 0 quando foi usado o default; assim ausência não se confunde com disabled. Config inválida mantém o comportamento de startup existente. |
-| `agd.workers.backlog.eligible` | `agd_workers_backlog_eligible` | Gauge, itens | `worker` | Itens persistidos atualmente elegíveis em backlog da fonte proprietária. Escopo global do banco, snapshot amostrado e duplicado entre processos. |
+| `agd.workers.backlog.eligible` | `agd_workers_backlog_eligible` | Gauge, itens | `worker={outbox,reminders,notifications,subscription_dunning,exports}` | Itens persistidos atualmente elegíveis conforme a regra de claim da fonte proprietária. Expiry de trial tem execução, mas ainda não tem projeção de backlog. Escopo global do banco, snapshot amostrado e duplicado entre processos. |
 | `agd.workers.backlog.overdue` | `agd_workers_backlog_overdue` | Gauge, itens | `worker` | Subconjunto vencido nas projeções que calculam vencimento (reminders e subscription_dunning); ausência para outros workers significa não implementado, não zero. |
 | `agd.workers.backlog.oldest_age` | `agd_workers_backlog_oldest_age_seconds` | Gauge, segundos | `worker` | Idade do item elegível mais antigo na fonte; 0 somente quando consulta bem-sucedida confirma backlog vazio. Escopo global do banco. |
 | `agd.workers.backlog.capped` | `agd_workers_backlog_capped` | Gauge, 0/1 | `worker` | 1 quando a consulta limitada observou ao menos um registro além dos 10.000 considerados; contagem e idade devem ser lidas como limitadas quando capped=1. |
@@ -59,6 +59,8 @@ Workers permitidos: `outbox`, `reminders`, `notifications`, `subscription_dunnin
 | `agd.metrics.source.collection.duration` | `agd_metrics_source_collection_duration_seconds` | Timer, segundos | `source,result` | Duração da coleta e resultado `success,timeout,error`; erro não altera último valor bom dos gauges de negócio. |
 
 Consultas são feitas pelos ciclos periódicos dos workers proprietários, nunca no caminho do scrape Prometheus. A frequência é a cadência já configurada do worker (outbox/notificações/exports têm polling curto configurável; dunning usa 60 s por default); não há collector global de 30 s. As projeções definem timeout SQL de 2 s e limitam a amostra a 10.001 linhas. Uma falha marca `sampled=1,available=0`, conserva gauges do último sucesso e freshness indica staleness. No startup, `sampled=0,available=0` significa ainda sem amostra; `last_success` só é registrada após sucesso. Falha não substitui valor por zero.
+
+Mapeamento de snapshots: outbox lê pendentes cujo próximo retry já venceu; reminders e notifications leem filas pendentes já elegíveis; cobrança exclui tentativas agendadas no futuro e inclui lease vencido; exportações leem REQUESTED/RETRY_WAIT vencidos. `overdue` existe somente para reminders e subscription_dunning. `oldest_age` usa due/next_attempt nas filas operacionais; para exportações usa created_at dos jobs elegíveis. A consulta é um snapshot individual READ COMMITTED, sem atomicidade entre fontes; last_success registra a referência de frescor em segundos de epoch UTC.
 
 Backlog/idade são projeções globais repetidas em cada processo porque as instâncias compartilham o mesmo banco. O scrape mantém `instance` para diagnóstico; consultas de cluster usam `max by (worker)` (ou escolha de uma instância saudável) para gauge global, nunca `sum`. Worker heartbeat/progress e contadores são por processo; Prometheus mantém `instance` e pode agregar corretamente os counters com `sum`/`rate`. PromQL não deve confundir o timestamp mais recente de qualquer worker com saúde de todas as instâncias.
 
@@ -76,6 +78,7 @@ As fontes de projeção desta versão são `outbox,notifications,subscriptions,e
 ## Estado, falha e interpretação
 
 - Worker `disabled` indica polling desligado; `enabled` indica somente que o scheduler existente está habilitado. `configuration.present=0` identifica defaults aplicados. Para dependências, `missing_configuration` é estado separado. Nenhum estado prova contratação, envio ou saúde do provedor.
+- Defaults efetivos de worker: outbox e exports desabilitados quando a propriedade falta; reminders/notificações, subscription_dunning e trial_expiry habilitados conforme os defaults existentes. `configuration.present=0` mantém explícita essa ausência de configuração.
 - Heartbeat avança em cada polling; progresso somente após avanço persistido; `no_work` é um ciclo válido sem itens. Um worker parado é identificado por heartbeat stale; backlog antigo é derivado de gauge elegível + idade. Ausência de amostra não será inicializada em zero para aparência saudável.
 - Erro/timeout de consulta atualiza estado da fonte e não os dados de negócio com zero. `last_success` permite freshness. Coletas são isoladas por fonte.
 - API/process counters são eventuais, locais ao processo e não duráveis. Projeções PostgreSQL são snapshots READ COMMITTED individuais, não snapshot atômico conjunto entre módulos; cada série tem seu próprio instante de coleta.
