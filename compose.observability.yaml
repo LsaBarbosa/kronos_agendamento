@@ -9,7 +9,7 @@ services:
       - --storage.tsdb.retention.time=7d
       - --web.listen-address=0.0.0.0:9090
     ports:
-      - "127.0.0.1:${AGD052_PROMETHEUS_PORT:-19090}:9090"
+      - "127.0.0.1:${AGD052_PROMETHEUS_PORT-19090}:9090"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     secrets:
@@ -33,7 +33,7 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_SERVER_DOMAIN: localhost
-      GF_SERVER_ROOT_URL: http://localhost:${AGD052_GRAFANA_PORT:-13000}/
+      GF_SERVER_ROOT_URL: ${AGD052_GRAFANA_ROOT_URL:-http://localhost:13000/}
       GF_SECURITY_COOKIE_SECURE: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
@@ -41,7 +41,7 @@ services:
       GF_PLUGINS_PREINSTALL_AUTO_UPDATE: "false"
       GF_PLUGINS_CHECK_FOR_PLUGIN_UPDATES: "false"
     ports:
-      - "127.0.0.1:${AGD052_GRAFANA_PORT:-13000}:3000"
+      - "127.0.0.1:${AGD052_GRAFANA_PORT-13000}:3000"
     volumes:
       - ./ops/observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana-data:/var/lib/grafana

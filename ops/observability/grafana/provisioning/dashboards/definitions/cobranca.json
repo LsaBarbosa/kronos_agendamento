@@ -2,7 +2,7 @@
   "id": null,
   "uid": "agd052-cobranca",
   "title": "AGD-052 · Cobrança",
-  "description": "Dashboards locais AGD-052, vinculados ao contrato compartilhado de métricas.",
+  "description": "Projeções administrativas de dependência e reconciliação previstas no contrato AGD-052 v1.2; não comprova pagamento.",
   "schemaVersion": 41,
   "version": 2,
   "editable": false,
@@ -118,8 +118,8 @@
     {
       "id": 3,
       "type": "table",
-      "title": "Itens aguardando reconciliação",
-      "description": "",
+      "title": "Configuração do reconciliador financeiro",
+      "description": "A projeção de reconciliação pendente de billing ainda não existe no contrato v1.2. Este painel mostra somente configuração da dependência.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -133,10 +133,9 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (subsystem,state) (agd_reconciliation_pending{subsystem=\"payments\"})",
+          "expr": "agd_dependency_configuration{dependency=\"payment_reconciler\"}",
           "instant": true,
-          "legendFormat": "{{state}}",
-          "format": "table"
+          "legendFormat": "{{dependency}} · {{state}}"
         }
       ],
       "fieldConfig": {
@@ -229,7 +228,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "O contrato não expõe métrica de pagamento confirmado. **Aceite de transporte não é pagamento**. Resultado ambíguo abre atenção operacional, mas não autoriza cobrança/retry paralelo."
+        "content": "O contrato v1.2 ainda não expõe a projeção de reconciliação pendente de billing. Esta view não confirma pagamento. **Aceite do transporte não é pagamento**. Resultado ambíguo exige reconciliação autorizada e não permite cobrança/retry paralelo."
       },
       "transparent": true
     },

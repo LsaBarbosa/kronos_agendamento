@@ -2,7 +2,7 @@
   "id": null,
   "uid": "agd052-workers",
   "title": "AGD-052 · Workers",
-  "description": "Dashboards locais AGD-052, vinculados ao contrato compartilhado de métricas.",
+  "description": "Dashboards locais AGD-052. Estado das projeções distingue amostra, disponibilidade, freshness e worker habilitado.",
   "schemaVersion": 41,
   "version": 2,
   "editable": false,
@@ -368,6 +368,84 @@
         "footer": {
           "show": false
         }
+      }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Estado das fontes implementadas",
+      "description": "Somente outbox, notifications, subscriptions e exports têm projeções independentes no contrato v1.2. Consulte sampled e available separadamente.",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "agd_metrics_source_sampled",
+          "instant": true,
+          "legendFormat": "{{source}} · sampled",
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "expr": "agd_metrics_source_available",
+          "instant": true,
+          "legendFormat": "{{source}} · available",
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "expr": "time() - agd_metrics_source_last_success_timestamp_seconds",
+          "instant": true,
+          "legendFormat": "{{source}} · segundos desde sucesso",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "text",
+      "title": "Como interpretar uma fonte",
+      "description": "Não converta ausência de série em zero.",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**Fonte suportada:** `outbox`, `notifications`, `subscriptions`, `exports`. `postgresql` e `appointments` não têm projeções independentes nesta versão e não são esperadas pelas regras.\n\n- `sampled=0`: ainda não houve primeira coleta.\n- `sampled=1, available=0`: houve falha observada.\n- `sampled=1, available=1`: última coleta terminou com sucesso; confira a idade do último sucesso.\n- Configuração `disabled`: o coletor está intencionalmente desabilitado e não gera alerta de fonte.\n- Sem série: fonte não implementada, target sem scrape ou contrato incompleto; investigue o contexto, nunca assuma zero."
       }
     }
   ],

@@ -1,7 +1,17 @@
 groups:
-  - name: agd052-application
+  - name: agd052-source-health
     interval: 15s
     rules:
+      - record: agd052_metrics_source_collector_enabled
+        expr: |
+          (
+            label_replace(agd_worker_configuration{worker="outbox",state="enabled"} == 1, "source", "outbox", "worker", ".*")
+            or label_replace(agd_worker_configuration{worker="notifications",state="enabled"} == 1, "source", "notifications", "worker", ".*")
+            or label_replace(agd_worker_configuration{worker="subscription_dunning",state="enabled"} == 1, "source", "subscriptions", "worker", ".*")
+            or label_replace(agd_worker_configuration{worker="exports",state="enabled"} == 1, "source", "exports", "worker", ".*")
+          )
+          and on (instance) (up{job="kronos-application"} == 1)
+
       - alert: KronosApplicationScrapeUnavailable
         expr: up{job="kronos-application"} == 0
         for: 2m
@@ -16,24 +26,72 @@ groups:
             Sem target cadastrado não existe série e nenhuma saúde é inferida.
           runbook_path: docs/runbooks/AGD-052/application-scrape.md
 
+      - alert: MetricsSourceSampleMetricMissing
+        expr: agd052_metrics_source_collector_enabled unless on (instance, source) agd_metrics_source_sampled
+        for: 3m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Série sampled da fonte esperada está ausente
+          description: >-
+            O worker da fonte está habilitado e a aplicação responde, mas o contrato
+            não expõe a série sampled para esta fonte implementada.
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+      - alert: MetricsSourceNeverSampled
+        expr: (agd_metrics_source_sampled == 0) and on (instance, source) agd052_metrics_source_collector_enabled
+        for: 3m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Fonte habilitada ainda não foi amostrada
+          description: >-
+            sampled=0 indica ausência de primeira coleta; não significa sucesso,
+            indisponibilidade observada nem contagem zero.
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
       - alert: MetricsSourceUnavailable
-        expr: agd_metrics_source_available == 0 and on (instance) (up{job="kronos-application"} == 1)
+        expr: |
+          (agd_metrics_source_sampled == 1)
+          and on (instance, source) (agd_metrics_source_available == 0)
+          and on (instance, source) agd052_metrics_source_collector_enabled
         for: 1m
         labels:
           severity: warning
           responsible_role: platform-operations
           runbook: metrics-source
         annotations:
-          summary: Coleta de uma fonte de métricas falha
+          summary: Falha observada ao coletar projeção de fonte habilitada
           description: >-
-            A fonte {{ $labels.source }} reporta falha observada; gauges de negócio
-            mantêm o último sucesso e não são substituídos por zero.
+            sampled=1 e available=0 indicam falha observada; preserve o último
+            sucesso e não substitua gauges de negócio por zero.
+          runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+      - alert: MetricsSourceLastSuccessMissing
+        expr: |
+          ((agd_metrics_source_sampled == 1)
+            and on (instance, source) agd052_metrics_source_collector_enabled)
+          unless on (instance, source) agd_metrics_source_last_success_timestamp_seconds
+        for: 3m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: metrics-source
+        annotations:
+          summary: Fonte amostrada ainda não concluiu coleta bem-sucedida
+          description: >-
+            Existe tentativa observada, mas nenhum timestamp de coleta completa
+            bem-sucedida. Consulte o resultado de coleta sem inferir valor zero.
           runbook_path: docs/runbooks/AGD-052/metrics-source.md
 
       - alert: MetricsSourceLastSuccessStale
         expr: |
           (time() - agd_metrics_source_last_success_timestamp_seconds > 120)
-          and on (instance) (up{job="kronos-application"} == 1)
+          and on (instance, source) agd052_metrics_source_collector_enabled
         for: 1m
         labels:
           severity: warning
@@ -41,187 +99,9 @@ groups:
           runbook: metrics-source
         annotations:
           summary: Último sucesso de coleta está obsoleto
-          description: "A fonte {{ $labels.source }} está sem coleta completa bem-sucedida há mais de dois minutos."
-          runbook_path: docs/runbooks/AGD-052/metrics-source.md
-
-      - alert: MetricsSourceStateMissingPostgresql
-        expr: |
-          label_replace(up{job="kronos-application"} == 1, "source", "postgresql", "job", ".*")
-          unless on (instance, source) agd_metrics_source_available{source="postgresql"}
-        for: 3m
-        labels:
-          severity: warning
-          responsible_role: platform-operations
-          runbook: metrics-source
-        annotations:
-          summary: Estado da fonte PostgreSQL ausente
           description: >-
-            A instância é scrapeada, mas não expõe estado da fonte. Ausência não é
-            zero nem coleta saudável.
-          runbook_path: docs/runbooks/AGD-052/metrics-source.md
-
-      - alert: MetricsSourceLastSuccessMissingPostgresql
-        expr: |
-          label_replace(up{job="kronos-application"} == 1, "source", "postgresql", "job", ".*")
-          unless on (instance, source) agd_metrics_source_last_success_timestamp_seconds{source="postgresql"}
-        for: 3m
-        labels:
-          severity: warning
-          responsible_role: platform-operations
-          runbook: metrics-source
-        annotations:
-          summary: Fonte PostgreSQL nunca concluiu coleta
-          description: Ausência de timestamp de sucesso não é contagem zero.
-          runbook_path: docs/runbooks/AGD-052/metrics-source.md
-
-      - alert: MetricsSourceLastSuccessMissingAppointments
-        expr: |
-          label_replace(up{job="kronos-application"} == 1, "source", "appointments", "job", ".*")
-          unless on (instance, source) agd_metrics_source_last_success_timestamp_seconds{source="appointments"}
-        for: 3m
-        labels:
-          severity: warning
-          responsible_role: platform-operations
-          runbook: metrics-source
-        annotations:
-          summary: Fonte appointments nunca concluiu coleta
-          description: Ausência de timestamp de sucesso não é contagem zero.
-          runbook_path: docs/runbooks/AGD-052/metrics-source.md
-
-      - alert: MetricsSourceLastSuccessMissingOutbox
-        expr: |
-          label_replace(up{job="kronos-application"} == 1, "source", "outbox", "job", ".*")
-          unless on (instance, source) agd_metrics_source_last_success_timestamp_seconds{source="outbox"}
-        for: 3m
-        labels:
-          severity: warning
-          responsible_role: platform-operations
-          runbook: metrics-source
-        annotations:
-          summary: Fonte outbox nunca concluiu coleta
-          description: Ausência de timestamp de sucesso não é contagem zero.
-          runbook_path: docs/runbooks/AGD-052/metrics-source.md
-
-      - alert: MetricsSourceLastSuccessMissingNotifications
-        expr: |
-          label_replace(up{job="kronos-application"} == 1, "source", "notifications", "job", ".*")
-          unless on (instance, source) agd_metrics_source_last_success_timestamp_seconds{source="notifications"}
-        for: 3m
-        labels:
-          severity: warning
-          responsible_role: platform-operations
-          runbook: metrics-source
-        annotations:
-          summary: Fonte notifications nunca concluiu coleta
-          description: Ausência de timestamp de sucesso não é contagem zero.
-          runbook_path: docs/runbooks/AGD-052/metrics-source.md
-
-      - alert: MetricsSourceLastSuccessMissingSubscriptions
-        expr: |
-          label_replace(up{job="kronos-application"} == 1, "source", "subscriptions", "job", ".*")
-          unless on (instance, source) agd_metrics_source_last_success_timestamp_seconds{source="subscriptions"}
-        for: 3m
-        labels:
-          severity: warning
-          responsible_role: platform-operations
-          runbook: metrics-source
-        annotations:
-          summary: Fonte subscriptions nunca concluiu coleta
-          description: Ausência de timestamp de sucesso não é contagem zero.
-          runbook_path: docs/runbooks/AGD-052/metrics-source.md
-
-      - alert: MetricsSourceLastSuccessMissingExports
-        expr: |
-          label_replace(up{job="kronos-application"} == 1, "source", "exports", "job", ".*")
-          unless on (instance, source) agd_metrics_source_last_success_timestamp_seconds{source="exports"}
-        for: 3m
-        labels:
-          severity: warning
-          responsible_role: platform-operations
-          runbook: metrics-source
-        annotations:
-          summary: Fonte exports nunca concluiu coleta
-          description: Ausência de timestamp de sucesso não é contagem zero.
-          runbook_path: docs/runbooks/AGD-052/metrics-source.md
-
-      - alert: MetricsSourceStateMissingAppointments
-        expr: |
-          label_replace(up{job="kronos-application"} == 1, "source", "appointments", "job", ".*")
-          unless on (instance, source) agd_metrics_source_available{source="appointments"}
-        for: 3m
-        labels:
-          severity: warning
-          responsible_role: platform-operations
-          runbook: metrics-source
-        annotations:
-          summary: Estado da fonte appointments ausente
-          description: >-
-            A instância é scrapeada, mas não expõe estado da fonte. Ausência não é
-            zero nem coleta saudável.
-          runbook_path: docs/runbooks/AGD-052/metrics-source.md
-
-      - alert: MetricsSourceStateMissingOutbox
-        expr: |
-          label_replace(up{job="kronos-application"} == 1, "source", "outbox", "job", ".*")
-          unless on (instance, source) agd_metrics_source_available{source="outbox"}
-        for: 3m
-        labels:
-          severity: warning
-          responsible_role: platform-operations
-          runbook: metrics-source
-        annotations:
-          summary: Estado da fonte outbox ausente
-          description: >-
-            A instância é scrapeada, mas não expõe estado da fonte. Ausência não é
-            zero nem coleta saudável.
-          runbook_path: docs/runbooks/AGD-052/metrics-source.md
-
-      - alert: MetricsSourceStateMissingNotifications
-        expr: |
-          label_replace(up{job="kronos-application"} == 1, "source", "notifications", "job", ".*")
-          unless on (instance, source) agd_metrics_source_available{source="notifications"}
-        for: 3m
-        labels:
-          severity: warning
-          responsible_role: platform-operations
-          runbook: metrics-source
-        annotations:
-          summary: Estado da fonte notifications ausente
-          description: >-
-            A instância é scrapeada, mas não expõe estado da fonte. Ausência não é
-            zero nem coleta saudável.
-          runbook_path: docs/runbooks/AGD-052/metrics-source.md
-
-      - alert: MetricsSourceStateMissingSubscriptions
-        expr: |
-          label_replace(up{job="kronos-application"} == 1, "source", "subscriptions", "job", ".*")
-          unless on (instance, source) agd_metrics_source_available{source="subscriptions"}
-        for: 3m
-        labels:
-          severity: warning
-          responsible_role: platform-operations
-          runbook: metrics-source
-        annotations:
-          summary: Estado da fonte subscriptions ausente
-          description: >-
-            A instância é scrapeada, mas não expõe estado da fonte. Ausência não é
-            zero nem coleta saudável.
-          runbook_path: docs/runbooks/AGD-052/metrics-source.md
-
-      - alert: MetricsSourceStateMissingExports
-        expr: |
-          label_replace(up{job="kronos-application"} == 1, "source", "exports", "job", ".*")
-          unless on (instance, source) agd_metrics_source_available{source="exports"}
-        for: 3m
-        labels:
-          severity: warning
-          responsible_role: platform-operations
-          runbook: metrics-source
-        annotations:
-          summary: Estado da fonte exports ausente
-          description: >-
-            A instância é scrapeada, mas não expõe estado da fonte. Ausência não é
-            zero nem coleta saudável.
+            O último sucesso tem mais de dois minutos para uma fonte esperada e
+            habilitada; a projeção não é um snapshot atômico entre fontes.
           runbook_path: docs/runbooks/AGD-052/metrics-source.md
 
   - name: agd052-api-and-workers

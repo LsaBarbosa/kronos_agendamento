@@ -4,12 +4,11 @@ Esta stack é isolada e de desenvolvimento. Prometheus `3.15.1` e Grafana `13.2.
 usam tags e digests oficiais de índice multiarch, com manifests `linux/amd64` e
 `linux/arm64` verificados em 2026-10-26. Não use tags móveis.
 
-O contrato consumido é o commit
-`f1e595771cf436db8c1abafa62c5b5ded76a7934`, arquivo
-`docs/observability/AGD-052-metrics.md` na branch do Terminal 2. Ele define o scrape
+O contrato integrado v1.2 em `docs/observability/AGD-052-metrics.md` define o scrape
 `GET /actuator/prometheus`, token bearer dedicado e nomes/unidades/labels usados nos
-dashboards e regras desta pasta. Essa referência não prova que o commit do contrato
-já esteja na branch `main`.
+dashboards e regras desta pasta. Ele foi publicado originalmente em
+`f1e595771cf436db8c1abafa62c5b5ded76a7934` e faz parte da base integrada desta
+correção.
 
 ## Fronteira local
 
@@ -66,14 +65,19 @@ docker compose --project-name kronos-agd052-observability \
 
 Grafana: `http://127.0.0.1:13000`; Prometheus: `http://127.0.0.1:19090`.
 `docker compose ... down` preserva os volumes nomeados. A validação descartável
-`scripts/validate-agd052-observability.sh smoke` cria stack e credenciais temporárias,
-recusa tocar um projeto preexistente e remove apenas o projeto/volumes isolados que
-ela iniciou.
+`scripts/validate-agd052-observability.sh smoke` usa nome de projeto aleatório,
+portas efêmeras e credenciais temporárias, verifica os labels de containers,
+volumes e redes antes de iniciar e remove somente recursos daquele projeto novo.
 
 ## Dados e interpretação
 
 - `application.yml` versionado contém uma lista vazia. Target ausente significa não
   configurado/não consultado; não é API saudável nem zero.
+- O contrato v1.2 tem projeções independentes somente para `outbox`,
+  `notifications`, `subscriptions` e `exports`. `postgresql` e `appointments` não
+  são fontes esperadas. Regras diferenciam série `sampled` ausente, `sampled=0`,
+  falha observada (`sampled=1,available=0`) e último sucesso obsoleto; exigem o
+  worker correspondente habilitado. Coletor desabilitado não dispara alerta.
 - Secret/token e target de dev podem ficar em `$state` fora do Git.
 - Scrape exige o token em arquivo, usa endpoint e labels do contrato, sem tenant ou
   PII. Não publicar `/actuator/metrics` nem abrir `/actuator/**`.
@@ -92,11 +96,14 @@ ela iniciou.
 ```bash
 scripts/validate-agd052-observability.sh validate
 scripts/validate-agd052-observability.sh smoke
+scripts/validate-agd052-observability.sh isolation-test
 ```
 
 `validate` roda `docker compose config`, `promtool check config`, `promtool check
-rules`, `promtool test rules` e JSON parse dos seis dashboards. `smoke` faz os mesmos
-gates, sobe somente o projeto de observabilidade, aguarda readiness por polling,
-confirma regras e datasource, confirma os seis dashboards pela API Grafana e remove
-os recursos efêmeros criados. Um teste de fixture não comprova scrape integrado do
-backend; isso exige target válido e evidência de séries reais do contrato.
+rules`, `promtool test rules`, parse JSON e conferência dos runbooks. `smoke` repete
+esses gates, usa projeto aleatório e portas Docker efêmeras ligadas a loopback,
+aguarda readiness por polling, confirma datasource e seis dashboards pela API
+Grafana e limpa somente recursos próprios. `isolation-test` cria container parado,
+volume e rede sentinela descartáveis de outro projeto, roda o smoke e prova que os
+três continuam presentes até a limpeza sentinela. Fixtures não comprovam scrape
+integrado do backend; isso exige target válido e séries reais do contrato.
