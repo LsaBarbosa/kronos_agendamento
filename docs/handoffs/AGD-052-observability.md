@@ -1,119 +1,97 @@
-# Handoff — infraestrutura de observabilidade AGD-052
+# Handoff — correções da infraestrutura AGD-052
 
-## Revisão e integração
+## Branch e comparação do handoff anterior
 
-- Worktree: `/tmp/kronos-agd052-observability`
-- Branch: `agd-052-observabilidade-infra`
-- Base exata: `d453c1dc8853a6762039e2b5209065de9b0963b2`
-- Contrato consumido: `f1e595771cf436db8c1abafa62c5b5ded76a7934`,
-  `docs/observability/AGD-052-metrics.md` na branch do Terminal 2.
-- Este contrato foi lido como artefato compartilhado; a branch do Terminal 2 e
-  seu backend não foram integrados nem modificados nesta worktree. O live scrape
-  não foi demonstrado.
+- Worktree: `/tmp/kronos-agd052-observability-fix`
+- Branch: `agd-052-observabilidade-infra-fix`
+- Base integrada: `4eac76900d17175febb4ed15b46c92d52e6498b6`
+- Infra original preservada em `/tmp/kronos-agd052-observability`, branch
+  `agd-052-observabilidade-infra`, HEAD `8969c129c8f61297190aa45cb42e082a12aa9d13`.
+- O handoff antigo foi comparado à infraestrutura integrada em
+  `f2c95bebd4d13f382026dfd66b61a016affa8da4`: `git diff` sobre Compose,
+  `ops/observability/**`, validador, runbooks e handoff não mostrou diferenças
+  de conteúdo. Os P2 eram semânticos e estavam presentes no conteúdo integrado;
+  não eram defeitos causados por SHA diferente.
+- Contrato integrado usado: AGD-052 métricas v1.2 em
+  `docs/observability/AGD-052-metrics.md`. Nenhum backend ou contrato foi editado
+  nesta branch.
 
-## Artefatos desta frente
+## Correções
 
-- `compose.observability.yaml`: projeto `kronos-agd052-observability`, rede e
-  volumes próprios; interfaces publicadas somente em `127.0.0.1:19090` e
-  `127.0.0.1:13000`; Prometheus não publica sua porta de scrape da aplicação.
-- `ops/observability/prometheus/`: scrape autenticado por bearer token em arquivo,
-  discovery inicialmente vazio, regras e testes sintéticos com `promtool`.
-- `ops/observability/grafana/`: datasource e provisioning versionados com seis
-  dashboards: API, reservas, workers, WhatsApp, cobrança e exportações.
-- `docs/runbooks/AGD-052/`: runbooks para todos os alertas; designação nominal,
-  escala e canal de plantão permanecem pendentes.
-- `scripts/validate-agd052-observability.sh`: modos `validate` e `smoke`.
-- `ops/observability/README.md`: credenciais/target locais descartáveis e uso
-  isolado da stack.
+### Estado das fontes
 
-## Imagens e escopo de rede
+O contrato v1.2 só implementa projeções independentes para `outbox`,
+`notifications`, `subscriptions` e `exports`; `postgresql` e `appointments` não
+são fontes esperadas. Regras agora mapeiam cada fonte a seu worker e exigem
+configuração `enabled` e scrape healthy. Assim:
 
-Pins oficiais por digest de índice multiarch, verificados em 2026-10-26:
+- worker/coletor desabilitado não gera alerta de fonte, inclusive outbox/exports
+  que podem estar desabilitados por default;
+- `sampled=0` gera `MetricsSourceNeverSampled` após 3 min, sem ser confundido com
+  falha;
+- série `sampled` ausente em coletor habilitado gera regra própria após 3 min;
+- `sampled=1,available=0` é falha observada e alerta após 1 min;
+- ausência de timestamp de sucesso após coleta tentada e freshness acima de 120 s
+  têm alertas distintos, ambos após 3 min/1 min respectivamente.
 
-- Prometheus `3.15.1`, `prom/prometheus`,
-  `sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2`.
-- Grafana `13.2.4`, `grafana/grafana`,
-  `sha256:dbbc38ea21103cefb50396340cd88afec779c7e070b0a7bf5a75b4ce46651d3f`.
-- Os manifests incluem `linux/amd64` e `linux/arm64`; o host validado foi
-  `x86_64`.
+Os dashboards de workers mostram `sampled`, `available`, idade do último sucesso
+e explicam as fontes suportadas. Os painéis de cobrança e exportações deixaram de
+consultar `agd_reconciliation_pending{subsystem="payments"}` e séries de
+reconciliação de exports que o contrato não publica; exibem apenas dependências
+realmente disponíveis e explicam a lacuna. Não foram adicionadas séries de
+produção para silenciar alertas; valores sintéticos existem somente em fixtures
+promtool.
 
-Referências oficiais: [release Prometheus 3.15.1](https://github.com/prometheus/prometheus/releases/tag/v3.15.1),
-[instalação Prometheus](https://prometheus.io/docs/prometheus/latest/installation/),
-[release Grafana 13.2.4](https://github.com/grafana/grafana/releases/tag/v13.2.4),
-[imagem Docker Grafana](https://grafana.com/docs/grafana/latest/setup-grafana/installation/docker/)
-e [provisioning Grafana](https://grafana.com/docs/grafana/latest/administration/provisioning/).
+### Isolamento de cleanup
 
-Não há Alertmanager nem destino real de notificação. Rede bridge é necessária
-para o Docker publicar as portas; os binds loopback limitam o acesso ao host
-local. O Grafana tem signup/anônimo, analytics, pré-instalação e atualização de
-plugins desabilitados. Nenhum provedor WhatsApp/financeiro ou storage externo é
-configurado pela stack.
+Cada modo `smoke` gera um nome aleatório de projeto Compose e deixa Docker alocar
+portas efêmeras em binds `127.0.0.1`. Nomes de volumes e rede derivam do projeto.
+Antes de subir, o script procura containers, volumes e redes com a label exata do
+novo projeto e recusa qualquer colisão. Cleanup usa somente esse project name.
 
-## Contrato, painéis e interpretação
+`isolation-test` cria um container parado, um volume e uma rede sentinela de um
+projeto descartável próprio; executa o smoke em outro projeto aleatório e verifica
+que o ID/estado do container e os dois recursos continuam presentes. Só então
+remove os recursos que o próprio teste sentinela criou.
 
-Os nomes, unidades, fontes e labels de negócio vêm somente do SHA do contrato
-acima. Prometheus usa labels de scrape `job` e `instance`; não são adicionados
-tenant, PII, IDs de reserva/cliente, referências externas, tokens, query strings,
-payloads ou mensagens de exceção. O target versionado é vazio até configuração
-local fora do Git com credencial sintética.
+## Validação executada
 
-Contadores são analisados com `rate`/`increase`. Backlog, idade e reconciliações
-globais repetidos por instância são agregados por `max by(...)`, nunca somados.
-Os painéis distinguem ausência/fonte indisponível/valor zero. Aceite de transporte
-não é entrega de WhatsApp nem pagamento; ausência de fornecedor aparece como
-indisponibilidade, não como sucesso.
-
-Alertas incluem auto-scrape do Prometheus; target da aplicação indisponível;
-fonte não disponível, ausente ou obsoleta; proporção de 5xx; worker habilitado
-sem progresso somente com backlog elegível; backlog antigo; falhas repetidas de
-workers; reconciliações financeiras, de notificação e exportação em estado
-incerto. Cada regra inclui limiar, duração, severidade, papel e caminho de
-runbook. Limiares são demonstrativos, não SLO/SLA. Sem designação aprovada de
-pessoa/plantão, não há roteamento humano. Ausência total do Prometheus exige
-monitor externo e não é detectável por uma regra executada pelo próprio processo.
-
-Os alertas de reconciliação apenas refletem itens persistidos já existentes; não
-criam operações. Runbooks proíbem retry cego de cobrança ou notificação ambígua.
-Não existe métrica de entrega efetiva de WhatsApp neste contrato.
-
-## Execução reproduzível e evidência
-
-Com Docker disponível, a partir da raiz desta worktree:
+Comandos, todos aprovados em 2026-10-27:
 
 ```bash
 scripts/validate-agd052-observability.sh validate
 scripts/validate-agd052-observability.sh smoke
+scripts/validate-agd052-observability.sh isolation-test
+bash -n scripts/validate-agd052-observability.sh
+git diff --check
 ```
 
-Resultados executados nesta rodada:
+- `promtool check config`: configuração válida; 16 regras de contrato e 3 de
+  plataforma válidas.
+- `promtool test rules`: fixtures provaram fonte saudável, fonte não implementada
+  sem alerta, coletor disabled, startup `sampled=0`, falha observada,
+  `sampled` ausente, perda de freshness, disparo/não disparo dos workers e reset
+  de contador.
+- Parse/UID/painéis dos seis dashboards e referência existente para todos os
+  runbooks passaram.
+- Smoke subiu dois containers com projeto próprio, readiness passou, Grafana
+  retornou datasource Prometheus e os seis dashboards. Containers, volumes e rede
+  próprios foram removidos.
+- Regressão de isolamento passou: container parado, volume e rede sentinela
+  sobreviveram ao cleanup do smoke e foram removidos somente pelo cleanup
+  sentinela.
+- O Compose compartilhado e a worktree original da infraestrutura não foram
+  iniciados, modificados ou limpos.
 
-- `validate`: `docker compose config`, `promtool check config`, verificação de
-  regras e `promtool test rules` passaram. Foram validadas 24 regras de contrato,
-  3 regras de plataforma, alertas sintéticos de disparo/não disparo, fonte
-  ausente/indisponível, worker desabilitado/sem trabalho, reset de contador e
-  gauges globais duplicados. Os seis JSONs passaram parse/UID/painéis.
-- `smoke`: subiu somente os dois containers deste projeto com credenciais
-  aleatórias temporárias; readiness HTTP passou, datasource Prometheus foi
-  confirmado pela API Grafana e os seis dashboards foram encontrados pela API.
-  A limpeza removeu somente containers, rede e volumes efêmeros deste projeto.
-- `bash -n scripts/validate-agd052-observability.sh` e `git diff --check`
-  passaram.
-- Um smoke inicial falhou porque a rede Docker `internal` impedia publicação das
-  portas. A configuração foi corrigida para bridge com binds loopback, e o smoke
-  final passou. O Compose compartilhado não foi iniciado, reiniciado nem alterado.
+## Limites
 
-Fixtures provam regras e provisioning local, não a integração com o backend. Para
-demonstrar integração depois de incorporar o commit do contrato/backend, configure
-target file e token local autorizados, valide uma resposta real do endpoint
-`/actuator/prometheus` e confirme as séries e fontes por `job`/`instance`. Até essa
-prova, painéis sem amostras devem permanecer sem dados; não inferir zero nem saúde.
+Os testes de métricas usam fixtures; não demonstram scrape live do backend. Esse
+scrape depende da configuração local autorizada do bearer token e de target real
+do contrato v1.2. Dashboards sem série permanecem sem dados, sem inferir zero,
+disponibilidade ou implementação.
 
-## Revisão e pendências
-
-Não houve revisores independentes disponíveis nesta sessão; revisão executada
-sequencialmente pelo implementador, incluindo `promtool`, smoke real e inspeção
-do diff. Isso não é aprovação humana.
-
-Pendente: live scrape do backend integrado, nomeação de responsáveis/plantão e
-política operacional aprovada para limiares. A stack local não comprova staging,
-produção, entrega de notificações, pagamento nem SLO/SLA.
+Nenhuma revisão independente foi realizada nesta worktree; revisão sequencial
+incluiu contrato, regras, fixtures e diff. Isso não representa aprovação humana.
+Não foram executados image scans, E2E de aplicação nem CI nesta correção de
+infraestrutura. Responsáveis nominais/plantão, limites como SLO/SLA e integração
+live continuam pendentes.

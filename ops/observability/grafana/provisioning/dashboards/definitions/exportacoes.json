@@ -2,7 +2,7 @@
   "id": null,
   "uid": "agd052-exportacoes",
   "title": "AGD-052 · Exportações",
-  "description": "Dashboards locais AGD-052, vinculados ao contrato compartilhado de métricas.",
+  "description": "Estado do worker e storage de exportações. O contrato v1.2 não publica contagem de reconciliação OUTCOME_UNKNOWN para exports.",
   "schemaVersion": 41,
   "version": 2,
   "editable": false,
@@ -175,8 +175,8 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "Resultado ambíguo persistido",
-      "description": "",
+      "title": "Configuração do storage",
+      "description": "Configuração observada; missing_configuration não significa armazenamento disponível.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -190,9 +190,9 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (subsystem) (agd_reconciliation_outcome_unknown{subsystem=\"exports\"})",
+          "expr": "agd_dependency_configuration{dependency=\"export_storage\"}",
           "instant": true,
-          "legendFormat": "{{worker}}"
+          "legendFormat": "{{dependency}} · {{state}}"
         }
       ],
       "fieldConfig": {
@@ -229,8 +229,8 @@
     {
       "id": 5,
       "type": "table",
-      "title": "Reconciliação pendente",
-      "description": "",
+      "title": "Disponibilidade observada do storage",
+      "description": "Ausência de amostra permanece sem dados; não representa sucesso nem falha.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -244,10 +244,9 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (subsystem,state) (agd_reconciliation_pending{subsystem=\"exports\"})",
+          "expr": "agd_dependency_available{dependency=\"export_storage\"}",
           "instant": true,
-          "legendFormat": "{{state}}",
-          "format": "table"
+          "legendFormat": "{{dependency}}"
         }
       ],
       "fieldConfig": {
@@ -286,7 +285,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "O contrato ainda não define métricas de duração, tamanho, falha final e expiração por exportação. Não deduzir essas dimensões de ciclos do worker."
+        "content": "O contrato v1.2 não publica contagem de reconciliação OUTCOME_UNKNOWN nem pending para exports. Este painel não infere ausência como zero. Sem storage configurado, não existe confirmação de artefato; aceite de transporte não se aplica a exportação."
       },
       "transparent": true
     },

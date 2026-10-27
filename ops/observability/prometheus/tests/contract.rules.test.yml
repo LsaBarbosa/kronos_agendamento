@@ -4,112 +4,212 @@ rule_files:
 evaluation_interval: 15s
 
 tests:
-  - name: target de aplicacao ausente nao vira incidente ou zero
-    interval: 15s
-    alert_rule_test:
-      - eval_time: 5m
-        alertname: KronosApplicationScrapeUnavailable
-        exp_alerts: []
-      - eval_time: 5m
-        alertname: MetricsSourceStateMissingPostgresql
-        exp_alerts: []
-
-  - name: target configurado indisponivel e fonte falha sao distintos
-    interval: 15s
-    input_series:
-      - series: 'up{job="kronos-application", instance="app:8080"}'
-        values: "1x24"
-      - series: 'agd_metrics_source_available{job="kronos-application", instance="app:8080", source="postgresql"}'
-        values: "0x24"
-    alert_rule_test:
-      - eval_time: 45s
-        alertname: MetricsSourceUnavailable
-        exp_alerts: []
-      - eval_time: 45s
-        alertname: KronosApplicationScrapeUnavailable
-        exp_alerts: []
-      - eval_time: 1m
-        alertname: MetricsSourceUnavailable
-        exp_alerts:
-          - exp_labels:
-              job: kronos-application
-              instance: app:8080
-              source: postgresql
-              severity: warning
-              responsible_role: platform-operations
-              runbook: metrics-source
-            exp_annotations:
-              summary: Coleta de uma fonte de métricas falha
-              description: >-
-                A fonte postgresql reporta falha observada; gauges de negócio
-                mantêm o último sucesso e não são substituídos por zero.
-              runbook_path: docs/runbooks/AGD-052/metrics-source.md
-      - eval_time: 1m
-        alertname: KronosApplicationScrapeUnavailable
-        exp_alerts: []
-
-  - name: target configurado indisponivel alerta
-    interval: 15s
-    input_series:
-      - series: 'up{job="kronos-application", instance="app:8080"}'
-        values: "0x24"
-    alert_rule_test:
-      - eval_time: 1m
-        alertname: KronosApplicationScrapeUnavailable
-        exp_alerts: []
-      - eval_time: 2m
-        alertname: KronosApplicationScrapeUnavailable
-        exp_alerts:
-          - exp_labels:
-              job: kronos-application
-              instance: app:8080
-              severity: critical
-              responsible_role: platform-operations
-              runbook: application-scrape
-            exp_annotations:
-              summary: Endpoint Prometheus da aplicação indisponível
-              description: >-
-                O target configurado de /actuator/prometheus falha há dois minutos.
-                Sem target cadastrado não existe série e nenhuma saúde é inferida.
-              runbook_path: docs/runbooks/AGD-052/application-scrape.md
-
-  - name: fonte ausente nao e zero
+  - name: fontes nao implementadas nao viram fontes esperadas
     interval: 15s
     input_series:
       - series: 'up{job="kronos-application", instance="app:8080"}'
         values: "1x24"
     alert_rule_test:
-      - eval_time: 2m
-        alertname: MetricsSourceStateMissingAppointments
+      - eval_time: 5m
+        alertname: MetricsSourceSampleMetricMissing
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: MetricsSourceNeverSampled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: MetricsSourceUnavailable
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: MetricsSourceLastSuccessStale
+        exp_alerts: []
+
+  - name: fonte habilitada saudavel nao alerta
+    interval: 15s
+    input_series:
+      - series: 'up{job="kronos-application", instance="app:8080"}'
+        values: "1x40"
+      - series: 'agd_worker_configuration{job="kronos-application",instance="app:8080",worker="outbox",state="enabled"}'
+        values: "1x40"
+      - series: 'agd_worker_configuration{job="kronos-application",instance="app:8080",worker="notifications",state="enabled"}'
+        values: "1x40"
+      - series: 'agd_worker_configuration{job="kronos-application",instance="app:8080",worker="subscription_dunning",state="enabled"}'
+        values: "1x40"
+      - series: 'agd_worker_configuration{job="kronos-application",instance="app:8080",worker="exports",state="enabled"}'
+        values: "1x40"
+      - series: 'agd_metrics_source_sampled{job="kronos-application",instance="app:8080",source="outbox"}'
+        values: "1x40"
+      - series: 'agd_metrics_source_available{job="kronos-application",instance="app:8080",source="outbox"}'
+        values: "1x40"
+      - series: 'agd_metrics_source_last_success_timestamp_seconds{job="kronos-application",instance="app:8080",source="outbox"}'
+        values: "0+15x40"
+      - series: 'agd_metrics_source_sampled{job="kronos-application",instance="app:8080",source="notifications"}'
+        values: "1x40"
+      - series: 'agd_metrics_source_available{job="kronos-application",instance="app:8080",source="notifications"}'
+        values: "1x40"
+      - series: 'agd_metrics_source_last_success_timestamp_seconds{job="kronos-application",instance="app:8080",source="notifications"}'
+        values: "0+15x40"
+      - series: 'agd_metrics_source_sampled{job="kronos-application",instance="app:8080",source="subscriptions"}'
+        values: "1x40"
+      - series: 'agd_metrics_source_available{job="kronos-application",instance="app:8080",source="subscriptions"}'
+        values: "1x40"
+      - series: 'agd_metrics_source_last_success_timestamp_seconds{job="kronos-application",instance="app:8080",source="subscriptions"}'
+        values: "0+15x40"
+      - series: 'agd_metrics_source_sampled{job="kronos-application",instance="app:8080",source="exports"}'
+        values: "1x40"
+      - series: 'agd_metrics_source_available{job="kronos-application",instance="app:8080",source="exports"}'
+        values: "1x40"
+      - series: 'agd_metrics_source_last_success_timestamp_seconds{job="kronos-application",instance="app:8080",source="exports"}'
+        values: "0+15x40"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: MetricsSourceSampleMetricMissing
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: MetricsSourceNeverSampled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: MetricsSourceUnavailable
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: MetricsSourceLastSuccessMissing
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: MetricsSourceLastSuccessStale
+        exp_alerts: []
+
+  - name: coletor desabilitado e available zero sem amostra nao alertam
+    interval: 15s
+    input_series:
+      - series: 'up{job="kronos-application", instance="app:8080"}'
+        values: "1x40"
+      - series: 'agd_worker_configuration{job="kronos-application",instance="app:8080",worker="outbox",state="enabled"}'
+        values: "0x40"
+      - series: 'agd_worker_configuration{job="kronos-application",instance="app:8080",worker="outbox",state="disabled"}'
+        values: "1x40"
+      - series: 'agd_metrics_source_sampled{job="kronos-application",instance="app:8080",source="outbox"}'
+        values: "0x40"
+      - series: 'agd_metrics_source_available{job="kronos-application",instance="app:8080",source="outbox"}'
+        values: "0x40"
+      - series: 'agd_worker_configuration{job="kronos-application",instance="app:8080",worker="exports",state="enabled"}'
+        values: "0x40"
+      - series: 'agd_worker_configuration{job="kronos-application",instance="app:8080",worker="exports",state="disabled"}'
+        values: "1x40"
+      - series: 'agd_metrics_source_sampled{job="kronos-application",instance="app:8080",source="exports"}'
+        values: "0x40"
+      - series: 'agd_metrics_source_available{job="kronos-application",instance="app:8080",source="exports"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MetricsSourceNeverSampled
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: MetricsSourceUnavailable
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: MetricsSourceLastSuccessStale
+        exp_alerts: []
+
+  - name: startup sem primeira amostra e distinto de falha observada
+    interval: 15s
+    input_series:
+      - series: 'up{job="kronos-application", instance="app:8080"}'
+        values: "1x32"
+      - series: 'agd_worker_configuration{job="kronos-application",instance="app:8080",worker="subscription_dunning",state="enabled"}'
+        values: "1x32"
+      - series: 'agd_metrics_source_sampled{job="kronos-application",instance="app:8080",source="subscriptions"}'
+        values: "0x32"
+      - series: 'agd_metrics_source_available{job="kronos-application",instance="app:8080",source="subscriptions"}'
+        values: "0x32"
+    alert_rule_test:
+      - eval_time: 2m45s
+        alertname: MetricsSourceNeverSampled
         exp_alerts: []
       - eval_time: 3m
-        alertname: MetricsSourceStateMissingAppointments
+        alertname: MetricsSourceNeverSampled
         exp_alerts:
           - exp_labels:
               job: kronos-application
               instance: app:8080
-              source: appointments
+              source: subscriptions
               severity: warning
               responsible_role: platform-operations
               runbook: metrics-source
             exp_annotations:
-              summary: Estado da fonte appointments ausente
+              summary: Fonte habilitada ainda não foi amostrada
               description: >-
-                A instância é scrapeada, mas não expõe estado da fonte. Ausência não é
-                zero nem coleta saudável.
+                sampled=0 indica ausência de primeira coleta; não significa sucesso,
+                indisponibilidade observada nem contagem zero.
               runbook_path: docs/runbooks/AGD-052/metrics-source.md
+      - eval_time: 3m
+        alertname: MetricsSourceUnavailable
+        exp_alerts: []
 
-  - name: fonte disponivel com ultimo sucesso antigo alerta por freshness
+  - name: falha observada exige sampled e disponibilidade zero
     interval: 15s
     input_series:
       - series: 'up{job="kronos-application", instance="app:8080"}'
-        values: "1x24"
-      - series: 'agd_metrics_source_available{job="kronos-application", instance="app:8080", source="appointments"}'
-        values: "1x24"
-      - series: 'agd_metrics_source_last_success_timestamp_seconds{job="kronos-application", instance="app:8080", source="appointments"}'
-        values: "1x24"
+        values: "1x32"
+      - series: 'agd_worker_configuration{job="kronos-application",instance="app:8080",worker="notifications",state="enabled"}'
+        values: "1x32"
+      - series: 'agd_metrics_source_sampled{job="kronos-application",instance="app:8080",source="notifications"}'
+        values: "1x32"
+      - series: 'agd_metrics_source_available{job="kronos-application",instance="app:8080",source="notifications"}'
+        values: "0x32"
     alert_rule_test:
-      - eval_time: 2m
+      - eval_time: 45s
+        alertname: MetricsSourceUnavailable
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: MetricsSourceUnavailable
+        exp_alerts:
+          - exp_labels:
+              job: kronos-application
+              instance: app:8080
+              source: notifications
+              severity: warning
+              responsible_role: platform-operations
+              runbook: metrics-source
+            exp_annotations:
+              summary: Falha observada ao coletar projeção de fonte habilitada
+              description: >-
+                sampled=1 e available=0 indicam falha observada; preserve o último
+                sucesso e não substitua gauges de negócio por zero.
+              runbook_path: docs/runbooks/AGD-052/metrics-source.md
+      - eval_time: 3m
+        alertname: MetricsSourceLastSuccessMissing
+        exp_alerts:
+          - exp_labels:
+              job: kronos-application
+              instance: app:8080
+              source: notifications
+              severity: warning
+              responsible_role: platform-operations
+              runbook: metrics-source
+            exp_annotations:
+              summary: Fonte amostrada ainda não concluiu coleta bem-sucedida
+              description: >-
+                Existe tentativa observada, mas nenhum timestamp de coleta completa
+                bem-sucedida. Consulte o resultado de coleta sem inferir valor zero.
+              runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+  - name: perda de freshness alerta separada
+    interval: 15s
+    input_series:
+      - series: 'up{job="kronos-application", instance="app:8080"}'
+        values: "1x32"
+      - series: 'agd_worker_configuration{job="kronos-application",instance="app:8080",worker="subscription_dunning",state="enabled"}'
+        values: "1x32"
+      - series: 'agd_metrics_source_sampled{job="kronos-application",instance="app:8080",source="subscriptions"}'
+        values: "1x32"
+      - series: 'agd_metrics_source_available{job="kronos-application",instance="app:8080",source="subscriptions"}'
+        values: "1x32"
+      - series: 'agd_metrics_source_last_success_timestamp_seconds{job="kronos-application",instance="app:8080",source="subscriptions"}'
+        values: "0x32"
+    alert_rule_test:
+      - eval_time: 2m45s
+        alertname: MetricsSourceLastSuccessStale
+        exp_alerts: []
+      - eval_time: 3m
         alertname: MetricsSourceLastSuccessStale
         exp_alerts: []
       - eval_time: 3m15s
@@ -118,13 +218,45 @@ tests:
           - exp_labels:
               job: kronos-application
               instance: app:8080
-              source: appointments
+              source: subscriptions
               severity: warning
               responsible_role: platform-operations
               runbook: metrics-source
             exp_annotations:
               summary: Último sucesso de coleta está obsoleto
-              description: A fonte appointments está sem coleta completa bem-sucedida há mais de dois minutos.
+              description: >-
+                O último sucesso tem mais de dois minutos para uma fonte esperada e
+                habilitada; a projeção não é um snapshot atômico entre fontes.
+              runbook_path: docs/runbooks/AGD-052/metrics-source.md
+
+  - name: serie sampled ausente e diferente de startup sem amostra
+    interval: 15s
+    input_series:
+      - series: 'up{job="kronos-application", instance="app:8080"}'
+        values: "1x32"
+      - series: 'agd_worker_configuration{job="kronos-application",instance="app:8080",worker="outbox",state="enabled"}'
+        values: "1x32"
+    alert_rule_test:
+      - eval_time: 2m45s
+        alertname: MetricsSourceSampleMetricMissing
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: MetricsSourceSampleMetricMissing
+        exp_alerts:
+          - exp_labels:
+              job: kronos-application
+              instance: app:8080
+              worker: outbox
+              state: enabled
+              source: outbox
+              severity: warning
+              responsible_role: platform-operations
+              runbook: metrics-source
+            exp_annotations:
+              summary: Série sampled da fonte esperada está ausente
+              description: >-
+                O worker da fonte está habilitado e a aplicação responde, mas o contrato
+                não expõe a série sampled para esta fonte implementada.
               runbook_path: docs/runbooks/AGD-052/metrics-source.md
 
   - name: worker desabilitado ou sem trabalho nao alerta
