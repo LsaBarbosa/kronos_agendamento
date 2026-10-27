@@ -45,7 +45,7 @@
 - [x] Testes de portas/projeções em PostgreSQL real e de segurança/minimização passaram em `spotless:check verify`; refinamento final da projeção de notificações passou em `NotificationPipelineIT`.
 - [x] Stack de infra isolada integrada do commit autorizado `8969c129c8f61297190aa45cb42e082a12aa9d13` como `f2c95be`; validação de regras/dashboards e smoke passaram.
 - [x] Aplicação containerizada, scrape protegido, Prometheus queries, seis dashboards e alerta de aplicação indisponível foram exercitados em projeto descartável independente. Nenhum Compose compartilhado foi alterado.
-- [ ] PR draft baseado em `agd-050a-retention-assessment`, dependente do PR #28; publicação e checks remotos do SHA final.
+- [x] PR #29 draft publicado sobre `agd-050a-retention-assessment`, dependente do PR #28; checks remotos terminaram no SHA `90fe985c5ace240913c9475b165cb7a9152d025f`. Verify/frontend/E2E/secrets/CodeQL passaram; gate security segue bloqueado pelo scan Keycloak conhecido.
 
 ## Validação
 
