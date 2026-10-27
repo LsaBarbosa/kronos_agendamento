@@ -10,6 +10,11 @@ import org.springframework.stereotype.Component;
 public class UnavailableExportArtifactStore implements ExportArtifactStore {
 
   @Override
+  public boolean configured() {
+    return false;
+  }
+
+  @Override
   public boolean available() {
     return false;
   }

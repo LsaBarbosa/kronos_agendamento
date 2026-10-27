@@ -2,6 +2,8 @@ package com.appagendamento.exports.application;
 
 import com.appagendamento.exports.domain.ExportSnapshot;
 import com.appagendamento.exports.domain.ExportUnavailableException;
+import com.appagendamento.platform.api.DependencyMetrics;
+import com.appagendamento.platform.api.DependencyMetrics.Dependency;
 import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
@@ -28,6 +30,7 @@ public class ExportWorker {
   private final ExpireExports expirer;
   private final Clock clock;
   private final ObjectMapper mapper;
+  private final DependencyMetrics dependencyMetrics;
 
   public ExportWorker(
       ExportWorkerRepository repository,
@@ -38,7 +41,8 @@ public class ExportWorker {
       ConfirmExportAvailable confirmer,
       ExpireExports expirer,
       Clock clock,
-      ObjectMapper mapper) {
+      ObjectMapper mapper,
+      DependencyMetrics dependencyMetrics) {
     this.repository = repository;
     this.configuration = configuration;
     this.cryptography = cryptography;
@@ -48,6 +52,7 @@ public class ExportWorker {
     this.expirer = expirer;
     this.clock = clock;
     this.mapper = mapper;
+    this.dependencyMetrics = dependencyMetrics;
   }
 
   public boolean processOne() {
@@ -63,9 +68,11 @@ public class ExportWorker {
         return true;
       }
       if (!artifactStore.available()) {
+        dependencyMetrics.observed(Dependency.EXPORT_STORAGE, false);
         handleStorageFailure(claim, new ExportStorageException(true));
         return true;
       }
+      dependencyMetrics.observed(Dependency.EXPORT_STORAGE, true);
       if (claim.attemptCount() > RETRIES.length + 1) {
         repository.failFinal(claim, clock.instant(), "WORKER_LEASE_EXHAUSTED");
         return true;
@@ -106,6 +113,7 @@ public class ExportWorker {
     try {
       artifactStore.put(objectKey, claim.version(), encryptedArtifact);
     } catch (ExportStorageException failure) {
+      dependencyMetrics.observed(Dependency.EXPORT_STORAGE, false);
       handleStorageFailure(claim, failure);
       return true;
     }
@@ -130,6 +138,7 @@ public class ExportWorker {
           deleted++;
         }
       } catch (RuntimeException failure) {
+        dependencyMetrics.observed(Dependency.EXPORT_STORAGE, false);
         log.warn("Export cleanup failed: exportId={}", target.exportId());
       }
     }

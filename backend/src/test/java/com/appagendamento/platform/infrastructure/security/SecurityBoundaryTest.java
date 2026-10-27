@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+import com.appagendamento.appointments.api.BookingMetrics;
 import com.appagendamento.appointments.application.CancelClientAppointment;
 import com.appagendamento.appointments.application.CorrectAdministrativeNoShow;
 import com.appagendamento.appointments.application.CreateAdministrativeAppointment;
@@ -69,6 +70,7 @@ import org.springframework.boot.security.autoconfigure.SecurityAutoConfiguration
 import org.springframework.boot.security.autoconfigure.web.servlet.ServletWebSecurityAutoConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -78,6 +80,7 @@ import org.springframework.test.web.servlet.MockMvc;
   ServletWebSecurityAutoConfiguration.class
 })
 @Import({SecurityConfiguration.class, SecurityErrorWriter.class, CorrelationIdFilter.class})
+@TestPropertySource(properties = "app.observability.scrape-token=synthetic-scrape-secret")
 class SecurityBoundaryTest {
 
   @MockitoBean private PublicSubscriptionEligibility subscriptionEligibility;
@@ -119,6 +122,7 @@ class SecurityBoundaryTest {
   @MockitoBean private GetPublicService getPublicService;
   @MockitoBean private CalculateAvailabilityForDateRange calculateAvailability;
   @MockitoBean private MeterRegistry meterRegistry;
+  @MockitoBean private BookingMetrics bookingMetrics;
   @MockitoBean private ClientAccessService clientAccessService;
   @MockitoBean private GetClientAppointments getClientAppointments;
   @MockitoBean private CancelClientAppointment cancelClientAppointment;
@@ -209,6 +213,23 @@ class SecurityBoundaryTest {
   @Test
   void privateActuatorEndpointIsNotExposed() throws Exception {
     mvc.perform(get("/actuator/env")).andExpect(status().isUnauthorized());
+  }
+
+  @Test
+  void prometheusScrapeRequiresDedicatedServiceCredentialNotTenantSession() throws Exception {
+    mvc.perform(get("/actuator/prometheus")).andExpect(status().isUnauthorized());
+    mvc.perform(get("/actuator/prometheus").header("Authorization", "Bearer wrong"))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(get("/actuator/prometheus").with(user("tenant-admin")))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            get("/actuator/prometheus").header("Authorization", "Bearer synthetic-scrape-secret"))
+        .andExpect(status().isNotFound());
+    mvc.perform(
+            get("/actuator/prometheus")
+                .header("Authorization", "Bearer synthetic-scrape-secret")
+                .header("Cookie", "AGDSESSION=untrusted-session"))
+        .andExpect(status().isNotFound());
   }
 
   @Test

@@ -1,5 +1,6 @@
 package com.appagendamento.publicpage.api;
 
+import com.appagendamento.appointments.api.BookingMetrics;
 import com.appagendamento.appointments.domain.AppointmentDataUnavailableException;
 import com.appagendamento.appointments.domain.InvalidAppointmentTimeException;
 import com.appagendamento.appointments.domain.PublicAppointmentUnavailableException;
@@ -31,9 +32,12 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 public class PublicPageExceptionHandler {
 
   private final AuditCorrelationId correlationId;
+  private final BookingMetrics bookingMetrics;
 
-  public PublicPageExceptionHandler(AuditCorrelationId correlationId) {
+  public PublicPageExceptionHandler(
+      AuditCorrelationId correlationId, BookingMetrics bookingMetrics) {
     this.correlationId = correlationId;
+    this.bookingMetrics = bookingMetrics;
   }
 
   @ExceptionHandler({
@@ -92,6 +96,9 @@ public class PublicPageExceptionHandler {
   @ExceptionHandler(SlotNoLongerAvailableException.class)
   ResponseEntity<ApiErrorResponse> slotConflict(
       SlotNoLongerAvailableException exception, HttpServletRequest request) {
+    if (request.getRequestURI().matches("/api/v1/public/[^/]+/appointments")) {
+      bookingMetrics.conflict("public");
+    }
     return error(
         request,
         HttpStatus.CONFLICT,
@@ -104,6 +111,9 @@ public class PublicPageExceptionHandler {
   @ExceptionHandler(InvalidAppointmentTimeException.class)
   ResponseEntity<ApiErrorResponse> invalidAppointmentTime(
       InvalidAppointmentTimeException exception, HttpServletRequest request) {
+    if (request.getRequestURI().matches("/api/v1/public/[^/]+/appointments")) {
+      bookingMetrics.rejected("public");
+    }
     return error(
         request,
         HttpStatus.BAD_REQUEST,

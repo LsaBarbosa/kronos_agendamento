@@ -1,5 +1,6 @@
 package com.appagendamento.exports.infrastructure;
 
+import com.appagendamento.exports.application.ExportMetricsSnapshot;
 import com.appagendamento.exports.application.ExportRepository;
 import com.appagendamento.exports.application.ExportWorkerRepository;
 import com.appagendamento.exports.domain.ExportFilters;
@@ -30,6 +31,35 @@ public class PostgresExportRepository implements ExportRepository, ExportWorkerR
   public PostgresExportRepository(JdbcTemplate jdbc, ObjectMapper mapper) {
     this.jdbc = jdbc;
     this.mapper = mapper;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Optional<ExportMetricsSnapshot> metricsSnapshot(Instant asOf) {
+    jdbc.execute("SET LOCAL statement_timeout = '2s'");
+    return Optional.ofNullable(
+        jdbc.queryForObject(
+            """
+            WITH eligible AS (
+              SELECT created_at
+              FROM agendamento.export_job
+              WHERE state IN ('REQUESTED', 'RETRY_WAIT') AND next_attempt_at <= ?
+              ORDER BY next_attempt_at, created_at, export_id
+              LIMIT 10001
+            )
+            SELECT LEAST(count(*), 10000) AS eligible_count,
+                   COALESCE(greatest(0, extract(epoch FROM (? - min(created_at))))::bigint, 0)
+                     AS oldest_age_seconds,
+                   count(*) > 10000 AS capped
+            FROM eligible
+            """,
+            (row, index) ->
+                new ExportMetricsSnapshot(
+                    row.getLong("eligible_count"),
+                    row.getLong("oldest_age_seconds"),
+                    row.getBoolean("capped")),
+            Timestamp.from(asOf),
+            Timestamp.from(asOf)));
   }
 
   @Override

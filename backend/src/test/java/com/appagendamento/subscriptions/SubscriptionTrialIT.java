@@ -410,10 +410,11 @@ class SubscriptionTrialIT {
         .isTrue();
     verify(chargeTransport).submit(any());
     var metrics = dunningRepository.metricsSnapshot(NOW);
-    assertThat(metrics.backlog()).isEqualTo(2);
+    assertThat(metrics.backlog()).isZero();
     assertThat(metrics.overdue()).isZero();
     assertThat(metrics.skippedLateRecovery()).isEqualTo(1);
     assertThat(metrics.technicalAttempts()).isEqualTo(1);
+    assertThat(metrics.capped()).isFalse();
     assertThat(count("billing_dunning_cycle", tenant.tenantId())).isEqualTo(1);
     assertThat(
             jdbc.queryForObject(

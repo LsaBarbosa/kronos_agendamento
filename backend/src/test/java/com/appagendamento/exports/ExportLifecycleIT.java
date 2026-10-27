@@ -24,6 +24,7 @@ import com.appagendamento.exports.application.ExpireExport;
 import com.appagendamento.exports.application.ExportArtifactStore;
 import com.appagendamento.exports.application.ExportConfiguration;
 import com.appagendamento.exports.application.ExportWorker;
+import com.appagendamento.exports.application.ExportWorkerRepository;
 import com.appagendamento.exports.application.GetExport;
 import com.appagendamento.exports.application.IssueExportDownloadHandle;
 import com.appagendamento.exports.application.RequestExport;
@@ -106,6 +107,7 @@ class ExportLifecycleIT {
   @Autowired private DownloadExport downloadExport;
   @Autowired private ExpireExport expireExport;
   @Autowired private ExportWorker worker;
+  @Autowired private ExportWorkerRepository workerRepository;
   @Autowired private ExportConfiguration configuration;
   @Autowired private MockMvc mvc;
   @MockitoBean private ExportArtifactStore artifactStore;
@@ -162,8 +164,15 @@ class ExportLifecycleIT {
   void immutableSnapshotCsvDownloadExpiryAndAuditRemainTenantScoped() throws Exception {
     Fixture fixture = fixture("snapshot");
     String key = "export-request-" + UUID.randomUUID();
+    long eligibleBefore =
+        workerRepository.metricsSnapshot(Instant.now()).orElseThrow().eligibleCount();
     var first =
         requestExport.execute(fixture.admin(), key, ExportFormat.CSV, "APPOINTMENTS", filters());
+
+    var workerMetrics = workerRepository.metricsSnapshot(Instant.now()).orElseThrow();
+    assertThat(workerMetrics.eligibleCount()).isEqualTo(eligibleBefore + 1);
+    assertThat(workerMetrics.oldestEligibleAgeSeconds()).isGreaterThanOrEqualTo(0);
+    assertThat(workerMetrics.capped()).isFalse();
 
     assertThat(first.replayed()).isFalse();
     assertThat(first.job().state()).isEqualTo(ExportState.REQUESTED);
@@ -356,8 +365,8 @@ class ExportLifecycleIT {
   }
 
   @Test
-  void v43FreshInstallValidatesAndFlywayRerunIsIdempotent() {
-    assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("43");
+  void v44FreshInstallValidatesAndFlywayRerunIsIdempotent() {
+    assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("44");
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -487,10 +496,10 @@ class ExportLifecycleIT {
         tenantId + "/exports/" + exportId);
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(3);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("43");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("44");
     assertThat(
             migrationJdbc.queryForObject(
                 "SELECT count(*) FROM "
