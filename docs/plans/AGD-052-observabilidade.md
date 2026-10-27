@@ -41,20 +41,21 @@
 
 - [x] 2026-10-26 — Worktree `agd-052-observabilidade` criada em `/tmp/kronos-agd052`, base `d453c1dc8853a6762039e2b5209065de9b0963b2`; estado inicial limpo.
 - [x] 2026-10-26 — Plano e contrato publicados no commit inicial isolado. Implementação backend em seguida; não aguardar dashboard.
-- [ ] Instrumentação e proteção da API de scrape.
-- [ ] Testes de portas/projeções no PostgreSQL e segurança/minimização.
-- [ ] Integração aplicação → scrape → consultas → dashboard → alerta em infra descartável.
-- [ ] PR draft baseado em `agd-050a-retention-assessment`, dependente do PR #28; checks finais e revisão.
+- [x] Instrumentação e proteção da API de scrape implementadas em `3481253d36e7ab58955fd56302165bdd00593f21`.
+- [x] Testes de portas/projeções em PostgreSQL real e de segurança/minimização passaram em `spotless:check verify`; refinamento final da projeção de notificações passou em `NotificationPipelineIT`.
+- [x] Stack de infra isolada integrada do commit autorizado `8969c129c8f61297190aa45cb42e082a12aa9d13` como `f2c95be`; validação de regras/dashboards e smoke passaram.
+- [x] Aplicação containerizada, scrape protegido, Prometheus queries, seis dashboards e alerta de aplicação indisponível foram exercitados em projeto descartável independente. Nenhum Compose compartilhado foi alterado.
+- [ ] PR draft baseado em `agd-050a-retention-assessment`, dependente do PR #28; publicação e checks remotos do SHA final.
 
 ## Validação
 
 | Critério | Procedimento | Esperado | Observado |
 |---|---|---|---|
-| Rotas sem PII e labels estáveis | Teste web inspeciona timers e scrape com slug/IDs/URLs sentinela | Somente URI template, método, status/outcome/exception controlados | Pendente |
-| Reserva, replay e conflito | Testes unitários e `Appointment` IT com PostgreSQL | Replay não infla efeitos confirmados; conflitos separados | Pendente |
-| Projeções de workers | IT PostgreSQL por port proprietário | Contagem elegível/idade correta, timeout e fonte indisponível distintos de zero | Pendente |
-| Segurança de métricas | MVC/security test com admin de tenant, sem token, token inválido e token técnico | Admin não lê agregado; scrape técnico autorizado; health atual permanece público; rotas restantes negadas | Pendente |
-| Pipeline integrado | Scripts do Terminal 1 em projeto descartável | Série consultável no Prometheus, dashboard renderiza e alerta demonstra estado; sem dados reais | Pendente |
+| Rotas sem PII e labels estáveis | `DatabaseBootstrapIT` faz scrape real e envia slug/URI sentinela | Passou: URI literal não aparece; `/actuator/prometheus` protegido | E2E com tráfego sintético, sem PII |
+| Reserva, replay e conflito | `BookingMetricsTest` e suíte `verify` | Passou: replay distinto de novo efeito e resultados controlados | Contadores são por processo e não duráveis em crash |
+| Projeções de workers | `NotificationPipelineIT`, `ExportLifecycleIT`, `IdempotencyOutboxIT`, `SubscriptionTrialIT`, `TenantPersistenceIT` | Passou em PostgreSQL real; consultas limitadas/timeouts e filtros proprietários | Snapshot individual por fonte, não atômico entre módulos |
+| Segurança de métricas | `SecurityBoundaryTest`, `DatabaseBootstrapIT` | Passou: admin sem acesso, sem/errado bearer negado, token técnico aceito; rotas Actuator não autorizadas permanecem fechadas | Segredo de serviço precisa ser provisionado fora do Git |
+| Pipeline integrado | `validate`, `smoke` e execução descartável com app/Postgres/Prometheus/Grafana | Passou: scrape, séries consultáveis, dashboards, regra e alerta firing após parada sintética | Sem Alertmanager/destinatário externo; limiares não são SLO |
 
 ## Descobertas e decisões
 
