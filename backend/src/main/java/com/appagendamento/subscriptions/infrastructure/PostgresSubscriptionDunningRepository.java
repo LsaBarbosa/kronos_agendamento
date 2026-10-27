@@ -991,6 +991,13 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
           FROM agendamento.billing_dunning_attempt a
           ORDER BY a.updated_at DESC, a.attempt_id DESC
           LIMIT 10001
+        ),
+        pending_outcomes AS (
+          SELECT a.attempt_id
+          FROM agendamento.billing_dunning_attempt a
+          WHERE a.state IN ('OUTCOME_UNKNOWN', 'RECONCILING')
+          ORDER BY a.updated_at DESC, a.attempt_id DESC
+          LIMIT 10001
         )
         SELECT
           LEAST(count(*), 10000) AS backlog,
@@ -1002,15 +1009,15 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
               WHERE attempt_state IN ('SCHEDULED', 'BLOCKED_CONFIGURATION', 'RETRYABLE_NO_EFFECT')
                 AND due_at <= backlog_sample.as_of),
             0)::bigint AS oldest_overdue_seconds,
-          LEAST((SELECT count(*) FROM recent_attempts
-            WHERE attempt_state IN ('OUTCOME_UNKNOWN', 'RECONCILING')), 10000) AS outcome_unknown,
+          LEAST((SELECT count(*) FROM pending_outcomes), 10000) AS outcome_unknown,
           LEAST((SELECT count(*) FROM recent_attempts WHERE attempt_state = 'ACCEPTED'), 10000) AS accepted_transport,
           LEAST((SELECT count(*) FROM recent_attempts WHERE attempt_state = 'DECLINED'), 10000) AS declined,
           LEAST((SELECT count(*) FROM recent_attempts WHERE attempt_state = 'FAILED_FINAL'), 10000) AS failed_final,
           LEAST((SELECT count(*) FROM recent_attempts WHERE attempt_state = 'SKIPPED_LATE_RECOVERY'), 10000) AS skipped_late_recovery,
           LEAST(COALESCE((SELECT sum(technical_attempts) FROM recent_attempts), 0), 10000) AS technical_attempts,
           ((SELECT count(*) FROM backlog_sample) > 10000
-            OR (SELECT count(*) FROM recent_attempts) > 10000) AS capped
+            OR (SELECT count(*) FROM recent_attempts) > 10000
+            OR (SELECT count(*) FROM pending_outcomes) > 10000) AS capped
         FROM backlog_sample CROSS JOIN reference_time
         """,
         (row, index) ->

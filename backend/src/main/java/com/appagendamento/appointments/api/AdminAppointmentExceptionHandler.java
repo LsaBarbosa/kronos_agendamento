@@ -46,7 +46,7 @@ public class AdminAppointmentExceptionHandler {
 
   @ExceptionHandler({IllegalArgumentException.class, MethodArgumentNotValidException.class})
   ResponseEntity<ApiErrorResponse> invalidCommand(Exception exception, HttpServletRequest request) {
-    if (request.getRequestURI().matches("/api/v1/admin/appointments(?:/[^/]+/[^/]+)?")) {
+    if (isCreationRequest(request)) {
       bookingMetrics.rejected("admin");
     }
     return error(
@@ -58,7 +58,7 @@ public class AdminAppointmentExceptionHandler {
   @ExceptionHandler(AdministrativeScheduleVersionConflictException.class)
   ResponseEntity<ApiErrorResponse> scheduleConflict(
       AdministrativeScheduleVersionConflictException exception, HttpServletRequest request) {
-    bookingMetrics.conflict("admin");
+    recordCreationConflict(request);
     return error(
         HttpStatus.CONFLICT,
         "VERSION_CONFLICT",
@@ -68,7 +68,7 @@ public class AdminAppointmentExceptionHandler {
   @ExceptionHandler(AppointmentVersionConflictException.class)
   ResponseEntity<ApiErrorResponse> appointmentVersionConflict(
       AppointmentVersionConflictException exception, HttpServletRequest request) {
-    bookingMetrics.conflict("admin");
+    recordCreationConflict(request);
     return error(
         HttpStatus.CONFLICT,
         "VERSION_CONFLICT",
@@ -78,7 +78,7 @@ public class AdminAppointmentExceptionHandler {
   @ExceptionHandler(AppointmentNotReschedulableException.class)
   ResponseEntity<ApiErrorResponse> appointmentNotReschedulable(
       AppointmentNotReschedulableException exception, HttpServletRequest request) {
-    bookingMetrics.conflict("admin");
+    recordCreationConflict(request);
     return error(
         HttpStatus.CONFLICT,
         "APPOINTMENT_NOT_RESCHEDULABLE",
@@ -88,7 +88,7 @@ public class AdminAppointmentExceptionHandler {
   @ExceptionHandler(AppointmentNotConfirmedException.class)
   ResponseEntity<ApiErrorResponse> appointmentNotConfirmed(
       AppointmentNotConfirmedException exception, HttpServletRequest request) {
-    bookingMetrics.conflict("admin");
+    recordCreationConflict(request);
     return error(
         HttpStatus.CONFLICT,
         "INVALID_STATE_TRANSITION",
@@ -98,7 +98,7 @@ public class AdminAppointmentExceptionHandler {
   @ExceptionHandler(AppointmentOutcomeNotYetAllowedException.class)
   ResponseEntity<ApiErrorResponse> outcomeNotYetAllowed(
       AppointmentOutcomeNotYetAllowedException exception, HttpServletRequest request) {
-    bookingMetrics.conflict("admin");
+    recordCreationConflict(request);
     return error(
         HttpStatus.CONFLICT,
         "INVALID_STATE_TRANSITION",
@@ -108,7 +108,7 @@ public class AdminAppointmentExceptionHandler {
   @ExceptionHandler(AppointmentNoShowNotCorrectableException.class)
   ResponseEntity<ApiErrorResponse> noShowNotCorrectable(
       AppointmentNoShowNotCorrectableException exception, HttpServletRequest request) {
-    bookingMetrics.conflict("admin");
+    recordCreationConflict(request);
     return error(
         HttpStatus.CONFLICT,
         "INVALID_STATE_TRANSITION",
@@ -118,7 +118,7 @@ public class AdminAppointmentExceptionHandler {
   @ExceptionHandler(SlotNoLongerAvailableException.class)
   ResponseEntity<ApiErrorResponse> slotConflict(
       SlotNoLongerAvailableException exception, HttpServletRequest request) {
-    bookingMetrics.conflict("admin");
+    recordCreationConflict(request);
     return error(
         HttpStatus.CONFLICT,
         "SLOT_NO_LONGER_AVAILABLE",
@@ -128,7 +128,7 @@ public class AdminAppointmentExceptionHandler {
   @ExceptionHandler(AdministrativeScheduleConflictException.class)
   ResponseEntity<ApiErrorResponse> scheduleRejected(
       AdministrativeScheduleConflictException exception, HttpServletRequest request) {
-    bookingMetrics.conflict("admin");
+    recordCreationConflict(request);
     return error(
         HttpStatus.CONFLICT,
         "ADMIN_BOOKING_POLICY_REJECTED",
@@ -177,5 +177,15 @@ public class AdminAppointmentExceptionHandler {
     return ResponseEntity.status(status)
         .header("X-Correlation-ID", traceId)
         .body(ApiErrorResponse.of(code, message, traceId));
+  }
+
+  private void recordCreationConflict(HttpServletRequest request) {
+    if (isCreationRequest(request)) {
+      bookingMetrics.conflict("admin");
+    }
+  }
+
+  private boolean isCreationRequest(HttpServletRequest request) {
+    return "/api/v1/admin/appointments".equals(request.getServletPath());
   }
 }

@@ -29,6 +29,15 @@ public class BookingMetrics {
     }
   }
 
+  public void effectConfirmed(String channel, boolean replayed, String effect) {
+    if (!replayed) {
+      meters
+          .counter(
+              "agd.appointments.booking.effects.confirmed", "channel", channel, "effect", effect)
+          .increment();
+    }
+  }
+
   public void conflict(String channel) {
     meters
         .counter("agd.appointments.booking.commands", "channel", channel, "result", "conflict")

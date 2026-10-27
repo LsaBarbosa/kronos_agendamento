@@ -53,9 +53,8 @@ public class AdminAppointmentController {
       @PathVariable UUID id,
       @RequestHeader("Idempotency-Key") @Size(min = 16, max = 128) String key,
       @Valid @RequestBody CorrectNoShowRequest request) {
-    bookingMetrics.attempt("admin");
     var result = correctNoShow.execute(actor, key, id, request.expectedVersion(), request.reason());
-    bookingMetrics.created("admin", result.replayed(), "outcome_recorded");
+    bookingMetrics.effectConfirmed("admin", result.replayed(), "outcome_recorded");
     return ResponseEntity.ok()
         .cacheControl(CacheControl.noStore())
         .header("Idempotency-Replayed", Boolean.toString(result.replayed()))
@@ -101,9 +100,8 @@ public class AdminAppointmentController {
       String key,
       AdministrativeAppointmentOutcomeRequest request,
       AppointmentOutcome outcome) {
-    bookingMetrics.attempt("admin");
     var result = transitionAppointment.execute(actor, key, outcome, request.toCommand(id));
-    bookingMetrics.created(
+    bookingMetrics.effectConfirmed(
         "admin",
         result.replayed(),
         outcome == AppointmentOutcome.CANCEL_BY_PROVIDER ? "cancelled" : "outcome_recorded");
@@ -120,9 +118,8 @@ public class AdminAppointmentController {
       @PathVariable UUID id,
       @RequestHeader("Idempotency-Key") @Size(min = 16, max = 128) String key,
       @Valid @RequestBody RescheduleAdministrativeAppointmentRequest request) {
-    bookingMetrics.attempt("admin");
     var result = rescheduleAppointment.execute(actor, key, request.toCommand(id));
-    bookingMetrics.created("admin", result.replayed(), "rescheduled");
+    bookingMetrics.effectConfirmed("admin", result.replayed(), "rescheduled");
     return ResponseEntity.ok()
         .cacheControl(CacheControl.noStore())
         .header("Idempotency-Replayed", Boolean.toString(result.replayed()))

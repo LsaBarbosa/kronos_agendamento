@@ -1,6 +1,6 @@
 # AGD-052 — Contrato compartilhado de métricas
 
-Versão 1.2 — 2026-10-27. Base de implementação: `d453c1dc8853a6762039e2b5209065de9b0963b2`.
+Versão 1.3 — 2026-10-27. Base de implementação: `d453c1dc8853a6762039e2b5209065de9b0963b2`.
 
 Este contrato descreve nomes Micrometer e nomes normalizados no exposition Prometheus. Métricas não são API de tenant nem fonte de decisão de negócio. Todos os nomes abaixo têm prefixo `agd.` no Micrometer; o Prometheus exporter normaliza pontos para sublinhados.
 
@@ -32,9 +32,11 @@ Buckets de latência são configuração de instrumentação da aplicação e pe
 
 | Micrometer | Prometheus | Tipo/unidade | Labels | Significado |
 |---|---|---|---|---|
-| `agd.appointments.booking.commands` | `agd_appointments_booking_commands_total` | Counter/eventos | `channel,result` | Tentativas terminadas em created/replay/conflict/rejected. Somatório por processo. |
+| `agd.appointments.booking.commands` | `agd_appointments_booking_commands_total` | Counter/eventos | `channel,result` | Resultados terminados em created/replay/conflict/rejected somente nos endpoints de criação administrativa/pública. Remarcação, cancelamento, conclusão, falta e correção de resultado não contam como comandos de criação. Somatório por processo. |
 | `agd.appointments.booking.attempts` | `agd_appointments_booking_attempts_total` | Counter/tentativas | `channel={public,admin}` | Entradas nos caminhos de criação pública e criação administrativa; não inclui reagendamento/cancelamento como nova reserva. |
 | `agd.appointments.booking.effects.confirmed` | `agd_appointments_booking_effects_confirmed_total` | Counter/efeitos | `channel,effect` | Efeito confirmado pelo fluxo proprietário após persistência: `created,rescheduled,cancelled,outcome_recorded`. Replay não incrementa. Não participa da transação/decisão; o incremento é feito após retorno de resultado autoritativo. |
+
+Nos snapshots financeiros, `outcome_unknown` filtra `OUTCOME_UNKNOWN`/`RECONCILING` antes do limite de 10.001 registros; até 10.000 são reportados e `capped=1` sinaliza truncamento. Pendências antigas não podem desaparecer por haver mais tentativas terminais recentes.
 
 Replay, conflito e rejeição não são efeitos confirmados. A instrumentação não refaz validação, não altera idempotência e não promete durabilidade do próprio contador em crash.
 

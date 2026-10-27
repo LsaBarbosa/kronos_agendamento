@@ -365,8 +365,8 @@ class ExportLifecycleIT {
   }
 
   @Test
-  void v44FreshInstallValidatesAndFlywayRerunIsIdempotent() {
-    assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("44");
+  void v45FreshInstallValidatesAndFlywayRerunIsIdempotent() {
+    assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("45");
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(
@@ -496,10 +496,10 @@ class ExportLifecycleIT {
         tenantId + "/exports/" + exportId);
 
     Flyway upgrade = isolatedFlyway(schema);
-    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(4);
     upgrade.validate();
     assertThat(upgrade.migrate().migrationsExecuted).isZero();
-    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("44");
+    assertThat(upgrade.info().current().getVersion().getVersion()).isEqualTo("45");
     assertThat(
             migrationJdbc.queryForObject(
                 "SELECT count(*) FROM "
