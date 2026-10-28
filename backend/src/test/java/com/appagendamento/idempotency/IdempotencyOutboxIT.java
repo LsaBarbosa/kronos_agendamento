@@ -69,6 +69,7 @@ class IdempotencyOutboxIT {
     Tenant tenant = tenant();
     AuthenticatedAdmin admin = admin(tenant.tenantId());
     String key = "rename-" + UUID.randomUUID();
+    long eligibleBefore = outbox.metricsSnapshot().orElseThrow().eligibleCount();
 
     var first = renameTenant.execute(admin, tenant.tenantId(), key, "Renomeada", 0);
     var replay = renameTenant.execute(admin, tenant.tenantId(), key, " Renomeada ", 0);
@@ -78,6 +79,10 @@ class IdempotencyOutboxIT {
     assertThat(replay.operationId()).isEqualTo(first.operationId());
     assertThat(replay.value()).isEqualTo(first.value());
     assertThat(replay.value().version()).isEqualTo(1);
+    var outboxMetrics = outbox.metricsSnapshot().orElseThrow();
+    assertThat(outboxMetrics.eligibleCount()).isEqualTo(eligibleBefore + 1);
+    assertThat(outboxMetrics.oldestEligibleAgeSeconds()).isGreaterThanOrEqualTo(0);
+    assertThat(outboxMetrics.capped()).isFalse();
     assertThat(count("audit_event", "tenant_id", tenant.tenantId(), "TENANT_RENAMED")).isEqualTo(1);
     assertThat(
             runtimeJdbc.queryForObject(

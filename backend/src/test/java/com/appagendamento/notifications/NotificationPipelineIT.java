@@ -98,6 +98,7 @@ class NotificationPipelineIT {
     assertThat(eventConsumer.processBatch()).isEqualTo(1);
     assertThat(eventConsumer.processBatch()).isZero();
     assertThat(intentCount(fixture.tenant().tenantId())).isEqualTo(1);
+    assertThat(notifications.metricsSnapshot().notificationEligibleCount()).isEqualTo(1);
 
     updateAppointment(fixture, 2, "CONFIRMED", Instant.parse("2027-01-10T11:00:00Z"));
     record(fixture, 2, "AppointmentRescheduled");
@@ -317,10 +318,13 @@ class NotificationPipelineIT {
     migrationJdbc.update(
         "UPDATE agendamento.notification_intent SET due_at = clock_timestamp() - interval '1 second', next_attempt_at = clock_timestamp() - interval '1 second' WHERE notification_id = ?",
         reminder);
-    NotificationRepository.ReminderBacklog backlog = notifications.reminderBacklog();
-    assertThat(backlog.pendingCount()).isEqualTo(1);
-    assertThat(backlog.overdueCount()).isEqualTo(1);
-    assertThat(backlog.oldestOverdueSeconds()).isGreaterThanOrEqualTo(0);
+    NotificationRepository.NotificationMetricsSnapshot backlog = notifications.metricsSnapshot();
+    assertThat(backlog.reminderEligibleCount()).isEqualTo(1);
+    assertThat(backlog.reminderOverdueCount()).isEqualTo(1);
+    assertThat(backlog.reminderOldestOverdueSeconds()).isGreaterThanOrEqualTo(0);
+    assertThat(backlog.reminderCapped()).isFalse();
+    assertThat(backlog.notificationEligibleCount()).isZero();
+    assertThat(backlog.notificationCapped()).isFalse();
     assertThat(workerWithoutTransport().processBatch()).isZero();
     assertThat(reminderState(reminder)).isEqualTo("PENDING");
     assertThat(attemptCountFor(reminder)).isZero();

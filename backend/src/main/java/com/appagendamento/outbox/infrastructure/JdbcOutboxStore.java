@@ -1,9 +1,11 @@
 package com.appagendamento.outbox.infrastructure;
 
 import com.appagendamento.outbox.api.OutboxClaim;
+import com.appagendamento.outbox.api.OutboxMetricsSnapshot;
 import com.appagendamento.outbox.api.OutboxStore;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -16,6 +18,43 @@ public class JdbcOutboxStore implements OutboxStore {
 
   public JdbcOutboxStore(JdbcTemplate jdbc) {
     this.jdbc = jdbc;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Optional<OutboxMetricsSnapshot> metricsSnapshot() {
+    jdbc.execute("SET LOCAL statement_timeout = '2s'");
+    return Optional.ofNullable(
+        jdbc.queryForObject(
+            """
+            WITH reference_time AS (SELECT clock_timestamp() AS observed_at),
+            eligible AS (
+              SELECT next_attempt_at
+              FROM agendamento.outbox_event
+              WHERE state IN ('PENDING', 'RETRY') AND next_attempt_at <= (SELECT observed_at FROM reference_time)
+              ORDER BY next_attempt_at, occurred_at, event_id
+              LIMIT 10001
+            ), reconciliation AS (
+              SELECT event_id
+              FROM agendamento.outbox_event
+              WHERE state = 'RECONCILIATION_REQUIRED'
+              ORDER BY occurred_at, event_id
+              LIMIT 10001
+            )
+            SELECT LEAST((SELECT count(*) FROM eligible), 10000) AS eligible_count,
+                   COALESCE((SELECT greatest(0, extract(epoch FROM
+                     ((SELECT observed_at FROM reference_time) - min(next_attempt_at))))::bigint
+                     FROM eligible), 0) AS oldest_age_seconds,
+                   LEAST((SELECT count(*) FROM reconciliation), 10000) AS reconciliation_count,
+                   ((SELECT count(*) FROM eligible) > 10000
+                     OR (SELECT count(*) FROM reconciliation) > 10000) AS capped
+            """,
+            (row, index) ->
+                new OutboxMetricsSnapshot(
+                    row.getLong("eligible_count"),
+                    row.getLong("oldest_age_seconds"),
+                    row.getLong("reconciliation_count"),
+                    row.getBoolean("capped"))));
   }
 
   @Override
