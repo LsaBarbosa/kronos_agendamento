@@ -2,7 +2,7 @@
   "id": null,
   "uid": "agd052-cobranca",
   "title": "AGD-052 · Cobrança",
-  "description": "Projeções administrativas de dependência e reconciliação previstas no contrato AGD-052 v1.2; não comprova pagamento.",
+  "description": "Projeções administrativas de dependência e reconciliação previstas no contrato AGD-052 v1.4; não comprova pagamento.",
   "schemaVersion": 41,
   "version": 2,
   "editable": false,
@@ -119,7 +119,7 @@
       "id": 3,
       "type": "table",
       "title": "Configuração do reconciliador financeiro",
-      "description": "A projeção de reconciliação pendente de billing ainda não existe no contrato v1.2. Este painel mostra somente configuração da dependência.",
+      "description": "A projeção de reconciliação pendente de billing ainda não existe no contrato v1.4. Este painel mostra somente configuração da dependência.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -228,7 +228,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "O contrato v1.2 ainda não expõe a projeção de reconciliação pendente de billing. Esta view não confirma pagamento. **Aceite do transporte não é pagamento**. Resultado ambíguo exige reconciliação autorizada e não permite cobrança/retry paralelo."
+        "content": "O contrato v1.4 ainda não expõe a projeção de reconciliação pendente de billing. Esta view não confirma pagamento. **Aceite do transporte não é pagamento**. Resultado ambíguo exige reconciliação autorizada e não permite cobrança/retry paralelo."
       },
       "transparent": true
     },

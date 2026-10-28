@@ -374,7 +374,7 @@
       "id": 8,
       "type": "table",
       "title": "Estado das fontes implementadas",
-      "description": "Somente outbox, notifications, subscriptions e exports têm projeções independentes no contrato v1.2. Consulte sampled e available separadamente.",
+      "description": "Somente outbox, notifications, subscriptions e exports têm projeções independentes no contrato v1.4. Consulte sampled e available separadamente.",
       "gridPos": {
         "h": 9,
         "w": 24,
@@ -402,7 +402,7 @@
         },
         {
           "refId": "C",
-          "expr": "time() - agd_metrics_source_last_success_timestamp_seconds",
+          "expr": "time() - agd_metrics_source_last_success_timestamp",
           "instant": true,
           "legendFormat": "{{source}} · segundos desde sucesso",
           "format": "table"

@@ -4,7 +4,7 @@ Esta stack é isolada e de desenvolvimento. Prometheus `3.15.1` e Grafana `13.2.
 usam tags e digests oficiais de índice multiarch, com manifests `linux/amd64` e
 `linux/arm64` verificados em 2026-10-26. Não use tags móveis.
 
-O contrato integrado v1.2 em `docs/observability/AGD-052-metrics.md` define o scrape
+O contrato integrado v1.4 em `docs/observability/AGD-052-metrics.md` define o scrape
 `GET /actuator/prometheus`, token bearer dedicado e nomes/unidades/labels usados nos
 dashboards e regras desta pasta. Ele foi publicado originalmente em
 `f1e595771cf436db8c1abafa62c5b5ded76a7934` e faz parte da base integrada desta
@@ -47,7 +47,9 @@ AGD052_PROMETHEUS_TARGET_DIR=$state/targets
 AGD052_PROMETHEUS_PORT=19090
 AGD052_GRAFANA_PORT=13000
 EOF
-chmod 600 "$state/compose.env" "$state/scrape-token" "$state/grafana-password"
+chmod 600 "$state/compose.env" "$state/grafana-password"
+# Prometheus runs without root; the parent directory stays private (0700).
+chmod 644 "$state/scrape-token"
 ```
 
 Configure o mesmo valor de `scrape-token` no processo local do backend como
@@ -73,7 +75,7 @@ volumes e redes antes de iniciar e remove somente recursos daquele projeto novo.
 
 - `application.yml` versionado contém uma lista vazia. Target ausente significa não
   configurado/não consultado; não é API saudável nem zero.
-- O contrato v1.2 tem projeções independentes somente para `outbox`,
+- O contrato v1.4 tem projeções independentes somente para `outbox`,
   `notifications`, `subscriptions` e `exports`. `postgresql` e `appointments` não
   são fontes esperadas. Regras diferenciam série `sampled` ausente, `sampled=0`,
   falha observada (`sampled=1,available=0`) e último sucesso obsoleto; exigem o

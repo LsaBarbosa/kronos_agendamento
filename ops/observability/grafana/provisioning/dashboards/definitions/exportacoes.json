@@ -2,7 +2,7 @@
   "id": null,
   "uid": "agd052-exportacoes",
   "title": "AGD-052 · Exportações",
-  "description": "Estado do worker e storage de exportações. O contrato v1.2 não publica contagem de reconciliação OUTCOME_UNKNOWN para exports.",
+  "description": "Estado do worker e storage de exportações. O contrato v1.4 não publica contagem de reconciliação OUTCOME_UNKNOWN para exports.",
   "schemaVersion": 41,
   "version": 2,
   "editable": false,
@@ -285,7 +285,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "O contrato v1.2 não publica contagem de reconciliação OUTCOME_UNKNOWN nem pending para exports. Este painel não infere ausência como zero. Sem storage configurado, não existe confirmação de artefato; aceite de transporte não se aplica a exportação."
+        "content": "O contrato v1.4 não publica contagem de reconciliação OUTCOME_UNKNOWN nem pending para exports. Este painel não infere ausência como zero. Sem storage configurado, não existe confirmação de artefato; aceite de transporte não se aplica a exportação."
       },
       "transparent": true
     },

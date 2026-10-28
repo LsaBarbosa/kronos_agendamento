@@ -23,19 +23,25 @@ grafana_password="$(openssl rand -hex 24)"
 scrape_token="$(openssl rand -hex 32)"
 umask 077
 printf '%s\n' "$scrape_token" >"$tmp_dir/scrape-token"
-chmod 600 "$tmp_dir/scrape-token"
-cat >"$env_file" <<EOF
+# Prometheus runs as an unprivileged UID. The containing temp directory is 0700;
+# make only the mounted secret readable inside the isolated Compose project.
+chmod 644 "$tmp_dir/scrape-token"
 AGD052_GRAFANA_ADMIN_USER=agd052-local-admin
-AGD052_GRAFANA_ADMIN_PASSWORD=$grafana_password
+AGD052_GRAFANA_ADMIN_PASSWORD="$grafana_password"
 AGD052_PROMETHEUS_PORT=
 AGD052_GRAFANA_PORT=
 AGD052_GRAFANA_ROOT_URL=http://localhost/
-AGD052_SCRAPE_TOKEN_FILE=$tmp_dir/scrape-token
+AGD052_SCRAPE_TOKEN_FILE="$tmp_dir/scrape-token"
+export AGD052_GRAFANA_ADMIN_USER AGD052_GRAFANA_ADMIN_PASSWORD AGD052_PROMETHEUS_PORT
+export AGD052_GRAFANA_PORT AGD052_GRAFANA_ROOT_URL AGD052_SCRAPE_TOKEN_FILE
+cat >"$env_file" <<EOF
+AGD052_GRAFANA_ADMIN_USER=$AGD052_GRAFANA_ADMIN_USER
+AGD052_GRAFANA_ADMIN_PASSWORD=$AGD052_GRAFANA_ADMIN_PASSWORD
+AGD052_PROMETHEUS_PORT=$AGD052_PROMETHEUS_PORT
+AGD052_GRAFANA_PORT=$AGD052_GRAFANA_PORT
+AGD052_GRAFANA_ROOT_URL=$AGD052_GRAFANA_ROOT_URL
 EOF
 unset grafana_password scrape_token
-set -a
-source "$env_file"
-set +a
 
 stack_started=0
 sentinel_project=""
@@ -100,9 +106,9 @@ if 'source="postgresql"' in rules or 'source="appointments"' in rules:
 if "MetricsSourceNeverSampled" not in rules or "agd_metrics_source_sampled" not in rules:
     raise SystemExit("Regras não diferenciam startup sem primeira amostra")
 if any('agd_reconciliation_pending{subsystem="payments"}' in expr for expr in expressions):
-    raise SystemExit("Dashboard consulta projeção billing.pending ausente do contrato v1.2")
+    raise SystemExit("Dashboard consulta projeção billing.pending ausente do contrato v1.4")
 if any('agd_reconciliation_outcome_unknown{subsystem="exports"}' in expr or 'agd_reconciliation_pending{subsystem="exports"}' in expr for expr in expressions):
-    raise SystemExit("Dashboard consulta reconciliação de exports não publicada no contrato v1.2")
+    raise SystemExit("Dashboard consulta reconciliação de exports não publicada no contrato v1.4")
 for path in (repo / "ops/observability/prometheus/rules").glob("*.yml"):
     for line in path.read_text(encoding="utf-8").splitlines():
         if "runbook_path:" in line:

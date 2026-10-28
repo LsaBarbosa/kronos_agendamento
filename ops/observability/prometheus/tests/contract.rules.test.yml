@@ -40,25 +40,25 @@ tests:
         values: "1x40"
       - series: 'agd_metrics_source_available{job="kronos-application",instance="app:8080",source="outbox"}'
         values: "1x40"
-      - series: 'agd_metrics_source_last_success_timestamp_seconds{job="kronos-application",instance="app:8080",source="outbox"}'
+      - series: 'agd_metrics_source_last_success_timestamp{job="kronos-application",instance="app:8080",source="outbox"}'
         values: "0+15x40"
       - series: 'agd_metrics_source_sampled{job="kronos-application",instance="app:8080",source="notifications"}'
         values: "1x40"
       - series: 'agd_metrics_source_available{job="kronos-application",instance="app:8080",source="notifications"}'
         values: "1x40"
-      - series: 'agd_metrics_source_last_success_timestamp_seconds{job="kronos-application",instance="app:8080",source="notifications"}'
+      - series: 'agd_metrics_source_last_success_timestamp{job="kronos-application",instance="app:8080",source="notifications"}'
         values: "0+15x40"
       - series: 'agd_metrics_source_sampled{job="kronos-application",instance="app:8080",source="subscriptions"}'
         values: "1x40"
       - series: 'agd_metrics_source_available{job="kronos-application",instance="app:8080",source="subscriptions"}'
         values: "1x40"
-      - series: 'agd_metrics_source_last_success_timestamp_seconds{job="kronos-application",instance="app:8080",source="subscriptions"}'
+      - series: 'agd_metrics_source_last_success_timestamp{job="kronos-application",instance="app:8080",source="subscriptions"}'
         values: "0+15x40"
       - series: 'agd_metrics_source_sampled{job="kronos-application",instance="app:8080",source="exports"}'
         values: "1x40"
       - series: 'agd_metrics_source_available{job="kronos-application",instance="app:8080",source="exports"}'
         values: "1x40"
-      - series: 'agd_metrics_source_last_success_timestamp_seconds{job="kronos-application",instance="app:8080",source="exports"}'
+      - series: 'agd_metrics_source_last_success_timestamp{job="kronos-application",instance="app:8080",source="exports"}'
         values: "0+15x40"
     alert_rule_test:
       - eval_time: 5m
@@ -203,7 +203,7 @@ tests:
         values: "1x32"
       - series: 'agd_metrics_source_available{job="kronos-application",instance="app:8080",source="subscriptions"}'
         values: "1x32"
-      - series: 'agd_metrics_source_last_success_timestamp_seconds{job="kronos-application",instance="app:8080",source="subscriptions"}'
+      - series: 'agd_metrics_source_last_success_timestamp{job="kronos-application",instance="app:8080",source="subscriptions"}'
         values: "0x32"
     alert_rule_test:
       - eval_time: 2m45s

@@ -4,7 +4,7 @@
 
 - História: AGD-052, P0, tamanho L. Base revisada: `d453c1dc8853a6762039e2b5209065de9b0963b2`.
 - Objetivo: instrumentar API, reservas e workers com métricas de cardinalidade controlada, coletar projeções persistidas com limites e timeout, proteger o scrape de métricas agregadas e integrar aplicação → Prometheus → consultas/dashboard/alertas em ambiente descartável.
-- Contrato compartilhado v1.3: [`docs/observability/AGD-052-metrics.md`](../observability/AGD-052-metrics.md). Delta: comandos/tentativas de reserva são somente criação; os efeitos de mutações seguem separados; o recorte financeiro filtra estados pendentes antes do limite de 10.001.
+- Contrato compartilhado v1.4: [`docs/observability/AGD-052-metrics.md`](../observability/AGD-052-metrics.md). Preserva v1.3 e acrescenta a série `sampled` já emitida pelo backend, limita as fontes a quatro implementadas e documenta o nome Prometheus real `agd_metrics_source_last_success_timestamp`.
 - Critérios: `docs/spec/app-agendamento-06-backlog-criterios-aceite.md`, seção AGD-052.
 
 ## Referências e limites
@@ -43,12 +43,14 @@
 - [x] 2026-10-26 — Plano e contrato publicados no commit inicial isolado. Implementação backend em seguida; não aguardar dashboard.
 - [x] Instrumentação e proteção da API de scrape implementadas em `3481253d36e7ab58955fd56302165bdd00593f21`.
 - [x] Testes de portas/projeções em PostgreSQL real e de segurança/minimização passaram em `spotless:check verify`; refinamento final da projeção de notificações passou em `NotificationPipelineIT`.
-- [x] Stack de infra isolada integrada do commit autorizado `8969c129c8f61297190aa45cb42e082a12aa9d13` como `f2c95be`; validação de regras/dashboards e smoke passaram.
-- [x] Aplicação containerizada, scrape protegido, Prometheus queries, seis dashboards e alerta de aplicação indisponível foram exercitados em projeto descartável independente. Nenhum Compose compartilhado foi alterado.
+- [x] Stack inicial integrada do commit autorizado `8969c129c8f61297190aa45cb42e082a12aa9d13` como `f2c95be`; a correção autorizada do Terminal 1 `9f948a99b42c8415836290b69b441f3dc5231e35` foi integrada sem incorporar a branch backend. Merge local: `52d22d924b6142ff79d24cbf0821d92a9b793c05`.
+- [x] Validação integrada da stack corrigida: `validate`, `smoke`, `isolation-test`, `bash -n` e `git diff --check` passaram. Regras promtool exercitam coletor disabled, série ausente/nunca amostrada, falha observada e last_success obsoleto.
+- [x] Prova live descartável: PostgreSQL 16.13 com migrations V1–V45; aplicação Spring Boot 4.1.1/JDK 21; Prometheus 3.15.1 e Grafana 13.2.4 na rede privada própria. `/actuator/prometheus` respondeu 401 sem bearer e 200 com token sintético; query PromQL observou `up=1` e contador real de `GET /api/v1/csrf`; seis dashboards foram carregados. Com a regra alinhada ao nome exportado, configuração saudável resultou em zero alertas firing.
+- [x] Falha integrada controlada por parada do app sintético e alerta `KronosApplicationScrapeUnavailable` observado após seu `for: 2m` (ver VALIDAÇÃO).
 - [x] P2 financeiro corrigido em `PostgresSubscriptionDunningRepository.metricsSnapshot`: estados de resultado ambíguo são filtrados antes do limite; V45 adiciona índice parcial sem alterar V1–V44. Regressão PostgreSQL cobre uma pendência antiga com 10.001 tentativas terminais mais recentes.
 - [x] P2 de booking corrigido: `attempts` e `commands` representam somente criação; remarcação/cancelamento/conclusão/falta/correção incrementam apenas efeito confirmado, e replay não duplica efeitos. Conflitos dessas rotas não contam como conflito de criação.
 - [x] JDK 21 `spotless:check verify` passou após as correções: 94 unitários/arquiteturais e 331 integrações PostgreSQL/Testcontainers, sem falhas, erros ou skips. Testes focais adicionais: 1 `BookingMetricsTest` e 174 integrações em quatro classes.
-- [ ] PR #29 permanece draft sobre `agd-050a-retention-assessment`, dependente do PR #28. Checks remotos do novo head pendentes. A correção de infraestrutura do Terminal 1 ainda aguarda handoff; não afirmar nova validação integrada contra essa correção.
+- [ ] PR #29 permanece draft sobre `agd-050a-retention-assessment`, dependente do PR #28. Publicação e checks remotos do head consolidado ainda pendentes.
 
 ## Validação
 
@@ -58,7 +60,7 @@
 | Reserva, replay, efeitos e conflito | `BookingMetricsTest`, `PublicAppointmentIT` e suíte `verify` | Passou: criação incrementa comandos/tentativas; mutações só efeitos confirmados; replay não duplica; conflito de remarcação não conta como criação | Contadores são por processo e não duráveis em crash |
 | Projeções de workers | `NotificationPipelineIT`, `ExportLifecycleIT`, `IdempotencyOutboxIT`, `SubscriptionTrialIT`, `TenantPersistenceIT` | Passou em PostgreSQL real; consultas limitadas/timeouts e filtros proprietários | Snapshot individual por fonte, não atômico entre módulos |
 | Segurança de métricas | `SecurityBoundaryTest`, `DatabaseBootstrapIT` | Passou: admin sem acesso, sem/errado bearer negado, token técnico aceito; rotas Actuator não autorizadas permanecem fechadas | Segredo de serviço precisa ser provisionado fora do Git |
-| Pipeline integrado | `validate`, `smoke` e execução descartável com app/Postgres/Prometheus/Grafana | Passou: scrape, séries consultáveis, dashboards, regra e alerta firing após parada sintética | Sem Alertmanager/destinatário externo; limiares não são SLO |
+| Pipeline integrado | `validate`, `smoke`, `isolation-test` e execução descartável com app/Postgres/Prometheus/Grafana | Passou: bearer 401/200, `up=1`, contador de rota consultável, seis dashboards, zero firing saudável e alerta `KronosApplicationScrapeUnavailable` após parada sintética | Sem Alertmanager/destinatário externo; limiares não são SLO |
 
 ## Descobertas e decisões
 
@@ -69,4 +71,4 @@
 
 ## Encerramento ou retomada
 
-AGD-052 segue parcial enquanto faltar handoff da correção de infraestrutura, validação conjunta de scrape/consulta/alertas e checks remotos do novo head. Retomar pelos snapshots/ports proprietários descritos acima, respeitando ownership de operações. Não iniciar outra história nem alterar configurações de produção.
+AGD-052 segue parcial até revisão e checks remotos no head consolidado. O gate de segurança conhecido no scan da imagem Keycloak permanece fora deste escopo e não foi alterado. Não iniciar outra história nem alterar configurações de produção.

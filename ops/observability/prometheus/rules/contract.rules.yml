@@ -75,7 +75,7 @@ groups:
         expr: |
           ((agd_metrics_source_sampled == 1)
             and on (instance, source) agd052_metrics_source_collector_enabled)
-          unless on (instance, source) agd_metrics_source_last_success_timestamp_seconds
+          unless on (instance, source) agd_metrics_source_last_success_timestamp
         for: 3m
         labels:
           severity: warning
@@ -90,7 +90,7 @@ groups:
 
       - alert: MetricsSourceLastSuccessStale
         expr: |
-          (time() - agd_metrics_source_last_success_timestamp_seconds > 120)
+          (time() - agd_metrics_source_last_success_timestamp > 120)
           and on (instance, source) agd052_metrics_source_collector_enabled
         for: 1m
         labels:

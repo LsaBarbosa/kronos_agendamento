@@ -1,6 +1,8 @@
 # AGD-052 — Contrato compartilhado de métricas
 
-Versão 1.3 — 2026-10-27. Base de implementação: `d453c1dc8853a6762039e2b5209065de9b0963b2`.
+Versão 1.4 — 2026-10-28. Base de implementação: `d453c1dc8853a6762039e2b5209065de9b0963b2`.
+
+Delta v1.4: explicita a série `agd.metrics.source.sampled`, já publicada pelo backend e usada pelas regras Prometheus; não altera runtime nem os nomes de séries existentes.
 
 Este contrato descreve nomes Micrometer e nomes normalizados no exposition Prometheus. Métricas não são API de tenant nem fonte de decisão de negócio. Todos os nomes abaixo têm prefixo `agd.` no Micrometer; o Prometheus exporter normaliza pontos para sublinhados.
 
@@ -56,11 +58,12 @@ Workers permitidos: `outbox`, `reminders`, `notifications`, `subscription_dunnin
 | `agd.workers.backlog.capped` | `agd_workers_backlog_capped` | Gauge, 0/1 | `worker` | 1 quando a consulta limitada observou ao menos um registro além dos 10.000 considerados; contagem e idade devem ser lidas como limitadas quando capped=1. |
 | `agd.worker.execution.duration` | `agd_worker_execution_duration_seconds` | Timer, segundos | `worker` | Duração dos ciclos instrumentados, inclusive `no_work` e falha. |
 | `agd.worker.items.processed` | `agd_worker_items_processed_total` | Counter/itens | `worker` | Itens retornados como processados pelo método proprietário; não equivale a entrega externa. |
-| `agd.metrics.source.available` | `agd_metrics_source_available` | Gauge, 0/1 | `source` | Última coleta da projeção: `postgresql`, `appointments`, `outbox`, `notifications`, `subscriptions`, `exports`. 0 é falha observada; não é contagem. |
-| `agd.metrics.source.last_success.timestamp` | `agd_metrics_source_last_success_timestamp_seconds` | Gauge, epoch seconds | `source` | Instante UTC da última coleta completa. Nunca removido/zerado em falha. Ausente indica nunca coletado. |
-| `agd.metrics.source.collection.duration` | `agd_metrics_source_collection_duration_seconds` | Timer, segundos | `source,result` | Duração da coleta e resultado `success,timeout,error`; erro não altera último valor bom dos gauges de negócio. |
+| `agd.metrics.source.available` | `agd_metrics_source_available` | Gauge, 0/1 | `source={outbox,notifications,subscriptions,exports}` | Última coleta da projeção implementada. 0 é falha observada; não é contagem. |
+| `agd.metrics.source.sampled` | `agd_metrics_source_sampled` | Gauge, 0/1 | `source={outbox,notifications,subscriptions,exports}` | 0 antes da primeira tentativa de coleta e 1 depois de qualquer resultado observado, sucesso ou falha. Distingue startup/nunca amostrado de falha. |
+| `agd.metrics.source.last_success.timestamp` | `agd_metrics_source_last_success_timestamp` | Gauge, epoch seconds | `source={outbox,notifications,subscriptions,exports}` | Instante UTC da última coleta completa. Nunca removido/zerado em falha. Ausente indica nunca coletado. Micrometer exporta o nome normalizado sem sufixo de unidade para este gauge. |
+| `agd.metrics.source.collection.duration` | `agd_metrics_source_collection_duration_seconds` | Timer, segundos | `source={outbox,notifications,subscriptions,exports}`, `result={success,timeout,error}` | Duração da coleta; erro não altera último valor bom dos gauges de negócio. |
 
-Consultas são feitas pelos ciclos periódicos dos workers proprietários, nunca no caminho do scrape Prometheus. A frequência é a cadência já configurada do worker (outbox/notificações/exports têm polling curto configurável; dunning usa 60 s por default); não há collector global de 30 s. As projeções definem timeout SQL de 2 s e limitam a amostra a 10.001 linhas. Uma falha marca `sampled=1,available=0`, conserva gauges do último sucesso e freshness indica staleness. No startup, `sampled=0,available=0` significa ainda sem amostra; `last_success` só é registrada após sucesso. Falha não substitui valor por zero.
+Consultas são feitas pelos ciclos periódicos dos workers proprietários, nunca no caminho do scrape Prometheus. A frequência é a cadência já configurada do worker (outbox/notificações/exports têm polling curto configurável; dunning usa 60 s por default); não há collector global de 30 s. As projeções definem timeout SQL de 2 s e limitam a amostra a 10.001 linhas. Uma falha marca `sampled=1,available=0`, conserva gauges do último sucesso e freshness indica staleness. No startup, `sampled=0,available=0` significa ainda sem amostra; `last_success` só é registrada após sucesso. `postgresql` e `appointments` não têm projeções independentes nesta versão e não devem ser inventadas nas regras ou dashboards. Falha não substitui valor por zero.
 
 Mapeamento de snapshots: outbox lê pendentes cujo próximo retry já venceu; reminders e notifications leem filas pendentes já elegíveis; cobrança exclui tentativas agendadas no futuro e inclui lease vencido; exportações leem REQUESTED/RETRY_WAIT vencidos. `overdue` existe somente para reminders e subscription_dunning. `oldest_age` usa due/next_attempt nas filas operacionais; para exportações usa created_at dos jobs elegíveis. A consulta é um snapshot individual READ COMMITTED, sem atomicidade entre fontes; last_success registra a referência de frescor em segundos de epoch UTC.
 

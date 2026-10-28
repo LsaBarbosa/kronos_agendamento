@@ -20,7 +20,7 @@ continuam pendentes.
 
 ## Fontes e estados
 
-O contrato v1.2 implementa projeções independentes apenas para `outbox`,
+O contrato v1.4 implementa projeções independentes apenas para `outbox`,
 `notifications`, `subscriptions` e `exports`. Os alertas associam essas fontes
 aos workers `outbox`, `notifications`, `subscription_dunning` e `exports`.
 `postgresql` e `appointments` não têm projeções independentes nesta versão e não
