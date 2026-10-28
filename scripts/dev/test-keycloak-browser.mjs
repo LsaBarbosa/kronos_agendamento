@@ -3713,8 +3713,14 @@ async function armNextAdminScheduleRefreshHold(evaluate) {
       const originalFetch = window.fetch.bind(window);
       window.__agdHeldScheduleOriginalFetch = originalFetch;
       window.__agdScheduleResponsePaused = false;
-      window.__agdScheduleResponseHold = true;
+      window.__agdScheduleResponseHold = false;
       window.__agdReleaseScheduleResponse = null;
+      const openButton = [...document.querySelectorAll('button')]
+        .find(button => button.textContent.trim() === 'Nova reserva');
+      if (!openButton) throw new Error('Admin new-booking button not found');
+      openButton.addEventListener('click', () => {
+        window.__agdScheduleResponseHold = true;
+      }, {capture: true, once: true});
       window.fetch = async (...args) => {
         const response = await originalFetch(...args);
         const request = args[0] instanceof Request ? args[0].url : args[0];
