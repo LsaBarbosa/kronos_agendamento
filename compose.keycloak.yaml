@@ -17,8 +17,8 @@ services:
       start_period: 10s
 
   keycloak:
-    image: quay.io/keycloak/keycloak@sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b
-    command: ["start-dev", "--import-realm", "--hostname", "http://localhost:8180", "--hostname-backchannel-dynamic", "true"]
+    image: ${KEYCLOAK_IMAGE:-kronos-keycloak:26.8.1-custom}
+    command: ["start-dev", "--import-realm", "--hostname", "${KEYCLOAK_PUBLIC_URL:-http://localhost:8180}", "--hostname-backchannel-dynamic", "true"]
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://keycloak-postgres:5432/keycloak
@@ -29,7 +29,7 @@ services:
       KC_HEALTH_ENABLED: "true"
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
     ports:
-      - "127.0.0.1:8180:8080"
+      - "127.0.0.1:${KEYCLOAK_HOST_PORT:-8180}:8080"
     volumes:
       - ./infra/keycloak/agendamento-realm.json:/opt/keycloak/data/import/agendamento-realm.json:ro
     depends_on:

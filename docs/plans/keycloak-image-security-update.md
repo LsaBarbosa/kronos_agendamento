@@ -40,3 +40,44 @@ Fontes oficiais: [downloads Keycloak](https://www.keycloak.org/downloads), [Quay
 ## Encerramento
 
 A mudança publicada atualiza somente os pins executáveis em `compose.keycloak.yaml` e `.github/workflows/backend-ci.yml`. Não altera migrations nem os PRs #24, #25 ou #26. O PR de infraestrutura deve permanecer draft e aberto. Sem merge, deploy ou aceitação do risco. Para reavaliar futuramente, obtenha novo advisory/pacote ou digest oficial, confira o inventário do manifesto por digest, compare com Trivy/base atualizados sob a mesma política, execute o E2E isolado e registre findings antes de alterar qualquer pin.
+
+## Correção completa em avaliação — 28/10/2026
+
+### Artefato
+
+- Worktree/branch: `/tmp/kronos-keycloak-security`, `fix/keycloak-image-security`.
+- Base de trabalho: head do PR #27 `7b97abaff18b498c1190db0f8f62880d4b809a4b`; PR segue draft.
+- Fonte do produto: imagem oficial Keycloak `26.8.1`, Quay digest `sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b`. O Dockerfile copia apenas `/opt/keycloak` dessa imagem.
+- Runtime final: `debian:forky-slim@sha256:5533be417c8ed39dbf2ac33e1fdbf08ccfa5a58e62d84238999ff98ab3357068`, Debian Forky/testing, snapshot `20261028T183000Z`, alvo validado `linux/amd64`.
+- Pacotes relevantes instalados no alvo: `openjdk-21-jre-headless=21.0.13+9-1`, `ca-certificates=20260816+nmu1`; metadados completos de `dpkg-query` e digests de origem ficam em `/usr/share/keycloak-image/BUILD-METADATA.txt` na imagem.
+- Guava: conteúdo upstream `33.7.2-jre`, SHA-256 `b530942257fb935f8b2cfaa5f8eb5bd59c555fd8e8d01b8ce98912e077ea606c`; o nome do JAR original é mantido porque o índice Quarkus do Keycloak 26.8.1 referencia esse caminho. O metadata Maven do artefato substituído permanece disponível ao scanner.
+- ID local do artefato final: `sha256:0d7265b3a5e9644b4fceb84c684cc05ab20496d2be9e248cd9670153e6ad1a09`. Usuário `1000:0`, diretório `/opt/keycloak` e entrypoint upstream `/opt/keycloak/bin/kc.sh`.
+
+Debian Forky é testing, não Debian stable. A solução elimina os findings bloqueadores observados no scan completo, mas assume uma base com maior frequência de mudanças e menor garantia operacional que Trixie. O snapshot e os pins tornam a construção repetível; não tornam Forky uma baseline estável nem comprovam prontidão de produção. Apenas amd64 foi construída, escaneada e exercitada nesta rodada; outras arquiteturas do manifesto upstream não foram validadas.
+
+Fontes oficiais reavaliadas nesta rodada: o [índice de releases Debian](https://www.debian.org/releases/) identifica Trixie como stable e Forky como testing; as [notas de Forky](https://www.debian.org/releases/testing/) alertam que a equipe de segurança ainda não gerencia atualizações de testing em tempo hábil. A [documentação de containers Keycloak](https://www.keycloak.org/server/containers) descreve a customização da imagem e a cópia de `/opt/keycloak`; a [matriz de configurações suportadas](https://www.keycloak.org/server/supported-configurations) inclui OpenJDK 21. A conclusão de compatibilidade deste projeto continua limitada ao E2E descartável; usar Java suportado não transforma Debian testing em plataforma operacionalmente suportada.
+
+### Procedimento reproduzível
+
+Em checkout isolado, com Docker disponível e sem usar o Compose compartilhado:
+
+```bash
+KEYCLOAK_PLATFORM=linux/amd64 scripts/dev/build-keycloak-image.sh kronos-keycloak:26.8.1-custom
+TRIVY_CACHE_DIR=/tmp/kronos-trivy-keycloak-cache scripts/dev/scan-keycloak-image.sh kronos-keycloak:26.8.1-custom
+```
+
+O scan executa Trivy `0.75.0` com `--scanners vuln --severity HIGH,CRITICAL --ignore-unfixed=false --exit-code 1`; não há suppressions nem mudança de gate. Para atualizar: verificar primeiro os advisories oficiais, a disponibilidade e o pacote instalado na arquitetura alvo; atualizar digest/snapshot/versão com checksums; construir uma vez; inspecionar e escanear o ID resultante; então usar esse mesmo artefato no Compose e no E2E. Não publicar a imagem em registry externo nesta tarefa.
+
+No CI, o job `keycloak-image` constrói uma única imagem `linux/amd64`, exporta archive, SHA-256 e Docker Image ID. Os jobs `security` e `oidc-browser-e2e` baixam o mesmo artifact, verificam o checksum do archive e o Image ID após `docker load`; o primeiro escaneia e o segundo executa esse ID. O Compose recebe a tag do commit. Não são duas construções independentes.
+
+### Evidências desta rodada
+
+- Trivy `0.75.0`, banco de vulnerabilidades `UpdatedAt=2026-10-28T13:01:10Z`, `DownloadedAt=2026-10-28T18:26:47Z`; Java DB `UpdatedAt=2026-10-26T00:59:12Z`, dentro da validade informada pelo próprio metadata. JSON de scan em `/tmp/kc-trivy-report/forky-final.json`: dois targets (OS Debian e JAR), zero findings HIGH/CRITICAL. A identidade inspecionada foi o ID local acima.
+- E2E Chromium/PostgreSQL/Keycloak passou no projeto descartável `kronos-kc-oidc-final-20261028-2056`, usando o mesmo image ID. O realm e os usuários sintéticos foram preparados com a imagem oficial e o container Keycloak foi substituído pelo runtime derivado sobre o banco Keycloak descartável já populado; realm existente permaneceu, usuário foi consultável e o fluxo de login funcionou. O roteiro também cobriu vínculo tenant/admin, negação sem associação, sessão JDBC, revogação, CSRF/logout e respostas privadas atrasadas.
+- Dois projetos Docker criados pela validação, `kronos-kc-oidc-20261028-1849-a7d2` e `kronos-kc-oidc-final-20261028-2056`, foram removidos com seus containers, redes e volumes. O projeto compartilhado `agendamento` permaneceu ativo e não foi alterado.
+- Iterações iniciais encontraram duas incompatibilidades reais e foram corrigidas antes da evidência final: o índice Quarkus exigia manter o nome original do JAR Guava; `kcadm` exigia `HOME=/opt/keycloak`. Uma tentativa intermediária do roteiro também mostrou que o projeto Compose e as URLs de app precisavam ser parametrizados; o roteiro foi ajustado e a execução final isolada passou.
+- Estado GitHub consultado antes das alterações: PR #27 aberto, draft, head `7b97abaff18b498c1190db0f8f62880d4b809a4b`. No head anterior, App CI falhou apenas em `security` (scan antigo da imagem); `verify`, frontend e OIDC E2E passaram; CodeQL passou. Isso não valida o novo artefato: o novo head precisa de workflows completos.
+
+### Limites
+
+A atualização troca o runtime Red Hat/Ubi vulnerável por Debian Forky e atualiza Guava dentro da distribuição do Keycloak. Esse trade-off precisa de revisão de manutenção e suporte antes de qualquer adoção em produção. Não houve homologação hospedada, validação multi-arquitetura, upgrade de ambiente real ou integração de fornecedor. Não há aprovação humana registrada. O gate desta correção só será considerado aprovado após App CI executar Trivy e E2E no head publicado e todos os jobs/check-runs concluírem.

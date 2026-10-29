@@ -460,3 +460,14 @@ Follow-up E2E no head `c4bf7111c5af936b3e3c1a721e3a9b297b9e711c`: App CI push/PR
 | CVE-2026-91403 e CVE-2026-91415 | Ambos continuam HIGH no `java-21-openjdk-headless 1:21.0.12.1.1-1.2.el9`; gate permanece falhando. Red Hat documenta a relação de 91403 com trust store/eMudhra e a dependência do RPM não portátil em `ca-certificates`; o finding do Trivy não foi suprimido nem declarado falso positivo. 91415 segue pendente, sem transferir versão corretiva de outro fornecedor/distribuição. |
 | OIDC e E2E | Ambiente temporário isolado passou realm import, usuários, sessão JDBC, OIDC, tenant association, revogação, CSRF/logout, associação ausente e browser E2E completo. Essa evidência funcional é separada do resultado do scanner. |
 | Limites | Nenhuma migration. Sem upgrade de dados persistidos, merge, deploy, risco aceito ou aprovação humana. PR de infraestrutura parcial e draft; #24–#26 intocados. Ver plano [Keycloak](../plans/keycloak-image-security-update.md) e [VALIDATION](VALIDATION.md). |
+
+## Keycloak — runtime custom Debian, validação local (28/10/2026)
+
+| Critério | Implementação/evidência |
+|---|---|
+| Imagem oficial compatível | Reavaliação anterior não encontrou digest oficial Keycloak 26.8.1 sem os findings bloqueadores. A imagem custom copia somente `/opt/keycloak` da fonte oficial digest `a78d6b…`; não leva o JDK/OS Red Hat para runtime. |
+| Runtime e identidade | Debian Forky/testing snapshot `20261028T183000Z`, base digest `5533be…`; OpenJDK Debian `21.0.13+9-1`, ca-certificates `20260816+nmu1`; Guava `33.7.2-jre` com SHA documentado. Image ID local `sha256:0d7265b3…`, amd64, usuário 1000:0. BUILD-METADATA contém inventário dpkg e origens. |
+| Trivy | Trivy 0.75.0, DB `2026-10-28T13:01:10Z`, Java DB `2026-10-26T00:59:12Z`; scan JSON da imagem completa registra dois targets e zero HIGH/CRITICAL. Comando e política unchanged no plano e `scripts/dev/scan-keycloak-image.sh`; sem ignore/suppression. A aprovação remota depende do job CI novo. |
+| Identidade entre scan e E2E | CI constrói uma vez, armazena tar.gz, checksum e Image ID; security e OIDC E2E baixam o mesmo artifact, validam checksum/Image ID e carregam a mesma tag. Localmente E2E executou a imagem com o mesmo ID escaneado. |
+| Compatibilidade | E2E real local em infraestrutura isolada passou import/realm existente, usuários sintéticos, OIDC, associação administrativa e negação sem vínculo, sessão JDBC, revogação, CSRF/logout e proteção de resposta atrasada. A troca foi sobre cópia descartável do banco Keycloak previamente populada. |
+| Limpeza/limites | Projetos próprios de teste removidos por nome exato; Compose compartilhado permaneceu ativo. Forky é testing e a validação foi apenas amd64; não equivale a baseline estável, multi-arch, homologação nem prontidão para produção. PR #27 segue draft; nenhum merge/deploy e PRs funcionais #24–#29 permanecem intocados. |

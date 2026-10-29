@@ -1,14 +1,16 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 
+const backendProxy = process.env.VITE_BACKEND_PROXY ?? 'http://localhost:8080';
+
 export default defineConfig({
     plugins: [react()],
     server: {
         proxy: {
-            '/api': 'http://localhost:8080',
-            '/oauth2': 'http://localhost:8080',
-            '/login': 'http://localhost:8080',
-            '/logout': 'http://localhost:8080',
+            '/api': backendProxy,
+            '/oauth2': backendProxy,
+            '/login': backendProxy,
+            '/logout': backendProxy,
         },
     },
     test: {
