@@ -136,17 +136,24 @@ jobs:
           exit-code: '1'
           severity: HIGH,CRITICAL
           version: v0.75.0
+      - name: Verify Debian advisory coverage with an isolated vulnerable control
+        env:
+          KEYCLOAK_IMAGE: kronos-keycloak:${{ github.sha }}
+          KEYCLOAK_PLATFORM: linux/amd64
+        run: scripts/dev/verify-keycloak-scan-coverage.sh "$KEYCLOAK_IMAGE"
       - name: Scan built Keycloak image used by OIDC E2E
-        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_CACHE_DIR: /tmp/trivy-cache
+          TRIVY_REPORT_DIR: /tmp/trivy-report
+        run: scripts/dev/scan-keycloak-image.sh "kronos-keycloak:${{ github.sha }}"
+      - name: Preserve the complete Keycloak Trivy report
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          scan-type: image
-          image-ref: kronos-keycloak:${{ github.sha }}
-          scanners: vuln
-          format: table
-          exit-code: '1'
-          severity: HIGH,CRITICAL
-          ignore-unfixed: 'false'
-          version: v0.75.0
+          name: keycloak-trivy-report-${{ github.sha }}
+          path: /tmp/trivy-report/*.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   secrets:
     runs-on: ubuntu-latest

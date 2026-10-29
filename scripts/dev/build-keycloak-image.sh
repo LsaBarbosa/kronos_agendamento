@@ -6,9 +6,11 @@ cd "$repo_root"
 image_ref=${1:-kronos-keycloak:26.8.1-custom}
 platform=${KEYCLOAK_PLATFORM:-linux/amd64}
 snapshot=${DEBIAN_SNAPSHOT:-20261028T183000Z}
+security_snapshot=${DEBIAN_SECURITY_SNAPSHOT:-20261028T183000Z}
 
 docker build --pull --platform "$platform" \
   --build-arg "DEBIAN_SNAPSHOT=$snapshot" \
+  --build-arg "DEBIAN_SECURITY_SNAPSHOT=$security_snapshot" \
   --file infra/keycloak/Dockerfile \
   --tag "$image_ref" .
 

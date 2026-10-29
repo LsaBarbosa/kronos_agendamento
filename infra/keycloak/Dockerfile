@@ -1,14 +1,16 @@
 # syntax=docker/dockerfile:1.7
 ARG KEYCLOAK_IMAGE=quay.io/keycloak/keycloak@sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b
-ARG DEBIAN_BASE=debian:forky-slim@sha256:5533be417c8ed39dbf2ac33e1fdbf08ccfa5a58e62d84238999ff98ab3357068
+ARG DEBIAN_BASE=debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
 ARG DEBIAN_SNAPSHOT=20261028T183000Z
+ARG DEBIAN_SECURITY_SNAPSHOT=20261028T183000Z
 
 FROM --platform=$TARGETPLATFORM ${KEYCLOAK_IMAGE} AS keycloak-upstream
 FROM --platform=$TARGETPLATFORM ${DEBIAN_BASE} AS runtime
 ARG DEBIAN_SNAPSHOT
+ARG DEBIAN_SECURITY_SNAPSHOT
 ARG KEYCLOAK_IMAGE
 ARG DEBIAN_BASE
-ARG OPENJDK_VERSION=21.0.13+9-1
+ARG OPENJDK_VERSION=21.0.13+9-1~deb13u2
 ARG GUAVA_VERSION=33.7.2-jre
 
 ENV HOME=/opt/keycloak \
@@ -21,7 +23,8 @@ ENV HOME=/opt/keycloak \
 # repeatable; metadata and dpkg records remain in the final image for scanners.
 RUN rm -f /etc/apt/sources.list.d/* && \
     printf '%s\n' \
-      "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ forky main" \
+      "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}/ trixie main" \
+      "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/${DEBIAN_SECURITY_SNAPSHOT}/ trixie-security main" \
       > /etc/apt/sources.list && \
     apt-get -o Acquire::Check-Valid-Until=false update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -57,7 +60,8 @@ RUN install -m 0644 /tmp/guava-${GUAVA_VERSION}.jar \
       . /etc/os-release; printf 'Distribution=%s\n' "${PRETTY_NAME}"; \
       printf 'Architecture=%s\n' "$(dpkg --print-architecture)"; \
       printf 'DebianBase=%s\n' "${DEBIAN_BASE}"; \
-      printf 'DebianSnapshot=%s\n' "${DEBIAN_SNAPSHOT}"; \
+      printf 'DebianMainSnapshot=%s\n' "${DEBIAN_SNAPSHOT}"; \
+      printf 'DebianSecuritySnapshot=%s\n' "${DEBIAN_SECURITY_SNAPSHOT}"; \
       printf 'OpenJDKPackage=openjdk-21-jre-headless=%s\n' "${OPENJDK_VERSION}"; \
       printf 'GuavaArtifact=com.google.guava:guava:%s\n' "${GUAVA_VERSION}"; \
       printf 'GuavaSHA256=b530942257fb935f8b2cfaa5f8eb5bd59c555fd8e8d01b8ce98912e077ea606c\n'; \
@@ -67,10 +71,10 @@ RUN install -m 0644 /tmp/guava-${GUAVA_VERSION}.jar \
 
 LABEL org.opencontainers.image.title="Kronos Keycloak" \
       org.opencontainers.image.version="26.8.1" \
-      org.opencontainers.image.base.name="debian:forky-slim" \
-      org.opencontainers.image.base.digest="sha256:5533be417c8ed39dbf2ac33e1fdbf08ccfa5a58e62d84238999ff98ab3357068" \
+      org.opencontainers.image.base.name="debian:trixie-slim" \
+      org.opencontainers.image.base.digest="sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4" \
       org.kronos.keycloak.upstream="quay.io/keycloak/keycloak@sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b" \
-      org.kronos.openjdk.version="21.0.13+9-1" \
+      org.kronos.openjdk.version="21.0.13+9-1~deb13u2" \
       org.kronos.guava.version="33.7.2-jre"
 
 USER 1000:0

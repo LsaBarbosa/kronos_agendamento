@@ -81,3 +81,32 @@ No CI, o job `keycloak-image` constrói uma única imagem `linux/amd64`, exporta
 ### Limites
 
 A atualização troca o runtime Red Hat/Ubi vulnerável por Debian Forky e atualiza Guava dentro da distribuição do Keycloak. Esse trade-off precisa de revisão de manutenção e suporte antes de qualquer adoção em produção. Não houve homologação hospedada, validação multi-arquitetura, upgrade de ambiente real ou integração de fornecedor. Não há aprovação humana registrada. O gate desta correção só será considerado aprovado após App CI executar Trivy e E2E no head publicado e todos os jobs/check-runs concluírem.
+
+## Correção P1 da cobertura Debian — Trixie stable (29/10/2026)
+
+A revisão demonstrou que o scan anterior de Forky não comprovava cobertura: Trivy identificava `forky/sid`, mas a fonte Debian organiza certos advisories de Forky sob versão numérica 14. O resultado anterior de zero findings HIGH/CRITICAL está invalidado como evidência de cobertura e não é aprovação de segurança.
+
+### Base e inventário
+
+- A worktree permanece `/tmp/kronos-keycloak-security`, branch `fix/keycloak-image-security`, sobre PR #27 draft. Head remoto confirmado antes da alteração: `08eada765b3209d3acf3d0684ac7d343fb08af02`.
+- Produto: Keycloak oficial 26.8.1 `quay.io/keycloak/keycloak@sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b`; somente `/opt/keycloak` é copiado.
+- Runtime: `debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4`, `linux/amd64`, OS observado `Debian GNU/Linux 13 (trixie)`, imagem local `sha256:c67df194054922f1b4b220b01ca3c8917d9919d4ca80d216da670af3dd1c07fe`.
+- Apt é exclusivamente Trixie: snapshot main e `trixie-security` `20261028T183000Z`. O inventário está preservado em `/usr/share/keycloak-image/BUILD-METADATA.txt` e no relatório completo `/tmp/kronos-trivy-trixie-report/kronos-keycloak_26.8.1-trixie-candidate.json`.
+- Pacotes centrais observados: `openjdk-21-jre-headless=21.0.13+9-1~deb13u2`, `ca-certificates=20250419+deb13u1`, `libc6=2.41-12+deb13u4`, `util-linux=2.41.5-0+deb13u1`, `libacl1=2.3.2-2+b1`, `systemd`/`libsystemd0=257.13-1~deb13u1`, `ncurses=6.5+20250216-2`, `perl-base=5.40.1-6+deb13u1`. Guava permanece `33.7.2-jre` com SHA-256 registrado no Dockerfile; a procedência oficial do Keycloak e o caminho do JAR esperado pelo índice Quarkus são preservados.
+- Trivy é `0.75.0`; política mantida: `vuln`, `HIGH,CRITICAL`, `ignore-unfixed=false`, exit code 1. Database `UpdatedAt=2026-10-28T19:18:03Z`, baixado `2026-10-29T01:34:43Z`; Java DB `UpdatedAt=2026-10-28T01:07:04Z`, baixado `2026-10-29T01:36:16Z`.
+
+### Cobertura e findings
+
+`scripts/dev/scan-keycloak-image.sh` valida antes do resultado que `/etc/os-release` declara `ID=debian`, `VERSION_ID=13`, `VERSION_CODENAME=trixie`, confirma a digest da base, o pacote OpenJDK corrigido e componentes do inventário. Salva JSON completo, afirma que o target de pacotes é `debian 13`, imprime contagens e preserva o exit status do gate.
+
+`scripts/dev/verify-keycloak-scan-coverage.sh` constrói controle descartável Debian 13 com `openjdk-21-jre-headless=21.0.12.1+1-1~deb13u1` do snapshot main (deliberadamente vulnerável), roda o mesmo Trivy e exige target `debian 13` e CVE-2026-91415 associada ao pacote/versão vulneráveis. O controle local encontrou o CVE; o runtime final instala `21.0.13+9-1~deb13u2` e esse CVE não aparece no relatório final. O script gera tag temporária única, recusa sobrepor imagem preexistente e remove somente o controle que construiu.
+
+O scan do artefato final identificou **43 ocorrências HIGH, 0 CRITICAL, 8 CVEs únicas**: CVE-2025-69720 (ncurses), CVE-2026-16742 (systemd), CVE-2026-54369 (acl), CVE-2026-76642/CVE-2026-78408/CVE-2026-78409/CVE-2026-78410 (util-linux e binários/bibliotecas derivados), e CVE-2026-9538 (perl-base). CVE-2026-114406, CVE-2026-91403 e CVE-2026-91415 não constam nesse relatório. A execução de `scan-keycloak-image.sh` retornou 1 conforme gate, apesar de gravar/validar target e inventário.
+
+Na consulta dos advisories Debian em 29/10/2026, Trixie permanece vulnerável para essas oito CVEs; os trackers indicam correções apenas em Forky/unstable para os casos corrigidos lá, e `no-dsa`/`postponed` para parte dos itens. Portanto não há atualização Trixie oficial demonstrada que zere os findings. Trivy seleciona severidade HIGH de outras fontes para o gate; as classificações Debian não são usadas para suprimir ou reduzir o critério. Não se misturam suites nem se removem componentes/metadados. Fontes: [util-linux/CVE-2026-78408](https://security-tracker.debian.org/tracker/CVE-2026-78408), [acl/CVE-2026-54369](https://security-tracker.debian.org/tracker/CVE-2026-54369), [ncurses/CVE-2025-69720](https://security-tracker.debian.org/tracker/CVE-2025-69720), [systemd/CVE-2026-16742](https://security-tracker.debian.org/tracker/CVE-2026-16742), [perl/CVE-2026-9538](https://security-tracker.debian.org/tracker/CVE-2026-9538), [OpenJDK/CVE-2026-91415](https://security-tracker.debian.org/tracker/CVE-2026-91415) e [OpenJDK/CVE-2026-91403](https://security-tracker.debian.org/tracker/CVE-2026-91403).
+
+### Compatibilidade executada e limite
+
+O projeto descartável `agd-kc-trixie-20261029-0230` primeiro iniciou a imagem oficial, importou o realm e provisionou usuários; contagem PostgreSQL antes da troca: 2 realms, 14 clients e 3 users. A imagem candidata, exatamente o ID escaneado acima, foi iniciada sobre o mesmo volume descartável; permaneceu healthy, realm OIDC retornou issuer e backend readiness `UP`. O navegador Chrome concluiu login OIDC, associação administrativa e dezenas de fluxos até o cenário sintético de checkout. A suíte inteira **não concluiu**: em `test-keycloak-browser.mjs:3018`, aguardava `Resultado ainda incerto.`; nenhuma operação de checkout foi persistida no banco isolado. Isso não prova falha do Keycloak nem autoriza atribuir a causa à infraestrutura; compatibilidade OIDC/login/importação e preservação do DB foram observadas, mas o E2E completo permanece pendente. Os únicos recursos removidos foram os containers, rede e volumes do projeto `agd-kc-trixie-20261029-0230`; o Compose compartilhado continuou ativo.
+
+CI no head final, E2E completo, review independente e checks/check-runs serão registrados após publicação. PR #27 continua draft. Nenhuma mudança em backend, migrations, outras branches ou PRs funcionais; sem merge, deploy, registro externo ou aceitação de risco.
