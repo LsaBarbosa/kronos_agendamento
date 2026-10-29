@@ -1,10 +1,12 @@
-# Protótipo Keycloak: Temurin 21.0.13+9 em Ubuntu Noble
+# Evidência histórica do protótipo Keycloak: Temurin 21.0.13+9 em Ubuntu Noble
+
+> Este arquivo registra a primeira imagem de protótipo (`sha256:00657612...`), não o runtime principal integrado. A primeira versão não continha `ca-certificates` no estágio final; isso foi identificado durante a revisão e corrigido no `infra/keycloak/Dockerfile` principal, que instala e verifica `ca-certificates=20260816ubuntu0.24.04.1`. O Dockerfile desta pasta é apenas o protótipo original. O artefato e a validação atuais estão em [`docs/plans/keycloak-image-security-update.md`](../../../../docs/plans/keycloak-image-security-update.md) e `docs/development/VALIDATION.md`.
 
 ## Resultado
 
-**Gate Trivy: APROVADO.** A imagem final escaneada não tem findings HIGH/CRITICAL; o controle vulnerável Noble detectou CVE-2026-111497 com a versão esperada e a correção correspondente. O fluxo de inicialização, importação e login OIDC também passou em container descartável.
+**Resultado histórico do scan do protótipo: 0 findings HIGH/CRITICAL.** O controle vulnerável Noble detectou CVE-2026-111497 com a versão esperada e a correção correspondente. O fluxo de inicialização, importação e login OIDC também passou em container descartável.
 
-Isso é aprovação do gate automatizado executado neste protótipo, não aprovação para trocar o runtime principal. `libacl1` e binários de `util-linux` permanecem presentes, enquanto o tracker Ubuntu classifica CVE-2026-54369 como `Ignored — backport too intrusive` e os quatro CVEs de util-linux como `Needs evaluation`. Esses estados continuam pendentes e não são tratados como correção, embora o Trivy não os tenha reportado.
+Esse resultado histórico do detector não é aprovação de segurança. `libacl1` e binários de `util-linux` permanecem presentes, enquanto o tracker Ubuntu classifica CVE-2026-54369 como `Ignored — backport too intrusive` e os quatro CVEs de util-linux como `Needs evaluation`. Esses estados continuam pendentes e não são tratados como correção, embora o Trivy não os tenha reportado.
 
 ## Identidade e procedência do candidato
 

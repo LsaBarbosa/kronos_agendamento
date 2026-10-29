@@ -136,7 +136,7 @@ jobs:
           exit-code: '1'
           severity: HIGH,CRITICAL
           version: v0.75.0
-      - name: Verify Debian advisory coverage with an isolated vulnerable control
+      - name: Verify Ubuntu Noble advisory coverage with an isolated vulnerable control
         env:
           KEYCLOAK_IMAGE: kronos-keycloak:${{ github.sha }}
           KEYCLOAK_PLATFORM: linux/amd64
