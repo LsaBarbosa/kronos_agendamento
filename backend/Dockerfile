@@ -9,7 +9,7 @@ ARG INCLUDE_E2E_FIXTURES=false
 RUN if [ "$INCLUDE_E2E_FIXTURES" = "true" ]; then cp -R /workspace/e2e-src/java/com /workspace/src/main/java/; fi \
     && ./mvnw -B -ntp -DskipTests -DskipITs package
 
-FROM eclipse-temurin:21-jre-noble@sha256:000fd431958bc81a24abe1e8e5f0f0fd3ae365a594bd50aadb20696805f9408c AS runtime
+FROM eclipse-temurin:21-jre-noble@sha256:cd35bb33859641c5374415826a5951845104093eaa401cbe9d3d9023444f1c13 AS runtime
 WORKDIR /app
 COPY --from=build --chown=10001:10001 /workspace/target/agendamento-backend-*.jar /app/app.jar
 USER 10001:10001
