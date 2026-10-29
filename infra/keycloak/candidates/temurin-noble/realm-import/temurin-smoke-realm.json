@@ -1,0 +1,36 @@
+{
+  "realm": "temurin-smoke",
+  "enabled": true,
+  "clients": [
+    {
+      "clientId": "oidc-smoke",
+      "name": "Synthetic OIDC smoke client",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "synthetic-only-client-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["https://127.0.0.1/callback"],
+      "webOrigins": ["https://127.0.0.1"]
+    }
+  ],
+  "users": [
+    {
+      "username": "synthetic-user",
+      "enabled": true,
+      "firstName": "Synthetic",
+      "lastName": "User",
+      "email": "synthetic-user@example.invalid",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "synthetic-only-user-password",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}
