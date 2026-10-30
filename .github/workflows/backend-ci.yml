@@ -84,7 +84,7 @@ jobs:
           ./mvnw -B -ntp verify
       - name: Build local image and capture its identity
         run: |
-          docker build --iidfile ../backend-image-id.txt -t agendamento-backend:ci .
+          docker build --build-context temurin=../infra/temurin --iidfile ../backend-image-id.txt -t agendamento-backend:ci .
           cat ../backend-image-id.txt
       - name: Scan backend image for high and critical vulnerabilities
         uses: aquasecurity/trivy-action@v0.36.0

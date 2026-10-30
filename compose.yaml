@@ -24,6 +24,8 @@ services:
     profiles: ["app"]
     build:
       context: ./backend
+      additional_contexts:
+        temurin: ./infra/temurin
     image: agendamento-backend:local
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-agendamento}
