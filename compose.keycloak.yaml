@@ -18,6 +18,10 @@ services:
 
   keycloak:
     image: ${KEYCLOAK_IMAGE:-kronos-keycloak:26.8.1-custom}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     command: ["start-dev", "--import-realm", "--hostname", "${KEYCLOAK_PUBLIC_URL:-http://localhost:8180}", "--hostname-backchannel-dynamic", "true"]
     environment:
       KC_DB: postgres

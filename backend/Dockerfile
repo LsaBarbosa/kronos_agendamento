@@ -43,6 +43,12 @@ COPY --from=build --chown=10001:10001 /workspace/target/agendamento-backend-*.ja
 RUN set -eu; \
     runtime_version="$(sed -n 's/^JavaRuntimeVersion=//p' /usr/share/temurin/BUILD-METADATA.txt)"; \
     /opt/java/openjdk/bin/java -version 2>&1 | grep -F "Temurin-${runtime_version%-LTS} (build ${runtime_version})"; \
+    for executable in /usr/bin/mount /usr/bin/umount; do \
+      if [ -e "$executable" ]; then chmod u-s "$executable"; fi; \
+      if [ -e "$executable" ] && stat -c '%a' "$executable" | grep -Eq '^[4-7][0-7][0-7][0-7]$'; then \
+        echo "Unexpected SUID bit: $executable" >&2; exit 1; \
+      fi; \
+    done; \
     chmod 0444 /app/app.jar /usr/share/temurin/BUILD-METADATA.txt
 USER 10001:10001
 EXPOSE 8080

@@ -1,5 +1,17 @@
 # Rastreabilidade inicial
 
+## PR #27 — mitigação runtime de `mount`/capabilities (30/10/2026)
+
+| Verificação | Evidência |
+|---|---|
+| Base e handoff | Branch `fix/keycloak-image-security` preservada em `dba28301274b7e120e970727012d1460d18cc18b`. Report `006b5f0dce9cb80fa4a80b6a28f39e9fec054fb4` incorporado sem alteração para o artefato antigo `31296d…`; é evidência histórica, não resultado das novas imagens. |
+| Artefatos | Keycloak `sha256:ea9bbfab…`, backend prod `sha256:225d5e7a…`, backend E2E `sha256:b5320e05…`; mesmos IDs escaneados e executados no E2E. |
+| Build/runtime | Dockerfiles removem somente SUID de `/usr/bin/mount` e `umount`; executáveis/pacotes/metadados permanecem. Compose efetivo dev/E2E: somente Keycloak/backend com NNP e `cap_drop: ALL`; nenhum `cap_add`/privileged. PostgreSQL sem controles adicionados. PID 1 mostra NNP=1, CapEff=0, CapBnd=0. |
+| Scan | Trivy 0.75.0, OS/JAR, HIGH/CRITICAL, ignore-unfixed=false, exit-code 1, DB OS/Java atualizada. 0 findings nos três IDs; 94/518 pacotes Keycloak, 109/106 em cada backend. Isso não altera o status dos advisories Canonical. |
+| Testes runtime | Smoke inicial no projeto `kronos-kc-import-1793382752-55890`: realm importado e client/user sintéticos criados com hardening ativo. E2E browser no `kronos-hardening-1793373735-40537`: realm/client/user `1:1:1` preservados após troca de imagem sobre PostgreSQL populado; OIDC e a suíte browser passaram com os artefatos escaneados. Recursos descartáveis removidos. |
+| Advisories | `libacl1 2.3.2-1build1.1` e `util-linux/mount/libmount1 2.39.3-9ubuntu6.6` permanecem. SUID removido, ausência de configuração observada e controles runtime são conclusões distintas de pacote corrigido. CVE-2026-54369, 76642, 78408, 78409 e 78410 continuam abertos; matriz detalhada em [handoff](../handoffs/KEYCLOAK-ACL-UTIL-HARDENING.md). |
+| TLS e limite | Java 21.0.13+9, JAVA_HOME/cacerts e hashes idênticos aos runtimes TLS anteriores; probe não repetido. Sem aprovação de segurança/humana ou produção. Revisão sequencial. CI do novo head será avaliado após publicação. |
+
 ## AGD-033 — identidade da reconciliação administrativa (PR #21 draft)
 
 No head-base `ab0efb24fb33f0cd40a0f7f79e602989f25d2e34`, `ClientNoShowFactsPanel` usava `commandKey` persistente por cliente/versão também para ações explícitas posteriores ao resultado conhecido. A reconciliação agora cria uma chave nova quando não existe intenção pendente e reutiliza somente a chave guardada na intenção enquanto o resultado estiver incerto. O helper global não mudou.

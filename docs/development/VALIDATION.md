@@ -1,5 +1,19 @@
 # Evidências de validação — AGD-001
 
+## PR #27 — hardening de mount/capabilities (30/10/2026)
+
+- Handoff Terminal 2 `006b5f0dce9cb80fa4a80b6a28f39e9fec054fb4` foi lido localmente e copiado sem alteração; avalia somente Keycloak Image ID histórico `31296d…`, não valida as novas imagens.
+- Builds: `scripts/dev/build-keycloak-image.sh kronos-keycloak:26.8.1-hardened`; em `backend/`, `docker build --build-context temurin=../infra/temurin -t agendamento-backend:hardening-prod .`; segundo build com `--build-arg INCLUDE_E2E_FIXTURES=true -t agendamento-backend:hardening-e2e .`.
+- Image IDs: Keycloak `ea9bbfabf473a44e0eae167633b4d6fd4fc03c15d24558541ce0eabf57dade7e`; backend prod `225d5e7a446d5fed8f3b70a40bce0c0a039e19212b6f71c5ec90e206f874b211`; backend E2E `b5320e055636d34c5ec4bd93729f5991b8f90a01db3b1cb4a9d5a1c3d1cad54b`. Os três mantêm Keycloak 26.8.1/Ubuntu Noble/Temurin 21.0.13+9; backend UID 10001:10001, Keycloak UID 1000:0.
+- Todos mantêm `libacl1=2.3.2-1build1.1`, `util-linux/mount/libmount1=2.39.3-9ubuntu6.6`. `/usr/bin/mount` e `/usr/bin/umount` continuam instalados, modo `755`, sem SUID. Java `/opt/java/openjdk/bin/java` e cacerts têm hashes iguais aos artefatos TLS anteriores; `JAVA_HOME=/opt/java/openjdk`; a bateria TLS não foi repetida.
+- Compose efetivo dev (`compose.yaml` + `compose.keycloak.yaml`) e E2E (`+ compose.identity.yaml + compose.e2e.yaml`, profile `app`) validado. Keycloak/backend: `no-new-privileges:true`, `cap_drop: ALL`, sem `cap_add` ou `privileged`. PostgreSQL não recebe restrições. PID 1: `NoNewPrivs=1`, `CapEff=0`, `CapBnd=0`; usuários corretos. `docker compose config`/jq confirmou merge sem override de privilégios.
+- Scan `aquasec/trivy:0.75.0`, `--scanners vuln --severity HIGH,CRITICAL --ignore-unfixed=false --exit-code 1`. DB OS `UpdatedAt=2026-10-30T07:16:25Z`, DB Java `UpdatedAt=2026-10-30T00:58:38Z`; Keycloak 94 pacotes OS/518 JAR e cada backend 109 OS/106 JAR; zero findings HIGH/CRITICAL. Relatórios em `/tmp/kronos-trivy-keycloak-hardening-report/` e `/tmp/kronos-trivy-runtime-hardening-report/`.
+- Importação inicial: projeto `kronos-kc-import-1793382752-55890`, banco Keycloak vazio, imagem hardened desde o primeiro boot. Realm importado, client OIDC e usuário sintéticos provisionados, controles NNP/capabilities confirmados; `HardenedRealmImport=passed`, cleanup passou.
+- E2E completo: projeto `kronos-hardening-1793373735-40537`, os três Image IDs escaneados. Realm/client/user `1:1:1` permaneceu após recriar Keycloak sobre o mesmo volume PostgreSQL; readiness e o browser `scripts/dev/test-keycloak-browser.mjs` completos passaram (`IntegratedBrowserE2E=passed`). Cleanup confirmou zero containers, volumes, redes e arquivos sintéticos do projeto.
+- Tentativas anteriores pararam por detalhes do harness local (helper sem bit executável, dependências frontend não instaladas, nome do projeto/segredo sintético não passados ao Node); após corrigir somente invocações temporárias, as duas provas finais passaram. Nenhum defeito de produto demonstrado. Maven completo não repetido para alteração somente Dockerfile/Compose/docs; o CI deve rodar verify normal.
+- Os cinco advisories Canonical permanecem sem resolução: libacl/util-linux não foram atualizados/removidos. SUID ausente e NNP/cap_drop são mitigação de vetor/execução, não correção de pacote. Revisão sequencial; sem revisão independente ou aprovação humana.
+
+
 ## AGD-041 — checkout e webhook financeiro (21/10/2026)
 
 ### Follow-up P2 do PR #23 — validação desta rodada

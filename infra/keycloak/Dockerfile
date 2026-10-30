@@ -61,6 +61,12 @@ RUN set -eu; \
       printf 'GuavaSHA256=b530942257fb935f8b2cfaa5f8eb5bd59c555fd8e8d01b8ce98912e077ea606c\n'; \
       dpkg-query -W -f='${binary:Package}=${Version}\n' | sort; \
     } > /usr/share/keycloak-image/BUILD-METADATA.txt; \
+    for executable in /usr/bin/mount /usr/bin/umount; do \
+      if [ -e "$executable" ]; then chmod u-s "$executable"; fi; \
+      if [ -e "$executable" ] && stat -c '%a' "$executable" | grep -Eq '^[4-7][0-7][0-7][0-7]$'; then \
+        echo "Unexpected SUID bit: $executable" >&2; exit 1; \
+      fi; \
+    done; \
     chmod 0644 /usr/share/keycloak-image/BUILD-METADATA.txt
 
 LABEL org.opencontainers.image.title="Kronos Keycloak Temurin Noble" \
