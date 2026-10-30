@@ -3,6 +3,9 @@ import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 
 const chromePath = process.env.CHROME_BIN || '/usr/bin/google-chrome';
+const frontendBaseUrl = process.env.E2E_FRONTEND_URL || 'http://localhost:5173';
+const frontendUrl = (path) => new URL(path, frontendBaseUrl).toString();
+const composeProjectName = process.env.COMPOSE_PROJECT_NAME || 'agendamento';
 const credentialsText = await readFile('.demo-admin.credentials', 'utf8');
 const credentials = Object.fromEntries(
     credentialsText
@@ -22,6 +25,8 @@ const appEnvironment = Object.fromEntries(
             return [line.slice(0, separator), line.slice(separator + 1)];
         }),
 );
+const appPort = process.env.APP_PORT || appEnvironment.APP_PORT || '8080';
+const appBaseUrl = process.env.APP_PUBLIC_URL || `http://localhost:${appPort}`;
 const keycloakEnvironment = Object.fromEntries(
     (await readFile('.env.keycloak', 'utf8'))
         .split('\n')
@@ -64,7 +69,7 @@ try {
     await command('Page.enable');
     await command('Runtime.enable');
     await command('Network.enable');
-    await navigate('http://localhost:5173/admin', command, evaluate);
+    await navigate(frontendUrl('/admin'), command, evaluate);
     await waitForText('Entrar como administrador', evaluate);
     const sessionBeforeLogin = (await cookies(command)).find((cookie) => cookie.name === 'AGDSESSION');
     if (sessionBeforeLogin && (!sessionBeforeLogin.httpOnly || sessionBeforeLogin.sameSite !== 'Lax')) {
@@ -389,7 +394,7 @@ try {
     );
     if (!publicService?.serviceId)
         throw new Error('Serviço ativo de demonstração não encontrado para a página pública.');
-    await navigate(`http://localhost:5173/public/${encodeURIComponent(publication.slug)}`, command, evaluate);
+    await navigate(frontendUrl(`/public/${encodeURIComponent(publication.slug)}`), command, evaluate);
     await waitForText(catalogName + ' Editado', evaluate);
     await setSelectById('public-service', publicService.serviceId, evaluate);
     const publicDate = await evaluate(`(() => {
@@ -432,7 +437,7 @@ try {
     await secondTab.command('Page.enable');
     await secondTab.command('Runtime.enable');
     await navigate(
-        `http://localhost:5173/public/${encodeURIComponent(publication.slug)}`,
+        frontendUrl(`/public/${encodeURIComponent(publication.slug)}`),
         secondTab.command,
         secondTab.evaluate,
     );
@@ -606,7 +611,7 @@ try {
     console.log(
         `Browser: visitante consultou ${publicDate}, confirmou duas intenções sem duplicação entre ${publicSlotsBeforeSelection} horários; layout móvel/desktop sem overflow.`,
     );
-    await navigate('http://localhost:5173/admin', command, evaluate);
+    await navigate(frontendUrl('/admin'), command, evaluate);
     await waitForText('Estado: Publicado', evaluate);
     const adminAppointment = await evaluate(
         `fetch('/api/v1/admin/appointments?from=${publicDate}&to=${publicDate}&serviceId=${encodeURIComponent(publicService.serviceId)}', {credentials:'same-origin'}).then(response => response.json()).then(page => page.items.find(item => item.appointmentId === ${JSON.stringify(appointmentIdInEachTab[0])}))`,
@@ -1586,7 +1591,7 @@ try {
         );
     }
     console.log('Browser: busca administrativa encontrou ambos os clientes restritos de fixture.');
-    await navigate(`http://localhost:5173/public/${encodeURIComponent(publication.slug)}`, secondTab.command, secondTab.evaluate);
+    await navigate(frontendUrl(`/public/${encodeURIComponent(publication.slug)}`), secondTab.command, secondTab.evaluate);
     await waitForText(catalogName + ' Editado', secondTab.evaluate);
     await waitUntil(() => secondTab.evaluate("Boolean(document.getElementById('public-service') && !document.getElementById('public-service').disabled)"));
     await setSelectById('public-service', publicService.serviceId, secondTab.evaluate);
@@ -1642,7 +1647,7 @@ try {
     if (restrictionPageUnpublished !== 404) {
         throw new Error('Fixture da rejeição por restrição não restaurou o estado público despublicado.');
     }
-    await navigate(`http://localhost:5173/admin`, secondTab.command, secondTab.evaluate);
+    await navigate(frontendUrl('/admin'), secondTab.command, secondTab.evaluate);
     await waitForText('Faltas de clientes', evaluate);
     await setFieldById('no-show-client-search', restrictionLiftSearchPrefix, evaluate);
     await clickButtonByText('Buscar', evaluate);
@@ -2186,7 +2191,7 @@ try {
     if (revokedMembershipReuseStatus !== 401) {
         throw new Error('Cookie revogado foi aceito após reativar a associação.');
     }
-    await navigate('http://localhost:5173/admin', command, evaluate);
+    await navigate(frontendUrl('/admin'), command, evaluate);
     await waitForText('Entrar como administrador', evaluate);
     await evaluate("document.querySelector('a[href*=oauth2]').click()");
     await waitForText('Sessão administrativa ativa.', evaluate);
@@ -2207,7 +2212,7 @@ try {
     if (disabledAdminReuseStatus !== 401) {
         throw new Error('Cookie revogado foi aceito após reativar o administrador.');
     }
-    await navigate('http://localhost:5173/admin', command, evaluate);
+    await navigate(frontendUrl('/admin'), command, evaluate);
     await waitForText('Entrar como administrador', evaluate);
     await evaluate("document.querySelector('a[href*=oauth2]').click()");
     await waitForText('Sessão administrativa ativa.', evaluate);
@@ -2244,7 +2249,7 @@ try {
     if (expiredApiResponse.status !== 401 || expiredApiResponse.body.error?.code !== 'AUTHENTICATION_REQUIRED') {
         throw new Error('Cookie da sessão inativa por mais de 30 minutos acessou a API protegida.');
     }
-    await navigate('http://localhost:5173/admin', command, evaluate);
+    await navigate(frontendUrl('/admin'), command, evaluate);
     await waitForText('Sua sessão expirou ou ainda não foi iniciada.', evaluate);
     if (!(await evaluate("Boolean(document.querySelector('a[href*=oauth2]'))"))) {
         throw new Error('UI não ofereceu novo login após receber 401 da sessão expirada.');
@@ -2266,7 +2271,7 @@ try {
     if (renewedCsrfStatus !== 200) {
         throw new Error(`Endpoint CSRF indisponível após login SSO (HTTP ${renewedCsrfStatus}).`);
     }
-    await navigate('http://localhost:5173/admin', command, evaluate);
+    await navigate(frontendUrl('/admin'), command, evaluate);
     await waitForText('Sessão administrativa ativa.', evaluate);
     console.log('Browser: expiração local de 30 min, renovação por atividade e novo login via SSO validados.');
 
@@ -2300,7 +2305,7 @@ try {
         `SELECT slug FROM agendamento.tenant WHERE tenant_id = '${credentials.DEMO_TENANT_ID}'`,
         appEnvironment,
     );
-    await navigate(`http://localhost:5173/public/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
+    await navigate(frontendUrl(`/public/${encodeURIComponent(demoTenantSlug)}`), command, evaluate);
     await waitForText(catalogName + ' Editado', evaluate);
     await waitUntil(() =>
         evaluate(
@@ -2355,7 +2360,7 @@ try {
     );
     if (!clientBookingId) throw new Error('O fluxo público não persistiu a reserva da área do cliente.');
     console.log('Browser: preparou reserva pública real vinculada ao telefone que será verificado pelo challenge AGD-024.');
-    await navigate(`http://localhost:5173/client-access/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
+    await navigate(frontendUrl(`/client-access/${encodeURIComponent(demoTenantSlug)}`), command, evaluate);
     await waitForText('Entre com seu telefone', evaluate);
     await waitUntil(() => evaluate("!document.querySelector('button[type=submit]')?.disabled"));
     await evaluate(`(() => {
@@ -2434,8 +2439,7 @@ try {
     }
     const expiredChallengeId = await evaluate('window.__clientAccessChallengeId');
     const emitterSecret = 'e2e-only-synthetic-emitter-secret-000000000000';
-    const appPort = appEnvironment.APP_PORT || '8080';
-    const expiredCodeResponse = await fetch(`http://localhost:${appPort}/internal/e2e/access-challenges/${expiredChallengeId}/code`, {
+    const expiredCodeResponse = await fetch(`${appBaseUrl}/internal/e2e/access-challenges/${expiredChallengeId}/code`, {
         headers: { 'X-E2E-Emitter-Secret': emitterSecret },
         cache: 'no-store',
     });
@@ -2750,7 +2754,7 @@ try {
         `INSERT INTO agendamento.client(client_id, tenant_id, display_name, normalized_phone) VALUES ('${randomUUID()}', '${credentials.DEMO_TENANT_ID}', 'Cliente E2E outro telefone', '${differentPhone}')`,
         appEnvironment,
     );
-    await navigate(`http://localhost:5173/client-access/${encodeURIComponent(demoTenantSlug)}`, command, evaluate);
+    await navigate(frontendUrl(`/client-access/${encodeURIComponent(demoTenantSlug)}`), command, evaluate);
     await waitForText('Suas reservas', evaluate);
     await evaluate(`(() => {
       const originalFetch = window.fetch.bind(window);
@@ -2852,7 +2856,7 @@ try {
     if (loggedOutClient.authenticated) throw new Error('Logout não revogou a sessão do cliente.');
     console.log('Browser: área consultou/cancelou a reserva própria, recuperou resposta perdida, limpou sessão no logout mesmo com lista atrasada; emissor privado também comprovou limites, expiração e isolamento.');
 
-    await navigate('http://localhost:5173/admin', command, evaluate);
+    await navigate(frontendUrl('/admin'), command, evaluate);
     await waitForText('Entrar como administrador', evaluate);
     await evaluate("document.querySelector('a[href*=oauth2]').click()");
     await waitForText('username', evaluate, true);
@@ -3056,7 +3060,7 @@ try {
         throw new Error(`Checkout hospedado não foi recuperado após reload: ${JSON.stringify(recoveredAfterReload)}`);
     }
     const invalidEventBody = JSON.stringify({eventId: `invalid-${checkoutOperationId}`, reference: `e2e-${checkoutOperationId}`, sequence: 1, outcome: 'CONFIRMED', amountMinorUnits: 1, currency: 'XTS', occurredAt: new Date().toISOString(), paidThroughAt: new Date(Date.now() + 30 * 86400000).toISOString()});
-    const invalidEventResponse = await fetch(`http://localhost:${appEnvironment.APP_PORT || 8080}/api/v1/webhooks/payments/e2e`, {
+    const invalidEventResponse = await fetch(`${appBaseUrl}/api/v1/webhooks/payments/e2e`, {
         method: 'POST', headers: {'Content-Type': 'application/json', 'X-Payment-Signature': 'sha256=invalid'}, body: invalidEventBody,
     });
     if (invalidEventResponse.status !== 401) throw new Error(`Webhook inválido não foi rejeitado: HTTP ${invalidEventResponse.status}`);
@@ -3071,7 +3075,7 @@ try {
         const body = JSON.stringify(event);
         const signature = createHmac('sha256', eventSecret).update(body).digest('hex');
         console.log(`Browser: webhook E2E diagnostic secret_bytes=${Buffer.byteLength(eventSecret)} body_length=${Buffer.byteLength(body)} signature_hex_length=${signature.length} body_sha256=${createHash('sha256').update(body).digest('hex')}.`);
-        return fetch(`http://localhost:${appEnvironment.APP_PORT || 8080}/api/v1/webhooks/payments/e2e`, {
+        return fetch(`${appBaseUrl}/api/v1/webhooks/payments/e2e`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-Payment-Signature': `sha256=${signature}`},
             body,
@@ -3113,7 +3117,7 @@ try {
     console.log('Browser E2E: CSRF pendente durante logout não enviou checkout e preservou a intenção; HTTP 408 substituindo resposta após commit manteve descarte bloqueado e retry idêntico; webhook inválido não alterou assinatura/inbox, evento autenticado duplicado/out-of-order manteve estado, histórico, auditoria e outbox únicos. Sem fornecedor ou cobrança real.');
 
     await command('Network.clearBrowserCookies');
-    await navigate('http://localhost:5173/admin', command, evaluate);
+    await navigate(frontendUrl('/admin'), command, evaluate);
     await waitForText('Entrar como administrador', evaluate);
     await evaluate("document.querySelector('a[href*=oauth2]').click()");
     await waitForText('username', evaluate, true);
@@ -3359,7 +3363,7 @@ function setAccessStatus(table, status, credentials, environment) {
         [
             'compose',
             '-p',
-            'agendamento',
+            composeProjectName,
             'exec',
             '-T',
             '-e',
@@ -3432,7 +3436,7 @@ function queryPostgres(query, environment) {
         [
             'compose',
             '-p',
-            'agendamento',
+            composeProjectName,
             'exec',
             '-T',
             '-e',
@@ -3462,7 +3466,7 @@ function assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, c
         [
             'compose',
             '-p',
-            'agendamento',
+            composeProjectName,
             '--env-file',
             '.env',
             '--env-file',
