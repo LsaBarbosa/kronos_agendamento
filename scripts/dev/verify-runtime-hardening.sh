@@ -41,18 +41,37 @@ for dependency in docker jq; do
   fi
 done
 
-if ! inspect_json=$(docker inspect --type container "$container" 2>/dev/null); then
+if ! initial_inspect=$(docker inspect --type container "$container" 2>/dev/null); then
   printf 'FAIL: container não encontrado ou não inspecionável: %s\n' "$container" >&2
   exit 1
 fi
 
-if ! jq -e 'length == 1 and (.[0] | has("HostConfig") and has("Config") and has("State"))' \
-  <<<"$inspect_json" >/dev/null 2>&1; then
+if ! jq -e 'length == 1 and (.[0] | has("Id"))' \
+  <<<"$initial_inspect" >/dev/null 2>&1; then
   printf 'FAIL: resposta de docker inspect inválida para o container indicado.\n' >&2
   exit 1
 fi
 
-container_id=$(jq -r '.[0].Id' <<<"$inspect_json")
+container_id=$(jq -r '.[0].Id' <<<"$initial_inspect")
+if [[ ! $container_id =~ ^[[:xdigit:]]{64}$ ]]; then
+  printf 'FAIL: docker inspect não retornou um ID completo de container.\n' >&2
+  exit 1
+fi
+
+# Pin all subsequent observations to the immutable ID. If a name is reused,
+# this reinspection and every docker exec still target the original instance.
+if ! inspect_json=$(docker inspect --type container "$container_id" 2>/dev/null); then
+  printf 'FAIL: a instância resolvida (%s) desapareceu ou não pôde ser reinspecionada; abortando sem fallback pelo nome.\n' \
+    "$container_id" >&2
+  exit 1
+fi
+if ! jq -e --arg id "$container_id" \
+  'length == 1 and (.[0].Id == $id) and (.[0] | has("HostConfig") and has("Config") and has("State"))' \
+  <<<"$inspect_json" >/dev/null 2>&1; then
+  printf 'FAIL: a instância resolvida não corresponde ao ID reinspecionado; abortando.\n' >&2
+  exit 1
+fi
+
 container_short_id=${container_id:0:12}
 running=$(jq -r '.[0].State.Running // false' <<<"$inspect_json")
 configured_user=$(jq -r '.[0].Config.User // ""' <<<"$inspect_json")
@@ -73,7 +92,9 @@ else
 fi
 
 if [[ $running != true ]]; then
-  fail 'container não está em execução; não foi iniciado pelo verificador.'
+  printf 'FAIL: a instância resolvida (%s) não está em execução; não foi iniciada pelo verificador.\n' \
+    "$container_id" >&2
+  exit 1
 fi
 
 if [[ $privileged == true ]]; then
@@ -87,8 +108,10 @@ fi
 
 # Resolve the container's configured user by running only id(1) as the
 # container's default exec identity. PID 1 is checked separately below.
-if ! exec_identity=$(docker exec "$container" /bin/sh -c 'printf "%s:%s\n" "$(id -u)" "$(id -g)"' 2>/dev/null); then
-  fail 'não foi possível resolver a identidade configurada do container.'
+if ! exec_identity=$(docker exec "$container_id" /bin/sh -c 'printf "%s:%s\n" "$(id -u)" "$(id -g)"' 2>/dev/null); then
+  printf 'FAIL: inspeção da instância resolvida (%s) falhou ou ela parou/desapareceu; abortando sem fallback pelo nome.\n' \
+    "$container_id" >&2
+  exit 1
 elif [[ ! $exec_identity =~ ^[0-9]+:[0-9]+$ ]]; then
   fail 'identidade resolvida do container está em formato inesperado.'
 else
@@ -101,9 +124,10 @@ else
 fi
 
 # This reads only the main process status, not its command line or environment.
-if ! proc_status=$(docker exec "$container" /bin/sh -c 'cat /proc/1/status' 2>/dev/null); then
-  fail 'não foi possível ler /proc/1/status do processo principal por docker exec.'
-  proc_status=''
+if ! proc_status=$(docker exec "$container_id" /bin/sh -c 'cat /proc/1/status' 2>/dev/null); then
+  printf 'FAIL: não foi possível ler /proc/1/status da instância resolvida (%s); abortando sem fallback pelo nome.\n' \
+    "$container_id" >&2
+  exit 1
 fi
 
 read_status_value() {
@@ -147,7 +171,6 @@ for field in "${capability_fields[@]}"; do
   value=$(read_status_value "$field")
   if [[ ! $value =~ ^[[:xdigit:]]+$ ]]; then
     fail "$field ausente ou inválido em /proc/1/status."
-    capability_read_failed=true
     continue
   fi
   normalized=${value,,}
@@ -162,7 +185,7 @@ done
 
 # Inspect common executable directories without printing container environment,
 # process command lines, or unrelated filesystem entries.
-if ! mount_modes=$(docker exec "$container" /bin/sh -c '
+if ! mount_modes=$(docker exec "$container_id" /bin/sh -c '
   for directory in /bin /sbin /usr/bin /usr/sbin /usr/local/bin /usr/local/sbin; do
     for name in mount umount; do
       path="$directory/$name"
@@ -173,12 +196,14 @@ if ! mount_modes=$(docker exec "$container" /bin/sh -c '
     done
   done
 ' 2>/dev/null); then
-  fail 'não foi possível inspecionar os modos de mount/umount nos diretórios executáveis padrão.'
-  mount_modes=''
+  printf 'FAIL: não foi possível inspecionar os modos de mount/umount da instância resolvida (%s); abortando sem fallback pelo nome.\n' \
+    "$container_id" >&2
+  exit 1
 fi
 
+printf 'SUID search scope: /bin /sbin /usr/bin /usr/sbin /usr/local/bin /usr/local/sbin (links followed; no other paths scanned).\n'
 if [[ -z $mount_modes ]]; then
-  printf 'SUID mount/umount: nenhum executável encontrado nos diretórios verificados.\n'
+  printf 'SUID mount/umount: nenhum executável encontrado nos diretórios listados.\n'
 else
   while IFS=$'\t' read -r path mode; do
     [[ -n $path ]] || continue
