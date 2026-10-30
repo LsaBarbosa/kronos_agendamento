@@ -41,3 +41,19 @@ O smoke de importação inicial com banco vazio também foi executado sob os con
 Comandos de validação dos artefatos: `scripts/dev/build-keycloak-image.sh kronos-keycloak:26.8.1-hardened`; no diretório `backend`, `docker build --build-context temurin=../infra/temurin -t agendamento-backend:hardening-prod .` e o mesmo comando com `--build-arg INCLUDE_E2E_FIXTURES=true -t agendamento-backend:hardening-e2e`. Keycloak foi escaneado com `TRIVY_CACHE_DIR=/tmp/kronos-trivy-keycloak-hardening-cache TRIVY_REPORT_DIR=/tmp/kronos-trivy-keycloak-hardening-report scripts/dev/scan-keycloak-image.sh kronos-keycloak:26.8.1-hardened`. Os dois backends usaram o container `aquasec/trivy:0.75.0` com `--image-src docker --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed=false --exit-code 1`; relatórios JSON ficaram sob `/tmp/kronos-trivy-runtime-hardening-report/`. O comando do E2E foi `PATH=/home/kronos/.nvm/versions/node/v24.14.1/bin:$PATH bash /tmp/kronos-keycloak-runtime-hardening-e2e.sh`, que construiu projeto, portas, volumes e credenciais descartáveis próprios. Ao final, containers/volumes/redes com o label do projeto e arquivos sintéticos foram verificados em zero; `.env`, `.env.keycloak`, `.env.e2e` e `.demo-admin.credentials` não ficaram no checkout.
 
 Esta mitigação não corrige pacotes. Restrições em produção precisam ser aplicadas e verificadas pelo deployment; `compose` de desenvolvimento/E2E não é prova de configuração de produção. A compatibilidade TLS continua vinculada ao mesmo JRE/checksum/trust store previamente testados, mas o teste TLS não foi repetido nesta rodada. A aprovação humana e avaliação integral dos cinco advisories seguem pendentes.
+
+
+## Evidência positiva do verificador focal — limitada ao perfil (30/10/2026)
+
+Correção do verificador `8702cb7380663ba78590468818391eb2dcd68d39`; relatório `7701ffb370f6320b5fe9ade6fe80659220d47f08`. No projeto descartável `kronos-hardening-verify-v2-14670-66935`, snapshot `01e4dbb935362921f140c68e4ac01cde6e273016`, sem rebuild, passaram:
+
+| Serviço | Container ID | Image ID | UID:GID esperado | Resultado focal |
+|---|---|---|---|---|
+| Keycloak | `438960c76ebb59324126a14553e0aa8b23db55c1effdadc2b2c3f71647df3110` | `sha256:ea9bbfabf473a44e0eae167633b4d6fd4fc03c15d24558541ce0eabf57dade7e` | `1000:0` | PASS; NoNewPrivs=1, CapInh/Prm/Eff/Bnd/Amb=0, Privileged=false, CapAdd=[], mount/umount=755 nos caminhos listados |
+| Backend produção | `a48a7325bb2b0a82f2c68af5f9cb8ea17b14d7d4c5da86b2f175df9eb9aa9f3c` | `sha256:225d5e7a446d5fed8f3b70a40bce0c0a039e19212b6f71c5ec90e206f874b211` | `10001:10001` | PASS; mesmas condições observadas |
+
+O backend E2E `sha256:b5320e055636d34c5ec4bd93729f5991b8f90a01db3b1cb4a9d5a1c3d1cad54b` **não participou** dessa prova positiva. `postgres` e `keycloak-postgres` ficaram sem as restrições de aplicação; seus processos mantiveram NNP=0 e CapBnd padrão. O projeto descartável foi limpo.
+
+A regressão de identidade usa shim determinístico, não concorrência real do daemon. A inspeção de SUID segue links, mas cobre somente `/bin`, `/sbin`, `/usr/bin`, `/usr/sbin`, `/usr/local/bin`, `/usr/local/sbin`; nenhum PASS significa varredura integral de outros caminhos, volumes ou mounts.
+
+Cinco advisories permanecem sem correção de pacote. Esta leitura de runtime é mitigação do perfil medido, não reclassificação de finding nem aceitação de risco.
