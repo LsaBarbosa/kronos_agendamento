@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+    useCallback,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+} from 'react';
 import type { FormEvent } from 'react';
 import { apiBaseUrl } from './config';
 import { commandKey } from './commandKey';
@@ -11,6 +17,7 @@ import { ClientAccessPage } from './ClientAccessPage';
 import { ClientNoShowPolicyPanel } from './ClientNoShowPolicyPanel';
 import { ClientNoShowFactsPanel } from './ClientNoShowFactsPanel';
 import { AdminSubscriptionPanel } from './AdminSubscriptionPanel';
+import { ExportCenter } from './exports/ExportCenter';
 
 type Session = { authenticated: boolean; tenantId: string; role: string };
 type Csrf = { headerName: string; token: string };
@@ -39,6 +46,18 @@ const emptyDraft: Draft = {
     status: '',
 };
 
+const exportContextStoragePrefix = 'agd044.export-context.v1:';
+
+function clearExportContext(tenantId: string) {
+    try {
+        window.sessionStorage.removeItem(
+            exportContextStoragePrefix + encodeURIComponent(tenantId),
+        );
+    } catch {
+        // Storage may be unavailable; the export component still clears memory.
+    }
+}
+
 async function responseError(response: Response): Promise<string> {
     try {
         const body = (await response.json()) as {
@@ -62,8 +81,14 @@ function AdminApp() {
     const [editing, setEditing] = useState<Service | null>(null);
     const [saving, setSaving] = useState(false);
     const pendingKeys = useRef(new Map<string, string>());
+    const sessionBootstrapEpoch = useRef(0);
+    const previousExportTenant = useRef<string | null>(null);
+    const invalidateSessionBootstrap = useCallback(() => {
+        sessionBootstrapEpoch.current++;
+    }, []);
     const handleNoShowPolicySessionInvalid = useCallback(
         (responseStatus: number) => {
+            invalidateSessionBootstrap();
             setSession(null);
             setCsrf(null);
             setStatus(
@@ -72,18 +97,30 @@ function AdminApp() {
                     : 'Sua associação administrativa foi revogada ou o acesso foi negado.',
             );
         },
-        [],
+        [invalidateSessionBootstrap],
     );
 
+    useLayoutEffect(() => {
+        const currentTenant = session?.tenantId ?? null;
+        const previousTenant = previousExportTenant.current;
+        if (previousTenant && previousTenant !== currentTenant) {
+            clearExportContext(previousTenant);
+        }
+        previousExportTenant.current = currentTenant;
+    }, [session?.tenantId]);
+
     useEffect(() => {
+        const epochRef = sessionBootstrapEpoch;
+        const requestEpoch = ++epochRef.current;
         let active = true;
+        const isCurrent = () => active && epochRef.current === requestEpoch;
         void (async () => {
             try {
                 const response = await fetch(apiBaseUrl + '/v1/admin/session', {
                     credentials: 'same-origin',
                     cache: 'no-store',
                 });
-                if (!active) return;
+                if (!isCurrent()) return;
                 if (response.status === 401) {
                     setStatus('Sua sessão expirou ou ainda não foi iniciada.');
                     return;
@@ -99,24 +136,31 @@ function AdminApp() {
                     return;
                 }
                 const authenticatedSession = (await response.json()) as Session;
+                if (!isCurrent()) return;
                 setSession(authenticatedSession);
                 setStatus('Sessão administrativa ativa.');
                 const csrfResponse = await fetch(apiBaseUrl + '/v1/csrf', {
                     credentials: 'same-origin',
                     cache: 'no-store',
                 });
-                if (!active) return;
+                if (!isCurrent()) return;
                 if (!csrfResponse.ok) {
                     setStatus('Não foi possível obter a proteção CSRF.');
                     return;
                 }
-                setCsrf((await csrfResponse.json()) as Csrf);
+                const csrfValue = (await csrfResponse.json()) as Csrf;
+                if (!isCurrent()) return;
+                setCsrf(csrfValue);
             } catch {
-                if (active) setStatus('Backend indisponível. Tente novamente.');
+                if (isCurrent())
+                    setStatus('Backend indisponível. Tente novamente.');
             }
         })();
         return () => {
             active = false;
+            if (epochRef.current === requestEpoch) {
+                epochRef.current++;
+            }
         };
     }, []);
 
@@ -130,6 +174,7 @@ function AdminApp() {
             .then(async (response) => {
                 if (!active) return;
                 if (response.status === 401) {
+                    invalidateSessionBootstrap();
                     setSession(null);
                     setStatus(
                         'Sua sessão expirou. Entre novamente para continuar.',
@@ -137,6 +182,7 @@ function AdminApp() {
                     return;
                 }
                 if (response.status === 403) {
+                    invalidateSessionBootstrap();
                     setSession(null);
                     setStatus('Acesso administrativo negado.');
                     return;
@@ -156,7 +202,7 @@ function AdminApp() {
         return () => {
             active = false;
         };
-    }, [session]);
+    }, [session, invalidateSessionBootstrap]);
 
     function resetForm() {
         setDraft(emptyDraft);
@@ -216,6 +262,7 @@ function AdminApp() {
                 body: JSON.stringify(body),
             });
             if (response.status === 401) {
+                invalidateSessionBootstrap();
                 setSession(null);
                 setStatus(
                     'Sua sessão expirou. Entre novamente para continuar.',
@@ -283,6 +330,7 @@ function AdminApp() {
                 },
             );
             if (response.status === 401) {
+                invalidateSessionBootstrap();
                 setSession(null);
                 setStatus(
                     'Sua sessão expirou. Entre novamente para continuar.',
@@ -315,6 +363,7 @@ function AdminApp() {
             setStatus('Proteção CSRF ainda indisponível; tente novamente.');
             return;
         }
+        invalidateSessionBootstrap();
         const response = await fetch(apiBaseUrl + '/v1/admin/logout', {
             method: 'POST',
             credentials: 'same-origin',
@@ -515,6 +564,7 @@ function AdminApp() {
                     enabled={Boolean(session)}
                     csrf={csrf}
                     onSessionInvalid={(responseStatus) => {
+                        invalidateSessionBootstrap();
                         setSession(null);
                         setCsrf(null);
                         setStatus(
@@ -528,6 +578,7 @@ function AdminApp() {
                     enabled={Boolean(session)}
                     csrf={csrf}
                     onSessionInvalid={(responseStatus) => {
+                        invalidateSessionBootstrap();
                         setSession(null);
                         setCsrf(null);
                         setStatus(
@@ -559,10 +610,19 @@ function AdminApp() {
                         onSessionInvalid={handleNoShowPolicySessionInvalid}
                     />
                 )}
+                {session && csrf && (
+                    <ExportCenter
+                        key={`${session.tenantId}:${session.role}`}
+                        tenantId={session.tenantId}
+                        csrf={csrf}
+                        onSessionInvalid={handleNoShowPolicySessionInvalid}
+                    />
+                )}
                 <AdminAgendaPanel
                     enabled={Boolean(session)}
                     csrf={csrf}
                     onSessionInvalid={(responseStatus) => {
+                        invalidateSessionBootstrap();
                         setSession(null);
                         setCsrf(null);
                         setStatus(
@@ -576,6 +636,7 @@ function AdminApp() {
                     enabled={Boolean(session)}
                     csrf={csrf}
                     onSessionInvalid={(responseStatus) => {
+                        invalidateSessionBootstrap();
                         setSession(null);
                         setCsrf(null);
                         setStatus(

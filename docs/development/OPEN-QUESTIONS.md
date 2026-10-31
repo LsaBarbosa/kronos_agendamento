@@ -2,6 +2,10 @@
 
 ## Decisões resolvidas
 
+| AGD-044 — allowlist mínima de exportação | Documento 01 §13, documento 03 exemplo `APPOINTMENTS`, documento 06 AGD-044 | A primeira versão exporta somente `APPOINTMENTS`: appointmentId, serviceId, snapshot do nome do serviço, instantes de atendimento/ocupação, timezone, duração, buffer, status e createdAt. Não exporta nome/telefone/clientId, auditoria nem dados financeiros; nenhuma outra categoria é habilitada. Esses campos de agenda ainda são dados pessoais protegidos por controle de acesso, `no-store` e criptografia em repouso. | **Aprovado pelo usuário em 23/10/2026 nesta instrução.** Outras categorias e campos exigem allowlist específica. Retenção segue pendente. |
+
+| AGD-044 — recuperação ativa e controle de versão | Documento 03, contrato `docs/openapi/admin-exports.yaml`, AGD-044 | `GET /api/v1/admin/exports/active` é somente leitura: `200` com o job minimizado e ETag forte versionado, ou `204` sem corpo quando não houver ativo; ambos `no-store`. ETag de job é o decimal positivo canônico entre aspas e deve ser preservado literalmente em `If-Match`. Weak tag, wildcard, lista, valor não canônico e header ausente são rejeitados; ETag do conteúdo é apenas digest do artefato. | **Aprovado pelo usuário em 23/10/2026 nesta instrução.** Um `204` após um conflito é válido se o job terminou entre as consultas; não inicia novo comando automaticamente. |
+
 | AGD-042 — limite e recuperação tardia | AGD-042; documento 01 §12.3, documento 02 §7, documento 03 jobs, documento 06; ADR-0027 | `graceEndsAt = vencimento + 168h`; igualdade termina a tolerância (`now >= graceEndsAt`); D0/D+3/D+6 são 0/72/144h UTC. Em catch-up, só a mais recente vencida nunca iniciada permanece elegível; anteriores nunca iniciadas viram `SKIPPED_LATE_RECOVERY` com motivo. Futuras preservam horários. Tentativas iniciadas/em voo/ambíguas não são puladas; exigem reconciliação antes de outra cobrança lógica. Após grace não inicia nova chamada, mas resultado já iniciado continua reconciliável, inclusive após suspensão. Não altera trial. | **Aprovado pelo usuário em 22/10/2026 nesta instrução.** Registrado em requisitos, ADR-0027 e plano; integrações reais seguem fechadas. |
 
 | Política temporal de lembrete | AGD-031; documentos 01 §11, 02 §eventos e 03 AGD-031; ADR-0021 | Sem política explícita não criar lembrete nem inventar offset; job atrasado só é elegível se CONFIRMED, versão atual e início estritamente futuro; evento consumido após `due_at` pode ser processado imediatamente enquanto futuro; `due_at` usa política vigente no consumo e não é recalculado por alteração posterior, mas eventos não consumidos e nova versão usam política corrente no processamento. | Aprovado pelo usuário em 19/10/2026 nesta instrução. Regras registradas nos requisitos, contrato e ADR-0021; fornecedor, templates, segredos e homologação continuam pendentes. |
@@ -69,6 +73,10 @@ As quatro decisões foram aprovadas e implementadas no PR #21; a reconciliação
 | Gates de qualidade e staging | documento 04, seção 18 | scan completo de dependências e ambiente de promoção | commits publicados; App CI e CodeQL passaram nos runs `38663531502`/`38663531528`. Trivy FS completo segue pendente após HTTP 429; staging ainda sem destino; ADR-0003 |
 
 Estas pendências não exigem reabrir a especificação inteira. Continuar a fundação e bloquear somente o comportamento que dependa de decisão ainda não tomada.
+
+### AGD-044 — fronteiras restantes
+
+A aprovação da allowlist mínima não aprova retenção nem categorias adicionais. Para exportação administrativa normal, documento 01 §13 exige autorização atual; documento 04 §10 reserva reautenticação para exportação excepcional. O contrato usa sessão OIDC e associação atual em cada download; step-up/capability para exportação excepcional permanece em AGD-045. Retenção operacional e homologação seguem pendentes.
 
 ### AGD-043 — fronteira técnica revisada sem fechar decisões comerciais
 
