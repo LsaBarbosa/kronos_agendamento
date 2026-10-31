@@ -2,14 +2,14 @@ services:
   backend:
     environment:
       SPRING_PROFILES_ACTIVE: keycloak
-      OIDC_ISSUER_URI: http://localhost:8180/realms/agendamento
-      OIDC_AUTHORIZATION_URI: http://localhost:8180/realms/agendamento/protocol/openid-connect/auth
+      OIDC_ISSUER_URI: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8180}/realms/agendamento
+      OIDC_AUTHORIZATION_URI: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8180}/realms/agendamento/protocol/openid-connect/auth
       OIDC_TOKEN_URI: http://keycloak:8080/realms/agendamento/protocol/openid-connect/token
       OIDC_JWK_SET_URI: http://keycloak:8080/realms/agendamento/protocol/openid-connect/certs
       OIDC_USER_INFO_URI: http://keycloak:8080/realms/agendamento/protocol/openid-connect/userinfo
       OIDC_CLIENT_ID: agendamento-backend
-      OIDC_REDIRECT_URI: http://localhost:8080/login/oauth2/code/keycloak
-      APP_FRONTEND_URL: http://localhost:5173/admin
+      OIDC_REDIRECT_URI: ${APP_PUBLIC_URL:-http://localhost:8080}/login/oauth2/code/keycloak
+      APP_FRONTEND_URL: ${FRONTEND_PUBLIC_URL:-http://localhost:5173}/admin
       SESSION_COOKIE_SECURE: "false"
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?Gere .env.keycloak com scripts/dev/prepare-keycloak.sh}
     depends_on:
