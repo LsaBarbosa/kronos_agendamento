@@ -33,7 +33,9 @@ if [[ -z "${POSTGRES_PASSWORD:-}" || -z "${POSTGRES_USER:-}" ]]; then
   exit 1
 fi
 
-compose=(docker compose -p agendamento -f compose.keycloak.yaml --env-file .env.keycloak)
+project_name=${COMPOSE_PROJECT_NAME:-agendamento}
+keycloak_public_url=${KEYCLOAK_PUBLIC_URL:-http://localhost:8180}
+compose=(docker compose -p "$project_name" -f compose.keycloak.yaml --env-file .env.keycloak)
 kc=("${compose[@]}" exec -T keycloak /opt/keycloak/bin/kcadm.sh)
 "${kc[@]}" config credentials \
   --server http://localhost:8080 \
@@ -55,7 +57,7 @@ if [[ -z "$subject" ]]; then
   echo "Não foi possível obter o subject provisionado no Keycloak." >&2
   exit 1
 fi
-existing_tenant=$(docker compose -p agendamento exec -T \
+existing_tenant=$(docker compose -p "$project_name" exec -T \
   -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
   psql -X -qAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
   -d "${POSTGRES_DB:-agendamento}" -v tenant_slug="$slug" <<'SQL'
@@ -67,10 +69,10 @@ if [[ "$existing_tenant" == "t" ]]; then
   echo "Slug já provisionado; use um slug novo. Nenhuma credencial foi alterada." >&2
   exit 1
 fi
-existing_identity=$(docker compose -p agendamento exec -T \
+existing_identity=$(docker compose -p "$project_name" exec -T \
   -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
   psql -X -qAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
-  -d "${POSTGRES_DB:-agendamento}" -v issuer="http://localhost:8180/realms/agendamento" \
+  -d "${POSTGRES_DB:-agendamento}" -v issuer="$keycloak_public_url/realms/agendamento" \
   -v subject="$subject" <<'SQL'
 SELECT EXISTS (SELECT 1 FROM agendamento.admin_user WHERE identity_issuer = :'issuer' AND identity_subject = :'subject');
 SQL
@@ -100,12 +102,12 @@ unlinked_subject=$(jq -r '.[0].id // empty' <<<"$unlinked_users")
   --new-password "$unlinked_password" >/dev/null
 
 tenant_id=$(uuidgen)
-tenant_id=$(docker compose -p agendamento exec -T \
+tenant_id=$(docker compose -p "$project_name" exec -T \
   -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
   psql -X -qAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
   -d "${POSTGRES_DB:-agendamento}" \
   -v tenant_id="$tenant_id" -v tenant_name="$tenant_name" -v tenant_slug="$slug" \
-  -v user_id="$subject" -v issuer="http://localhost:8180/realms/agendamento" \
+  -v user_id="$subject" -v issuer="$keycloak_public_url/realms/agendamento" \
   -v subject="$subject" -v trace_id="$(uuidgen)" <<'SQL'
 BEGIN;
 INSERT INTO agendamento.tenant (tenant_id, name, slug, timezone, status, version)
@@ -135,7 +137,7 @@ if [[ "${AGD_E2E_TRIAL_FIXTURE:-false}" == "true" ]]; then
   trial_operation_id=$(uuidgen)
   trial_trace_id=$(uuidgen)
   trial_identity_digest=$(printf '%s' 'e2e-only-stable-commercial-identity' | sha256sum | cut -d' ' -f1)
-  docker compose -p agendamento exec -T \
+  docker compose -p "$project_name" exec -T \
     -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
     psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
     -d "${POSTGRES_DB:-agendamento}" \
