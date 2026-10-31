@@ -12,11 +12,12 @@ type Overview = {
     tenantContextId: string;
     subscription: {
         subscriptionId: string;
-        status: 'TRIALING' | 'SUSPENDED' | 'ACTIVE';
+        status: 'TRIALING' | 'SUSPENDED' | 'ACTIVE' | 'PAST_DUE';
         trialStartedAt: string | null;
         trialEndsAt: string | null;
         planCode: 'MONTHLY' | 'ANNUAL' | null;
         paidThroughAt: string | null;
+        graceEndsAt: string | null;
         version: number;
     } | null;
     plans: Plan[];
@@ -30,6 +31,15 @@ type Overview = {
     checkoutAvailable: boolean;
     trialEligibilityPending: boolean;
     commercialEligibility: 'VERIFICATION_UNAVAILABLE' | 'VERIFIED';
+    dunningAttempts?: {
+        logicalSequence: 0 | 3 | 6;
+        scheduledAt: string;
+        state: string;
+        nextAttemptAt: string | null;
+        technicalAttempts: number;
+        safeErrorCode: string | null;
+        skipReason: string | null;
+    }[];
 };
 
 type CheckoutIntent = {
@@ -61,6 +71,36 @@ type CheckoutAttempt = {
 
 const intentStorageKey = (tenantContextId: string) =>
     `agd041.checkout-intent.v2:${tenantContextId}`;
+
+function dunningStateLabel(state: string) {
+    switch (state) {
+        case 'SCHEDULED':
+            return 'Agendada';
+        case 'BLOCKED_CONFIGURATION':
+            return 'Aguardando configuração de transporte ou autorização';
+        case 'CLAIMED':
+            return 'Reservada pelo worker, ainda sem chamada externa';
+        case 'SUBMITTING':
+            return 'Chamada iniciada; resultado ainda não persistido';
+        case 'RETRYABLE_NO_EFFECT':
+            return 'Falha sem efeito confirmado; retry técnico da mesma tentativa';
+        case 'OUTCOME_UNKNOWN':
+        case 'RECONCILING':
+            return 'Resultado incerto; aguardando reconciliação, sem nova cobrança';
+        case 'ACCEPTED':
+            return 'Aceita pelo transporte; pagamento ainda não confirmado';
+        case 'DECLINED':
+            return 'Recusada pelo transporte';
+        case 'FAILED_FINAL':
+            return 'Falha definitiva';
+        case 'SKIPPED_LATE_RECOVERY':
+            return 'Ignorada por recuperação tardia';
+        case 'CANCELLED':
+            return 'Cancelada por pagamento ou encerramento do ciclo';
+        default:
+            return 'Estado operacional não reconhecido';
+    }
+}
 
 function readIntent(tenantContextId: string): CheckoutIntent | null {
     try {
@@ -623,7 +663,11 @@ export function AdminSubscriptionPanel({
                             ? 'Trial ativo'
                             : overview.subscription.status === 'ACTIVE'
                               ? 'Assinatura ativa'
-                              : 'Trial encerrado'}
+                              : overview.subscription.status === 'PAST_DUE'
+                                ? 'Pagamento pendente — em tolerância'
+                                : overview.subscription.planCode
+                                  ? 'Assinatura suspensa'
+                                  : 'Trial encerrado'}
                         .
                     </p>
                     {overview.subscription.trialStartedAt && (
@@ -656,6 +700,68 @@ export function AdminSubscriptionPanel({
                             UTC
                         </p>
                     )}
+                    {overview.subscription.graceEndsAt && (
+                        <p>
+                            Fim da tolerância:{' '}
+                            {new Date(
+                                overview.subscription.graceEndsAt,
+                            ).toLocaleString('pt-BR', { timeZone: 'UTC' })}{' '}
+                            UTC
+                        </p>
+                    )}
+                </section>
+            )}
+            {!!overview?.dunningAttempts?.length && (
+                <section aria-label="Tentativas lógicas de cobrança">
+                    <h3>Tentativas de cobrança</h3>
+                    <p>
+                        A agenda e o aceite do transporte não confirmam
+                        pagamento. Resultados incertos bloqueiam novas cobranças
+                        até reconciliação.
+                    </p>
+                    <ol>
+                        {overview.dunningAttempts.map((attempt) => (
+                            <li
+                                key={`${attempt.logicalSequence}:${attempt.scheduledAt}`}
+                            >
+                                D+{attempt.logicalSequence}:{' '}
+                                {new Date(attempt.scheduledAt).toLocaleString(
+                                    'pt-BR',
+                                    { timeZone: 'UTC' },
+                                )}{' '}
+                                UTC — {dunningStateLabel(attempt.state)}
+                                {attempt.state === 'RETRYABLE_NO_EFFECT' &&
+                                    attempt.nextAttemptAt && (
+                                        <span>
+                                            {' '}
+                                            Próxima tentativa técnica prevista:{' '}
+                                            {new Date(
+                                                attempt.nextAttemptAt,
+                                            ).toLocaleString('pt-BR', {
+                                                timeZone: 'UTC',
+                                            })}{' '}
+                                            UTC. Identidade da tentativa
+                                            preservada.
+                                        </span>
+                                    )}
+                                {attempt.state === 'SKIPPED_LATE_RECOVERY' && (
+                                    <span>
+                                        {' '}
+                                        Motivo: tentativa anterior vencida e
+                                        nunca iniciada durante recuperação do
+                                        worker.
+                                    </span>
+                                )}
+                                {attempt.technicalAttempts > 0 && (
+                                    <span>
+                                        {' '}
+                                        Chamadas autorizadas:{' '}
+                                        {attempt.technicalAttempts}.
+                                    </span>
+                                )}
+                            </li>
+                        ))}
+                    </ol>
                 </section>
             )}
             {overview && (
