@@ -17,16 +17,19 @@ set -a
 source .env.keycloak
 set +a
 
-project_name=${COMPOSE_PROJECT_NAME:-agendamento}
+compose_project=${COMPOSE_PROJECT_NAME:-${AGD_COMPOSE_PROJECT:-agendamento}}
 image_ref=${KEYCLOAK_IMAGE:-kronos-keycloak:26.8.1-custom}
 if ! docker image inspect "$image_ref" >/dev/null 2>&1; then
   scripts/dev/build-keycloak-image.sh "$image_ref"
 fi
 export KEYCLOAK_IMAGE="$image_ref"
-compose=(docker compose -p "$project_name" -f compose.keycloak.yaml --env-file .env.keycloak)
+compose=(docker compose -p "$compose_project" -f compose.keycloak.yaml --env-file .env.keycloak)
+if [[ -n "${AGD_COMPOSE_OVERRIDE:-}" ]]; then
+  compose+=(-f "$AGD_COMPOSE_OVERRIDE")
+fi
 "${compose[@]}" up -d
 
-keycloak_public_url=${KEYCLOAK_PUBLIC_URL:-http://localhost:8180}
+keycloak_public_url=${KEYCLOAK_PUBLIC_URL:-${AGD_KEYCLOAK_EXTERNAL_URL:-http://localhost:8180}}
 keycloak_admin_url=${KEYCLOAK_ADMIN_URL:-http://localhost:8080}
 for attempt in $(seq 1 90); do
   if curl --fail --silent "$keycloak_public_url/realms/agendamento/.well-known/openid-configuration" >/dev/null; then

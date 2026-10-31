@@ -5,7 +5,7 @@ import { execFileSync, spawn } from 'node:child_process';
 const chromePath = process.env.CHROME_BIN || '/usr/bin/google-chrome';
 const frontendBaseUrl = process.env.E2E_FRONTEND_URL || 'http://localhost:5173';
 const frontendUrl = (path) => new URL(path, frontendBaseUrl).toString();
-const composeProjectName = process.env.COMPOSE_PROJECT_NAME || 'agendamento';
+const composeProjectName = process.env.COMPOSE_PROJECT_NAME || process.env.AGD_COMPOSE_PROJECT || 'agendamento';
 const credentialsText = await readFile('.demo-admin.credentials', 'utf8');
 const credentials = Object.fromEntries(
     credentialsText
@@ -103,6 +103,47 @@ try {
         `Array.from(document.querySelectorAll('p')).some(paragraph => paragraph.textContent.includes('Tenant autorizado:') && paragraph.querySelector('code')?.textContent === ${JSON.stringify(authenticatedSession.tenantId)})`,
     );
     if (!tenantDisplayed) throw new Error('Tenant autorizado não apareceu na UI.');
+    await waitForText('Avaliação informativa de retenção', evaluate);
+    try {
+        await waitUntil(() => evaluate(
+            `document.querySelector('.retention-assessment')?.getAttribute('aria-busy') === 'false' && document.querySelectorAll('.retention-assessment__category').length > 0`,
+        ));
+    } catch (cause) {
+        const retentionLoadDiagnostic = await evaluate(`JSON.stringify({
+          busy: document.querySelector('.retention-assessment')?.getAttribute('aria-busy'),
+          panel: document.querySelector('.retention-assessment')?.innerText,
+          alerts: [...document.querySelectorAll('[role="alert"]')].map(item => item.innerText),
+          recentHttpResponses: ${JSON.stringify(recentHttpResponses)},
+        })`);
+        throw new Error(`A consulta real de retenção não concluiu: ${retentionLoadDiagnostic}`, { cause });
+    }
+    const retentionDom = await evaluate(`(() => {
+      const categories = [...document.querySelectorAll('.retention-assessment__category')];
+      const clients = categories.find(category => category.querySelector('h4')?.innerText.trim() === 'Registros de clientes');
+      const audit = categories.find(category => category.querySelector('h4')?.innerText.trim() === 'Eventos de auditoria');
+      const panel = document.querySelector('#retention-assessment-title')?.closest('section');
+      return {
+        panelVisible: Boolean(panel),
+        clientCountExact: clients?.innerText.includes('1 (exata)') ?? false,
+        auditNotEvaluated: audit?.innerText.includes('Não avaliada') ?? false,
+        nonAtomic: panel?.innerText.includes('não formam um snapshot atômico') ?? false,
+        informational: panel?.innerText.includes('não autoriza descarte') ?? false,
+        privateFixtureHidden: !document.body.innerText.includes('E2E Synthetic Retention Client'),
+        assessmentRequests: performance.getEntriesByType('resource').filter(entry => entry.name.includes('/api/v1/admin/retention/assessment')).length,
+      };
+    })()`);
+    if (
+        !retentionDom.panelVisible ||
+        !retentionDom.clientCountExact ||
+        !retentionDom.auditNotEvaluated ||
+        !retentionDom.nonAtomic ||
+        !retentionDom.informational ||
+        !retentionDom.privateFixtureHidden ||
+        retentionDom.assessmentRequests < 1
+    ) {
+        throw new Error(`Avaliação real de retenção não correspondeu à fixture PostgreSQL: ${JSON.stringify(retentionDom)}`);
+    }
+    console.log('Browser: avaliação consultou API/PostgreSQL real, exibiu contagem sintética e estados informativos sem conteúdo privado.');
     await waitForText('Plano e período de avaliação', evaluate);
     await waitForText('Cobrança anual equivalente a 10 mensalidades', evaluate);
     const subscriptionOverview = await evaluate(
@@ -141,26 +182,41 @@ try {
                 return body;
               };
             }
+            if (path === '/api/v1/admin/retention/assessment' && !window.__retentionHoldUsed) {
+              window.__retentionHoldUsed = true;
+              const originalJson = response.json.bind(response);
+              response.json = async (...args) => {
+                const body = await originalJson(...args);
+                window.__retentionBodyParsed = true;
+                await new Promise(resolve => { window.__releaseRetentionBody = resolve; });
+                return body;
+              };
+            }
             return response;
           };
         })();`,
     });
     await command('Page.reload', { ignoreCache: true });
     await waitForText('Sessão administrativa ativa.', evaluate);
-    await waitUntil(() => evaluate('window.__subscriptionBodyParsed === true'));
+    await waitUntil(() => evaluate('window.__subscriptionBodyParsed === true && window.__retentionBodyParsed === true'));
     await command('Page.removeScriptToEvaluateOnNewDocument', {
         identifier: subscriptionHoldScript.identifier,
     });
     await clickButtonByText('Sair', evaluate);
     await waitForText('Sessão local encerrada.', evaluate);
-    await evaluate('window.__releaseSubscriptionBody?.()');
     const subscriptionLogoutState = () => evaluate(`({
       loggedOut: document.body.innerText.includes('Sessão local encerrada.'),
       subscriptionPanel: Boolean(document.querySelector('#subscription-heading')),
+      retentionPanel: Boolean(document.querySelector('#retention-assessment-title')),
+      tenantText: [...document.querySelectorAll('p')].find(item => item.innerText.includes('Tenant autorizado:'))?.innerText ?? null,
+      panelsInsideRoot: Boolean(document.querySelector('#root')?.contains(document.querySelector('#subscription-heading'))) + ':' + Boolean(document.querySelector('#root')?.contains(document.querySelector('#retention-assessment-title'))),
+      tenantText: [...document.querySelectorAll('p')].find(item => item.innerText.includes('Tenant autorizado:'))?.innerText ?? null,
+      panelCount: document.querySelectorAll('#subscription-heading, #retention-assessment-title').length,
       trialRestored: document.body.innerText.includes('Trial ativo'),
       loginLink: Boolean(document.querySelector('.login-link')),
       logoutButton: [...document.querySelectorAll('button')].some(button => button.innerText.trim() === 'Sair'),
       subscriptionPrivateData: ['Trial ativo', 'Assinatura ativa', 'Pagamento pendente', 'Assinatura suspensa', 'Trial encerrado', 'Plano:', 'Pago até:', 'Fim da tolerância:'].some(text => document.body.innerText.includes(text)),
+      retentionPrivateFixture: document.body.innerText.includes('E2E Synthetic Retention Client'),
       adminSessionFetches: window.__adminSessionFetches,
     })`);
     const stateBeforeRelease = await subscriptionLogoutState();
@@ -170,7 +226,7 @@ try {
     try {
         await waitUntil(async () => {
             const state = await subscriptionLogoutState();
-            return state.loginLink && !state.logoutButton && !state.subscriptionPrivateData;
+            return state.loginLink && !state.logoutButton && !state.subscriptionPanel && !state.retentionPanel && !state.subscriptionPrivateData && !state.retentionPrivateFixture;
         });
     } catch (cause) {
         const finalState = await subscriptionLogoutState();
@@ -180,10 +236,20 @@ try {
         );
     }
     const staleSubscriptionAfterLogout = await subscriptionLogoutState();
-    if (!staleSubscriptionAfterLogout.loginLink || staleSubscriptionAfterLogout.logoutButton || staleSubscriptionAfterLogout.subscriptionPrivateData) {
-        throw new Error(`GET comercial atrasado restaurou estado após logout: ${JSON.stringify(staleSubscriptionAfterLogout)}`);
+    if (!staleSubscriptionAfterLogout.loginLink || staleSubscriptionAfterLogout.logoutButton || staleSubscriptionAfterLogout.subscriptionPanel || staleSubscriptionAfterLogout.retentionPanel || staleSubscriptionAfterLogout.subscriptionPrivateData || staleSubscriptionAfterLogout.retentionPrivateFixture) {
+        throw new Error(`Painéis administrativos permaneceram após logout e antes de liberar GETs atrasados: ${JSON.stringify(staleSubscriptionAfterLogout)}`);
     }
-    console.log('Browser: GET administrativo de assinatura liberado após logout não restaura dados comerciais privados no DOM.');
+    console.log('Browser: logout removeu os painéis antes de liberar GETs reais de assinatura e retenção.');
+    await evaluate('window.__releaseSubscriptionBody?.(); window.__releaseRetentionBody?.()');
+    await waitUntil(async () => {
+        const state = await subscriptionLogoutState();
+        return state.loginLink && !state.logoutButton && !state.subscriptionPanel && !state.retentionPanel && !state.subscriptionPrivateData && !state.retentionPrivateFixture;
+    });
+    const staleAdminReadsAfterLogout = await subscriptionLogoutState();
+    if (!staleAdminReadsAfterLogout.loginLink || staleAdminReadsAfterLogout.logoutButton || staleAdminReadsAfterLogout.subscriptionPanel || staleAdminReadsAfterLogout.retentionPanel || staleAdminReadsAfterLogout.subscriptionPrivateData || staleAdminReadsAfterLogout.retentionPrivateFixture) {
+        throw new Error(`GETs administrativos liberados após logout restauraram estado no DOM: ${JSON.stringify(staleAdminReadsAfterLogout)}`);
+    }
+    console.log('Browser: GETs reais de assinatura e avaliação liberados após logout não restauram painéis/dados privados.');
     await evaluate("document.querySelector('a[href*=oauth2]').click()");
     await waitForText('Sessão administrativa ativa.', evaluate);
     await waitForText('Plano e período de avaliação', evaluate);
@@ -3316,7 +3382,9 @@ try {
     await command('Page.reload', { ignoreCache: true });
     await waitForText('Trial encerrado', evaluate);
     await waitForText('Operação preparada: MONTHLY', evaluate);
+    await waitUntil(() => evaluate(`(() => { const button = [...document.querySelectorAll('button')].find(item => item.innerText.trim() === 'Iniciar ou recuperar a mesma operação'); return Boolean(button && !button.disabled); })()`));
     await clickButtonByText('Iniciar ou recuperar a mesma operação', evaluate);
+    await waitUntil(() => evaluate('window.__checkoutRequests?.length === 1'));
     await waitForText('Resultado ainda incerto.', evaluate);
     const pendingCheckoutIntent = await evaluate(`({
       requests: window.__checkoutRequests,

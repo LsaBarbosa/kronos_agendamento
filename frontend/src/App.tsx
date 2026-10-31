@@ -18,6 +18,7 @@ import { ClientNoShowPolicyPanel } from './ClientNoShowPolicyPanel';
 import { ClientNoShowFactsPanel } from './ClientNoShowFactsPanel';
 import { AdminSubscriptionPanel } from './AdminSubscriptionPanel';
 import { ExportCenter } from './exports/ExportCenter';
+import { RetentionAssessmentPanel } from './retention/RetentionAssessmentPanel';
 
 type Session = { authenticated: boolean; tenantId: string; role: string };
 type Csrf = { headerName: string; token: string };
@@ -604,15 +605,23 @@ function AdminApp() {
                 )}
                 {session && (
                     <AdminSubscriptionPanel
-                        key={`${session.tenantId}:${session.role}`}
+                        key={`subscription:${session.tenantId}:${session.role}`}
                         enabled
                         tenantContextId={session.tenantId}
                         onSessionInvalid={handleNoShowPolicySessionInvalid}
                     />
                 )}
+                {session && (
+                    <RetentionAssessmentPanel
+                        key={`retention:${session.tenantId}:${session.role}`}
+                        enabled
+                        tenantId={session.tenantId}
+                        onSessionInvalid={handleNoShowPolicySessionInvalid}
+                    />
+                )}
                 {session && csrf && (
                     <ExportCenter
-                        key={`${session.tenantId}:${session.role}`}
+                        key={`exports:${session.tenantId}:${session.role}`}
                         tenantId={session.tenantId}
                         csrf={csrf}
                         onSessionInvalid={handleNoShowPolicySessionInvalid}

@@ -10,6 +10,9 @@ fi
 slug=$1
 tenant_name=$2
 username=${3:-demo-admin}
+compose_project=${COMPOSE_PROJECT_NAME:-${AGD_COMPOSE_PROJECT:-agendamento}}
+keycloak_public_url=${KEYCLOAK_PUBLIC_URL:-${AGD_KEYCLOAK_EXTERNAL_URL:-http://localhost:8180}}
+keycloak_issuer_uri=${AGD_KEYCLOAK_ISSUER_URI:-$keycloak_public_url/realms/agendamento}
 if [[ ! "$slug" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
   echo "Slug deve ser minúsculo e kebab-case." >&2
   exit 2
@@ -33,9 +36,10 @@ if [[ -z "${POSTGRES_PASSWORD:-}" || -z "${POSTGRES_USER:-}" ]]; then
   exit 1
 fi
 
-project_name=${COMPOSE_PROJECT_NAME:-agendamento}
-keycloak_public_url=${KEYCLOAK_PUBLIC_URL:-http://localhost:8180}
-compose=(docker compose -p "$project_name" -f compose.keycloak.yaml --env-file .env.keycloak)
+compose=(docker compose -p "$compose_project" -f compose.keycloak.yaml --env-file .env.keycloak)
+if [[ -n "${AGD_COMPOSE_OVERRIDE:-}" ]]; then
+  compose+=(-f "$AGD_COMPOSE_OVERRIDE")
+fi
 kc=("${compose[@]}" exec -T keycloak /opt/keycloak/bin/kcadm.sh)
 "${kc[@]}" config credentials \
   --server http://localhost:8080 \
@@ -57,7 +61,7 @@ if [[ -z "$subject" ]]; then
   echo "Não foi possível obter o subject provisionado no Keycloak." >&2
   exit 1
 fi
-existing_tenant=$(docker compose -p "$project_name" exec -T \
+existing_tenant=$("${compose[@]}" exec -T \
   -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
   psql -X -qAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
   -d "${POSTGRES_DB:-agendamento}" -v tenant_slug="$slug" <<'SQL'
@@ -69,10 +73,10 @@ if [[ "$existing_tenant" == "t" ]]; then
   echo "Slug já provisionado; use um slug novo. Nenhuma credencial foi alterada." >&2
   exit 1
 fi
-existing_identity=$(docker compose -p "$project_name" exec -T \
+existing_identity=$("${compose[@]}" exec -T \
   -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
   psql -X -qAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
-  -d "${POSTGRES_DB:-agendamento}" -v issuer="$keycloak_public_url/realms/agendamento" \
+  -d "${POSTGRES_DB:-agendamento}" -v issuer="$keycloak_issuer_uri" \
   -v subject="$subject" <<'SQL'
 SELECT EXISTS (SELECT 1 FROM agendamento.admin_user WHERE identity_issuer = :'issuer' AND identity_subject = :'subject');
 SQL
@@ -102,12 +106,12 @@ unlinked_subject=$(jq -r '.[0].id // empty' <<<"$unlinked_users")
   --new-password "$unlinked_password" >/dev/null
 
 tenant_id=$(uuidgen)
-tenant_id=$(docker compose -p "$project_name" exec -T \
+tenant_id=$("${compose[@]}" exec -T \
   -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
   psql -X -qAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
   -d "${POSTGRES_DB:-agendamento}" \
   -v tenant_id="$tenant_id" -v tenant_name="$tenant_name" -v tenant_slug="$slug" \
-  -v user_id="$subject" -v issuer="$keycloak_public_url/realms/agendamento" \
+  -v user_id="$subject" -v issuer="$keycloak_issuer_uri" \
   -v subject="$subject" -v trace_id="$(uuidgen)" <<'SQL'
 BEGIN;
 INSERT INTO agendamento.tenant (tenant_id, name, slug, timezone, status, version)
@@ -131,13 +135,28 @@ COMMIT;
 SQL
 )
 
+if [[ "${AGD_E2E_RETENTION_FIXTURE:-false}" == "true" ]]; then
+  retention_client_id=$(uuidgen)
+  "${compose[@]}" exec -T \
+    -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
+    psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
+    -d "${POSTGRES_DB:-agendamento}" \
+    -v tenant_id="$tenant_id" -v client_id="$retention_client_id" <<'SQL'
+INSERT INTO agendamento.client
+  (client_id, tenant_id, display_name, normalized_phone)
+VALUES
+  (:'client_id', :'tenant_id', 'E2E Synthetic Retention Client', '+14155550001');
+SQL
+  echo "Cliente sintético de retenção provisionado somente como fixture explícita de E2E."
+fi
+
 if [[ "${AGD_E2E_TRIAL_FIXTURE:-false}" == "true" ]]; then
   trial_subscription_id=$(uuidgen)
   trial_grant_id=$(uuidgen)
   trial_operation_id=$(uuidgen)
   trial_trace_id=$(uuidgen)
   trial_identity_digest=$(printf '%s' 'e2e-only-stable-commercial-identity' | sha256sum | cut -d' ' -f1)
-  docker compose -p "$project_name" exec -T \
+  "${compose[@]}" exec -T \
     -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
     psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
     -d "${POSTGRES_DB:-agendamento}" \
