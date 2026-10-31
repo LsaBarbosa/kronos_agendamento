@@ -24,7 +24,13 @@ services:
     profiles: ["app"]
     build:
       context: ./backend
-    image: agendamento-backend:local
+      additional_contexts:
+        temurin: ./infra/temurin
+    image: ${BACKEND_IMAGE:-agendamento-backend:local}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-agendamento}
       DB_USERNAME: agendamento_app

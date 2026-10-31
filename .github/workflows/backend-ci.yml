@@ -13,6 +13,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  keycloak-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      KEYCLOAK_IMAGE: kronos-keycloak:${{ github.sha }}
+      KEYCLOAK_PLATFORM: linux/amd64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the pinned Keycloak runtime once
+        run: scripts/dev/build-keycloak-image.sh "$KEYCLOAK_IMAGE"
+      - name: Export image and record immutable identity
+        run: |
+          docker image inspect --format '{{.Id}}' "$KEYCLOAK_IMAGE" > keycloak-image.id
+          docker save "$KEYCLOAK_IMAGE" | gzip -1 > keycloak-image.tar.gz
+          sha256sum keycloak-image.tar.gz > keycloak-image.tar.gz.sha256
+          cat keycloak-image.id
+          cat keycloak-image.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keycloak-image-${{ github.sha }}
+          path: |
+            keycloak-image.id
+            keycloak-image.tar.gz
+            keycloak-image.tar.gz.sha256
+          retention-days: 1
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
@@ -57,7 +84,7 @@ jobs:
           ./mvnw -B -ntp verify
       - name: Build local image and capture its identity
         run: |
-          docker build --iidfile ../backend-image-id.txt -t agendamento-backend:ci .
+          docker build --build-context temurin=../infra/temurin --iidfile ../backend-image-id.txt -t agendamento-backend:ci .
           cat ../backend-image-id.txt
       - name: Scan backend image for high and critical vulnerabilities
         uses: aquasecurity/trivy-action@v0.36.0
@@ -78,11 +105,27 @@ jobs:
             backend-image-id.txt
 
   security:
+    needs: [keycloak-image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: keycloak-image-${{ github.sha }}
+          path: /tmp/keycloak-image
+      - name: Load and verify the exact Keycloak artifact
+        env:
+          KEYCLOAK_IMAGE: kronos-keycloak:${{ github.sha }}
+        run: |
+          cd /tmp/keycloak-image
+          sha256sum -c keycloak-image.tar.gz.sha256
+          docker load --input keycloak-image.tar.gz
+          expected=$(cat keycloak-image.id)
+          actual=$(docker image inspect --format '{{.Id}}' "$KEYCLOAK_IMAGE")
+          test "$actual" = "$expected"
+          printf 'VerifiedKeycloakImage=%s\n' "$actual"
       - name: Scan backend container configuration
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -93,16 +136,24 @@ jobs:
           exit-code: '1'
           severity: HIGH,CRITICAL
           version: v0.75.0
-      - name: Scan pinned Keycloak image
-        uses: aquasecurity/trivy-action@v0.36.0
+      - name: Verify Ubuntu Noble advisory coverage with an isolated vulnerable control
+        env:
+          KEYCLOAK_IMAGE: kronos-keycloak:${{ github.sha }}
+          KEYCLOAK_PLATFORM: linux/amd64
+        run: scripts/dev/verify-keycloak-scan-coverage.sh "$KEYCLOAK_IMAGE"
+      - name: Scan built Keycloak image used by OIDC E2E
+        env:
+          TRIVY_CACHE_DIR: /tmp/trivy-cache
+          TRIVY_REPORT_DIR: /tmp/trivy-report
+        run: scripts/dev/scan-keycloak-image.sh "kronos-keycloak:${{ github.sha }}"
+      - name: Preserve the complete Keycloak Trivy report
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          scan-type: image
-          image-ref: quay.io/keycloak/keycloak@sha256:79c623a22abacf3fe6c00a5fb30f5b7843d717b234033b80995891c06116d244
-          scanners: vuln
-          format: table
-          exit-code: '1'
-          severity: HIGH,CRITICAL
-          version: v0.75.0
+          name: keycloak-trivy-report-${{ github.sha }}
+          path: /tmp/trivy-report/*.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   secrets:
     runs-on: ubuntu-latest
@@ -126,12 +177,33 @@ jobs:
           version: v0.75.0
 
   oidc-browser-e2e:
+    needs: [keycloak-image]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
       contents: read
+    env:
+      KEYCLOAK_IMAGE: kronos-keycloak:${{ github.sha }}
+      KEYCLOAK_PLATFORM: linux/amd64
+      COMPOSE_PROJECT_NAME: agd-oidc-${{ github.run_id }}-${{ github.run_attempt }}
+      KEYCLOAK_PUBLIC_URL: http://localhost:8180
+      APP_PUBLIC_URL: http://localhost:8080
+      FRONTEND_PUBLIC_URL: http://localhost:5173
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: keycloak-image-${{ github.sha }}
+          path: /tmp/keycloak-image
+      - name: Load and verify the exact Keycloak artifact
+        run: |
+          cd /tmp/keycloak-image
+          sha256sum -c keycloak-image.tar.gz.sha256
+          docker load --input keycloak-image.tar.gz
+          expected=$(cat keycloak-image.id)
+          actual=$(docker image inspect --format '{{.Id}}' "$KEYCLOAK_IMAGE")
+          test "$actual" = "$expected"
+          printf 'VerifiedKeycloakImage=%s\n' "$actual"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -153,7 +225,7 @@ jobs:
             echo "E2E payment secret host override detected; Compose will use the disposable env file."
           fi
           unset APP_BILLING_E2E_WEBHOOK_SECRET
-          docker compose -p agendamento --env-file .env --env-file .env.keycloak --env-file .env.e2e \
+          docker compose -p "$COMPOSE_PROJECT_NAME" --env-file .env --env-file .env.keycloak --env-file .env.e2e \
             -f compose.yaml -f compose.keycloak.yaml -f compose.identity.yaml -f compose.e2e.yaml \
             --profile app up --build --wait --wait-timeout 240 -d
       - name: Provision linked and unlinked OIDC users
@@ -165,7 +237,7 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
-          npm run dev -- --host 127.0.0.1 > /tmp/agendamento-vite.log 2>&1 &
+          VITE_BACKEND_PROXY=http://localhost:8080 npm run dev -- --host 127.0.0.1 > /tmp/agendamento-vite.log 2>&1 &
           for attempt in $(seq 1 60); do
             if curl --fail --silent http://localhost:5173/admin >/dev/null; then exit 0; fi
             sleep 1
@@ -175,6 +247,7 @@ jobs:
       - name: Exercise OIDC in headless Chrome
         env:
           CHROME_BIN: /usr/bin/google-chrome
+          E2E_FRONTEND_URL: http://localhost:5173
         run: |
           set -a
           source .env.e2e
@@ -183,7 +256,7 @@ jobs:
       - name: Report safe E2E payment webhook rejection categories
         if: failure()
         run: |
-          docker compose -p agendamento --env-file .env --env-file .env.keycloak --env-file .env.e2e \
+          docker compose -p "$COMPOSE_PROJECT_NAME" --env-file .env --env-file .env.keycloak --env-file .env.e2e \
             -f compose.yaml -f compose.keycloak.yaml -f compose.identity.yaml -f compose.e2e.yaml \
             --profile app logs --no-color backend 2>&1 | grep -E 'payment_webhook_(e2e|security)' || true
       - name: Upload diagnostic logs on failure
@@ -193,3 +266,9 @@ jobs:
           name: oidc-browser-e2e-logs
           path: /tmp/agendamento-vite.log
           if-no-files-found: ignore
+      - name: Remove only this run's disposable OIDC stack
+        if: always()
+        run: |
+          docker compose -p "$COMPOSE_PROJECT_NAME" --env-file .env --env-file .env.keycloak --env-file .env.e2e \
+            -f compose.yaml -f compose.keycloak.yaml -f compose.identity.yaml -f compose.e2e.yaml \
+            --profile app down --volumes --remove-orphans || true
