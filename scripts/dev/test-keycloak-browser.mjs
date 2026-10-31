@@ -56,6 +56,8 @@ let socket;
 let browserCdp;
 let secondTab;
 let secondTargetId;
+let unlinkedTab;
+let unlinkedTargetId;
 try {
     await waitUntil(async () => {
         const response = await fetch('http://127.0.0.1:9222/json/version');
@@ -3143,7 +3145,7 @@ try {
     if (!lateRecoveryDom.attempts?.includes('Motivo: tentativa anterior vencida e nunca iniciada') || !lateRecoveryDom.unknown || !lateRecoveryDom.scheduled) {
         throw new Error(`Estados persistidos de recuperação/ambiguidade não apareceram corretamente após reload: ${JSON.stringify(lateRecoveryDom)}`);
     }
-    queryPostgres(`UPDATE agendamento.billing_dunning_attempt a SET state = 'ACCEPTED', provider_code = 'synthetic', provider_reference = 'transport-accepted-only', last_error_code = NULL FROM agendamento.billing_dunning_cycle c WHERE a.cycle_id = c.cycle_id AND a.tenant_id = c.tenant_id AND c.tenant_id = '${authenticatedSession.tenantId}' AND c.subscription_id = '${activeTrial.subscriptionId}' AND a.logical_sequence = 3`, appEnvironment);
+    queryPostgres(`UPDATE agendamento.billing_dunning_attempt a SET state = 'ACCEPTED', provider_code = 'synthetic', provider_account_id = 'e2e-only', provider_reference = 'transport-accepted-only', last_error_code = NULL FROM agendamento.billing_dunning_cycle c WHERE a.cycle_id = c.cycle_id AND a.tenant_id = c.tenant_id AND c.tenant_id = '${authenticatedSession.tenantId}' AND c.subscription_id = '${activeTrial.subscriptionId}' AND a.logical_sequence = 3`, appEnvironment);
     await command('Page.reload');
     await waitForText('Aceita pelo transporte; pagamento ainda não confirmado', evaluate);
     if (!await evaluate("document.body.innerText.includes('pagamento ainda não confirmado')")) {
@@ -3156,13 +3158,43 @@ try {
     }
     console.log('Browser E2E sintético: após pagamento controlado, fixture administrativa materializa ACTIVE→PAST_DUE; painel mostra paidThrough/graceEnds, D0/D+3/D+6, late-recovery skip, resultado incerto e aceite de transporte sem confundir com pagamento, com um ciclo e três identidades após reload. Estados posteriores são fixtures isoladas de teste; nenhum provider ou débito real foi chamado. Checkout/webhook existentes preservam retry, dedupe e ordem.');
 
+    queryPostgres(`UPDATE agendamento.billing_dunning_attempt a SET state = 'CANCELLED', claim_token = NULL, lease_until = NULL, send_claim_token = NULL, next_attempt_at = NULL, skip_reason = NULL FROM agendamento.billing_dunning_cycle c WHERE a.cycle_id = c.cycle_id AND a.tenant_id = c.tenant_id AND c.tenant_id = '${authenticatedSession.tenantId}' AND c.subscription_id = '${activeTrial.subscriptionId}'`, appEnvironment);
+    queryPostgres(`UPDATE agendamento.billing_dunning_cycle SET state = 'PAID', closed_at = clock_timestamp() WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}' AND state IN ('OPEN', 'SUSPENDED')`, appEnvironment);
+    queryPostgres(`UPDATE agendamento.subscription SET status = 'ACTIVE', plan_code = 'ANNUAL', paid_through_at = clock_timestamp() + INTERVAL '1 hour', grace_ends_at = NULL, version = version + 1 WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}'`, appEnvironment);
+    await waitUntil(async () => Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_annual_renewal_notice WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}' AND paid_through_at = (SELECT paid_through_at FROM agendamento.subscription WHERE subscription_id = '${activeTrial.subscriptionId}') AND state = 'READY' AND obsolete_reason IS NULL AND scheduled_at <= clock_timestamp()`, appEnvironment)) === 1, 125000);
+    await command('Page.reload');
+    await waitForText('Renovação anual', evaluate);
+    const annualNoticeDom = await evaluate(`({
+      section: document.querySelector('[aria-label="Renovação anual"]')?.innerText,
+      pendingDelivery: document.body.innerText.includes('intenção pronta; não enviada'),
+      authorizationUnavailable: document.body.innerText.includes('indisponível ou não confirmada')
+    })`);
+    const annualNoticeRows = Number(queryPostgres(`SELECT count(*) FROM agendamento.billing_annual_renewal_notice WHERE tenant_id = '${authenticatedSession.tenantId}' AND subscription_id = '${activeTrial.subscriptionId}' AND paid_through_at = (SELECT paid_through_at FROM agendamento.subscription WHERE subscription_id = '${activeTrial.subscriptionId}') AND state = 'READY' AND obsolete_reason IS NULL`, appEnvironment));
+    if (!annualNoticeDom.section?.includes('Versão') || !annualNoticeDom.pendingDelivery || !annualNoticeDom.authorizationUnavailable || annualNoticeRows !== 1) {
+        throw new Error(`Intenção de aviso anual não persistiu/renderizou como não enviada: ${JSON.stringify({annualNoticeDom, annualNoticeRows})}`);
+    }
+    await command('Page.reload');
+    await waitForText('intenção pronta; não enviada', evaluate);
+    console.log('Browser E2E sintético: o worker de AGD-042 materializa a intenção anual no período corrente; PostgreSQL confirma READY sem entrega, e a UI mantém estado/versão após reload. A assinatura foi preparada por fixture isolada; nenhum fornecedor/notificação real.');
+
     await command('Network.clearBrowserCookies');
-    await navigate(frontendUrl('/admin'), command, evaluate);
-    await waitForText('Entrar como administrador', evaluate);
-    await evaluate("document.querySelector('a[href*=oauth2]').click()");
-    await waitForText('username', evaluate, true);
-    await submitLogin(credentials.KEYCLOAK_UNLINKED_USERNAME, credentials.KEYCLOAK_UNLINKED_PASSWORD, evaluate);
-    await waitForText('ADMIN_ACCESS_DENIED', evaluate);
+    const unlinkedTarget = await browserCdp.command('Target.createTarget', {
+        url: 'http://localhost:5173/admin',
+    });
+    unlinkedTargetId = unlinkedTarget.targetId;
+    const unlinkedTargetInfo = await waitForTarget(unlinkedTargetId);
+    unlinkedTab = await connectToCdp(unlinkedTargetInfo.webSocketDebuggerUrl);
+    await unlinkedTab.command('Page.enable');
+    await unlinkedTab.command('Runtime.enable');
+    await waitForText('Entrar como administrador', unlinkedTab.evaluate);
+    await unlinkedTab.evaluate("document.querySelector('a[href*=oauth2]').click()");
+    await waitForText('username', unlinkedTab.evaluate, true);
+    await submitLogin(
+        credentials.KEYCLOAK_UNLINKED_USERNAME,
+        credentials.KEYCLOAK_UNLINKED_PASSWORD,
+        unlinkedTab.evaluate,
+    );
+    await waitForText('ADMIN_ACCESS_DENIED', unlinkedTab.evaluate);
     assertNoCredentialsInBackendLogs(appEnvironment, keycloakEnvironment, credentials, [
         clientPhone,
         differentPhone,
@@ -3175,6 +3207,10 @@ try {
         'Browser E2E passed: OIDC login, tenant, 30-minute idle expiry, SSO reauthentication, revocation, CSRF logout, unlinked denial, no test credentials in backend logs.',
     );
 } finally {
+    if (browserCdp && unlinkedTargetId) {
+        await browserCdp.command('Target.closeTarget', { targetId: unlinkedTargetId }).catch(() => {});
+    }
+    unlinkedTab?.close();
     if (browserCdp && secondTargetId) {
         await browserCdp.command('Target.closeTarget', { targetId: secondTargetId }).catch(() => {});
     }
@@ -3208,7 +3244,8 @@ async function connectToCdp(webSocketDebuggerUrl, responseHistory = null) {
             } catch {}
         }
         if (!message.id || !pending.has(message.id)) return;
-        const { resolve, reject } = pending.get(message.id);
+        const { resolve, reject, timeout } = pending.get(message.id);
+        clearTimeout(timeout);
         pending.delete(message.id);
         if (message.error) reject(new Error(message.error.message));
         else resolve(message.result);
@@ -3216,8 +3253,18 @@ async function connectToCdp(webSocketDebuggerUrl, responseHistory = null) {
     const command = (method, params = {}) =>
         new Promise((resolve, reject) => {
             const id = ++commandId;
-            pending.set(id, { resolve, reject });
-            cdpSocket.send(JSON.stringify({ id, method, params }));
+            const timeout = setTimeout(() => {
+                pending.delete(id);
+                reject(new Error(`CDP command ${method} did not respond within 30 seconds.`));
+            }, 30_000);
+            pending.set(id, { resolve, reject, timeout });
+            try {
+                cdpSocket.send(JSON.stringify({ id, method, params }));
+            } catch (error) {
+                clearTimeout(timeout);
+                pending.delete(id);
+                reject(error);
+            }
         });
     const evaluate = async (expression) => {
         const result = await command('Runtime.evaluate', {

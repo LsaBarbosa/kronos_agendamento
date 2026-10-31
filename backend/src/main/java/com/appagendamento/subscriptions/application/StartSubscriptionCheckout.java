@@ -26,6 +26,7 @@ public class StartSubscriptionCheckout {
   private static final String SCOPE = "subscriptions.checkout.v1";
   private final AdminAccessPolicy access;
   private final SubscriptionRepository subscriptions;
+  private final SubscriptionDunningRepository dunning;
   private final BillingRepository billing;
   private final BillingOfferCatalog offers;
   private final HostedCheckoutProvider provider;
@@ -37,6 +38,7 @@ public class StartSubscriptionCheckout {
   public StartSubscriptionCheckout(
       AdminAccessPolicy access,
       SubscriptionRepository subscriptions,
+      SubscriptionDunningRepository dunning,
       BillingRepository billing,
       BillingOfferCatalog offers,
       HostedCheckoutProvider provider,
@@ -46,6 +48,7 @@ public class StartSubscriptionCheckout {
       Clock clock) {
     this.access = access;
     this.subscriptions = subscriptions;
+    this.dunning = dunning;
     this.billing = billing;
     this.offers = offers;
     this.provider = provider;
@@ -94,6 +97,14 @@ public class StartSubscriptionCheckout {
               }
               if (current.map(value -> value.status().equals("ACTIVE")).orElse(false)) {
                 throw new SubscriptionCheckoutConflictException("SUBSCRIPTION_ALREADY_ACTIVE");
+              }
+              if (current
+                  .filter(
+                      value ->
+                          dunning.hasUnresolvedPayment(admin.tenantId(), value.subscriptionId()))
+                  .isPresent()) {
+                throw new SubscriptionCheckoutConflictException(
+                    "DUNNING_PAYMENT_OUTCOME_UNRESOLVED");
               }
               billing.createCheckout(
                   new CheckoutOperation(
