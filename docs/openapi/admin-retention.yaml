@@ -1,0 +1,266 @@
+openapi: 3.1.0
+info:
+  title: App Agendamento — Avaliação administrativa de retenção
+  version: 1.0.0
+  description: >-
+    Consulta somente leitura, tenant-scoped e informativa. A resposta não autoriza
+    descarte, não comprova conformidade e não valida legal hold. O tenant é derivado
+    da sessão e associação atual no servidor; não existe parâmetro de tenant.
+servers:
+  - url: /
+paths:
+  /api/v1/admin/retention/assessment:
+    get:
+      operationId: getAdminRetentionAssessment
+      summary: Avaliar dados e dependências de retenção do tenant autenticado
+      description: >-
+        Consulta projeções minimizadas das fontes cobertas. As leituras são consultas
+        independentes em READ COMMITTED e não formam snapshot atômico. `referenceAt`
+        é o instante comum usado para identificar reservas futuras e artefatos vencidos;
+        `observedAt` informa quando cada fonte terminou sua consulta. Contagens são
+        limitadas a 10.000 por métrica; `AT_LEAST_LIMIT` significa que a quantidade real
+        é de pelo menos esse limite. Categorias não cobertas, fontes indisponíveis e
+        políticas não configuradas são estados distintos. A validade de 12 meses é
+        apresentada como requisito inicial após cancelamento/suspensão, mas sem marco
+        inicial, cálculo de data final ou autorização para excluir. Cada fonte tem
+        timeout de consulta de 2 segundos; uma fonte que excede o timeout retorna
+        `SOURCE_UNAVAILABLE` sem valor zero.
+        Categorias consultadas no recorte: tenant lifecycle status, quantidade de
+        clients, appointments e futuras appointments confirmadas, estados mínimos de
+        notification intents e outbox, estado/metadados de export jobs no PostgreSQL e
+        subscription/checkout/dunning status e contagens. Cada métrica retorna no máximo
+        10.000; resultado limitado usa AT_LEAST_LIMIT. Configuração de negócio e
+        associações administrativas, snapshots, challenges/sessions, idempotency/receipts,
+        evidência/inboxes de notification e payment, objetos físicos de export, auditoria,
+        ledger de trial, backups/restores e legal holds não são consultados e permanecem
+        NOT_EVALUATED. Metadados de export não provam exclusão no storage.
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Avaliação informativa, possivelmente parcial por fonte indisponível.
+          headers:
+            Cache-Control:
+              required: true
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionAssessment'
+              example:
+                referenceAt: '2026-10-26T14:00:00Z'
+                startedAt: '2026-10-26T14:00:00Z'
+                completedAt: '2026-10-26T14:00:00.087Z'
+                readConsistency: NON_ATOMIC_READ_COMMITTED
+                informationalOnly: true
+                tenantLifecycleStatus: ACTIVE
+                countLimit: 10000
+                sourceQueryTimeoutSeconds: 2
+                policy:
+                  initialPostCancellationOrSuspensionRetentionStatus: REQUIREMENT_DEFINED
+                  initialPostCancellationOrSuspensionMonths: 12
+                  startMarker: UNRESOLVED
+                  categoryPolicies: NOT_CONFIGURED
+                  legalBases: NOT_CONFIGURED
+                  holdAuthority: UNDEFINED
+                  holdInventory: NOT_EVALUATED
+                categories:
+                  - code: APPOINTMENTS
+                    evaluationStatus: ASSESSED
+                    sourceStatus: AVAILABLE
+                    observedAt: '2026-10-26T14:00:00.021Z'
+                    counts:
+                      records:
+                        value: 8
+                        status: EXACT
+                        limit: 10000
+                      futureConfirmed:
+                        value: 2
+                        status: EXACT
+                        limit: 10000
+                    facts: {}
+                    reasons: []
+                  - code: AUDIT_EVENTS
+                    evaluationStatus: NOT_EVALUATED
+                    sourceStatus: NOT_QUERIED
+                    observedAt: null
+                    counts: {}
+                    facts: {}
+                    reasons:
+                      - CATEGORY_OUTSIDE_INITIAL_SCOPE
+                  - code: LEGAL_HOLDS
+                    evaluationStatus: NOT_EVALUATED
+                    sourceStatus: NOT_QUERIED
+                    observedAt: null
+                    counts: {}
+                    facts: {}
+                    reasons:
+                      - CATEGORY_OUTSIDE_INITIAL_SCOPE
+                blockers:
+                  - FUTURE_APPOINTMENTS_PRESENT
+                  - RETENTION_START_MARKER_UNRESOLVED
+                  - CATEGORY_POLICY_NOT_CONFIGURED
+                  - LEGAL_BASE_NOT_CONFIGURED
+                  - HOLD_AUTHORITY_UNDEFINED
+                  - HOLD_INVENTORY_NOT_EVALUATED
+                  - ASSESSMENT_ONLY_NO_DISCARD_AUTHORIZATION
+        '401':
+          description: Sessão ausente ou inválida.
+        '403':
+          description: Associação atual ao tenant indisponível ou não autorizada.
+        '503':
+          description: Serviço de identidade/autorização indisponível antes da avaliação.
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: AGDSESSION
+  schemas:
+    RetentionAssessment:
+      type: object
+      additionalProperties: false
+      required:
+        - referenceAt
+        - startedAt
+        - completedAt
+        - readConsistency
+        - informationalOnly
+        - tenantLifecycleStatus
+        - countLimit
+        - sourceQueryTimeoutSeconds
+        - policy
+        - categories
+        - blockers
+      properties:
+        referenceAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        readConsistency:
+          type: string
+          const: NON_ATOMIC_READ_COMMITTED
+        informationalOnly:
+          type: boolean
+          const: true
+        tenantLifecycleStatus:
+          type: string
+          enum: [ACTIVE, SUSPENDED, UNKNOWN]
+        countLimit:
+          type: integer
+          const: 10000
+        sourceQueryTimeoutSeconds:
+          type: integer
+          const: 2
+        policy:
+          $ref: '#/components/schemas/PolicyStatus'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategoryAssessment'
+        blockers:
+          type: array
+          items:
+            type: string
+    PolicyStatus:
+      type: object
+      additionalProperties: false
+      required:
+        - initialPostCancellationOrSuspensionRetentionStatus
+        - initialPostCancellationOrSuspensionMonths
+        - startMarker
+        - categoryPolicies
+        - legalBases
+        - holdAuthority
+        - holdInventory
+      properties:
+        initialPostCancellationOrSuspensionRetentionStatus:
+          type: string
+          const: REQUIREMENT_DEFINED
+        initialPostCancellationOrSuspensionMonths:
+          type: integer
+          const: 12
+        startMarker:
+          type: string
+          const: UNRESOLVED
+        categoryPolicies:
+          type: string
+          const: NOT_CONFIGURED
+        legalBases:
+          type: string
+          const: NOT_CONFIGURED
+        holdAuthority:
+          type: string
+          const: UNDEFINED
+        holdInventory:
+          type: string
+          const: NOT_EVALUATED
+    CategoryAssessment:
+      type: object
+      additionalProperties: false
+      required: [code, evaluationStatus, sourceStatus, observedAt, counts, facts, reasons]
+      properties:
+        code:
+          type: string
+          enum:
+            - TENANT_LIFECYCLE
+            - CLIENT_RECORDS
+            - APPOINTMENTS
+            - NOTIFICATION_INTENTS
+            - OUTBOX_EVENTS
+            - EXPORT_JOBS
+            - BILLING_OPERATIONS
+            - TENANT_AND_BUSINESS_CONFIGURATION
+            - ADMIN_IDENTITIES_AND_MEMBERSHIPS
+            - BUSINESS_SNAPSHOTS
+            - CHALLENGES_AND_SESSIONS
+            - IDEMPOTENCY_AND_RECEIPTS
+            - NOTIFICATION_EVIDENCE_AND_INBOXES
+            - PAYMENT_EVIDENCE
+            - EXPORT_OBJECT_STORAGE
+            - AUDIT_EVENTS
+            - TRIAL_LEDGER
+            - BACKUPS_AND_RESTORES
+            - LEGAL_HOLDS
+        evaluationStatus:
+          type: string
+          enum: [ASSESSED, SOURCE_UNAVAILABLE, NOT_EVALUATED]
+        sourceStatus:
+          type: string
+          enum: [AVAILABLE, UNAVAILABLE, NOT_QUERIED]
+        observedAt:
+          type: [string, 'null']
+          format: date-time
+        counts:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/RetentionCount'
+        facts:
+          type: object
+          additionalProperties:
+            type: string
+        reasons:
+          type: array
+          items:
+            type: string
+    RetentionCount:
+      type: object
+      additionalProperties: false
+      required: [value, status, limit]
+      properties:
+        value:
+          type: [integer, 'null']
+          minimum: 0
+        status:
+          type: string
+          enum: [EXACT, AT_LEAST_LIMIT]
+        limit:
+          type: integer
+          const: 10000

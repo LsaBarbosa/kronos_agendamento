@@ -51,6 +51,7 @@ import com.appagendamento.publicpage.application.GetPublicationStatus;
 import com.appagendamento.publicpage.application.ListPublicServices;
 import com.appagendamento.publicpage.application.UpdatePublicContact;
 import com.appagendamento.publicpage.domain.PublicPageUnavailableException;
+import com.appagendamento.retention.application.GetRetentionAssessment;
 import com.appagendamento.subscriptions.api.PublicSubscriptionEligibility;
 import com.appagendamento.subscriptions.application.AdmitPaymentWebhook;
 import com.appagendamento.subscriptions.application.GetAdminCheckoutOperation;
@@ -132,6 +133,7 @@ class SecurityBoundaryTest {
   @MockitoBean private IssueExportDownloadHandle issueExportDownloadHandle;
   @MockitoBean private DownloadExport downloadExport;
   @MockitoBean private ExpireExport expireExport;
+  @MockitoBean private GetRetentionAssessment getRetentionAssessment;
 
   @Test
   void anonymousBusinessRequestReceivesConsistentError() throws Exception {
