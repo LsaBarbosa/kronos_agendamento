@@ -1502,6 +1502,11 @@ class PublicAppointmentIT {
   @Test
   void absentPolicyAllowsUnrestrictedPublicBookingButDoesNotReleaseExistingRestriction()
       throws Exception {
+    Instant databaseNow =
+        migrationJdbc
+            .queryForObject("SELECT clock_timestamp()", java.sql.Timestamp.class)
+            .toInstant();
+    org.mockito.Mockito.when(clock.instant()).thenReturn(databaseNow);
     UUID unrestrictedClient = seedNoShowClient("No policy remains open");
     String unrestrictedPhone =
         migrationJdbc.queryForObject(
@@ -1545,6 +1550,7 @@ class PublicAppointmentIT {
         .andExpect(jsonPath("$.policyStatus").value("NOT_CONFIGURED"))
         .andExpect(jsonPath("$.restrictionStatus").value("RESTRICTED"));
     int appointmentsBefore = count("appointment", tenantId);
+    org.mockito.Mockito.when(clock.instant()).thenReturn(databaseNow);
     String blockedStart = bookingDate.atTime(10, 0).atZone(ZONE).toOffsetDateTime().toString();
     var blocked =
         submitBooking(
