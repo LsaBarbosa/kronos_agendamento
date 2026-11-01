@@ -95,3 +95,11 @@ incluiu contrato, regras, fixtures e diff. Isso não representa aprovação huma
 Não foram executados image scans, E2E de aplicação nem CI nesta correção de
 infraestrutura. Responsáveis nominais/plantão, limites como SLO/SLA e integração
 live continuam pendentes.
+
+## Atualização do PR #29 após AGD-050-A
+
+- Referências: head #29 antes da atualização `6acdb6b981486b511ce11862080940c6817e6ba4`; head #28 integrado `6cf81661cdcb14f03ca098cf2eae33bed8d820de`. #28 foi mesclado em `main` como `86c1bf0bb6e0bb1d76df3eda4a99f4c15094bdf8`; App CI push `41254366298` e CodeQL push `41254366297` passaram.
+- Merges normais locais em #29: #28 em `f23278f` e main pós-merge em `8cee18a9b9a5d3b34aae7c0146984ec4aaeb8482`. Sem rebase/force-push; V44/V45 e o ajuste Clock preservados sem duplicação.
+- Correção adicional de contrato v1.4: removidos `ExportOutcomeUnknownPending` (sem série de exportações) e `trial_expiry` de `WorkerRepeatedExecutionFailures` (sem backlog para satisfazer a regra). Teste de regras e validação estática rejeitam essas referências sem suporte.
+- Validações posteriores: `validate`, `smoke`, `isolation-test`, `bash -n scripts/validate-agd052-observability.sh`, `node --check scripts/dev/test-keycloak-browser.mjs`, `git diff --check`; todas passaram. Live proof descartável: backend Image ID `sha256:3210d32e5cb1c80d178e4b2ddea1c21a21dc12fdb53ae608f2b75a377d35d024`; endpoint técnico 401 sem bearer/200 com bearer; Prometheus consultou `up` e contador HTTP real; ambiente saudável sem firing; PostgreSQL interrompido controladamente acionou `MetricsSourceUnavailable` enquanto o scrape permaneceu disponível. Projetos exclusivos foram limpos.
+- Main resultante foi incorporada localmente; o commit final e o push ficam registrados no PR #29. PR permanece draft. Alertmanager/destinatários, SLO e plantão não foram aprovados. O scan de segurança Keycloak não teve política, severidade, pin ou suppression alterados.

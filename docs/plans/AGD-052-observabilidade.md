@@ -50,7 +50,7 @@
 - [x] P2 financeiro corrigido em `PostgresSubscriptionDunningRepository.metricsSnapshot`: estados de resultado ambíguo são filtrados antes do limite; V45 adiciona índice parcial sem alterar V1–V44. Regressão PostgreSQL cobre uma pendência antiga com 10.001 tentativas terminais mais recentes.
 - [x] P2 de booking corrigido: `attempts` e `commands` representam somente criação; remarcação/cancelamento/conclusão/falta/correção incrementam apenas efeito confirmado, e replay não duplica efeitos. Conflitos dessas rotas não contam como conflito de criação.
 - [x] JDK 21 `spotless:check verify` passou após as correções: 94 unitários/arquiteturais e 331 integrações PostgreSQL/Testcontainers, sem falhas, erros ou skips. Testes focais adicionais: 1 `BookingMetricsTest` e 174 integrações em quatro classes.
-- [ ] PR #29 permanece draft sobre `agd-050a-retention-assessment`, dependente do PR #28. Publicação e checks remotos do head consolidado ainda pendentes.
+- [x] PR #28 integrado à `main` no SHA `86c1bf0bb6e0bb1d76df3eda4a99f4c15094bdf8`; App CI push `41254366298` e CodeQL push `41254366297` passaram. A branch local de #29 incorporou #28 e a main pós-merge por merges normais. O head consolidado de #29 aguarda publicação e seus próprios checks.
 
 ## Validação
 
@@ -72,3 +72,5 @@
 ## Encerramento ou retomada
 
 AGD-052 segue parcial até revisão e checks remotos no head consolidado. O gate de segurança conhecido no scan da imagem Keycloak permanece fora deste escopo e não foi alterado. Não iniciar outra história nem alterar configurações de produção.
+
+Na atualização de 01/11/2026, foram removidos alertas incompatíveis com as séries v1.4 ausentes para exports e trial_expiry, com regressões no promtool e no validador. Detalhes da validação e da prova descartável estão em [VALIDATION](../development/VALIDATION.md) e [TRACEABILITY](../development/TRACEABILITY.md). Alertmanager, destinatários, SLO e plantão permanecem decisões pendentes.
