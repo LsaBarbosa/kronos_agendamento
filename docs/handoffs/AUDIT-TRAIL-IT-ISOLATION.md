@@ -5,7 +5,7 @@
 - Worktree: `/tmp/kronos-audit-trail-it`
 - Branch: `fix/audit-trail-it-isolation`
 - Base inspecionada: `main` em `86c1bf0bb6e0bb1d76df3eda4a99f4c15094bdf8`.
-- PR #29 foi consultado antes da publicação em `88ded37ef9bf208aefc83673fb47c1f1371ef8fd`; segue aberto/draft com base `main`, sem merge. `origin/main` permaneceu em `86c1bf0bb6e0bb1d76df3eda4a99f4c15094bdf8`. Não há merge de #29 a incorporar nesta base; repetir a conferência imediatamente antes de publicar.
+- PR #29 foi conferido imediatamente antes da publicação em `88ded37ef9bf208aefc83673fb47c1f1371ef8fd`; estava aberto/draft com base `main`, sem merge. `origin/main` permaneceu em `86c1bf0bb6e0bb1d76df3eda4a99f4c15094bdf8`. Nenhum commit de #29 foi incorporado.
 - Alteração de código restrita a `backend/src/test/java/com/appagendamento/audit/AuditTrailIT.java`. Este handoff é o único documento novo; nenhum documento geral de status foi tocado.
 
 ## Causa e reprodução
@@ -35,6 +35,13 @@ Resultado: `AuditTrailIT` 5/5, zero falhas/erros/skips; build Failsafe sucesso. 
 
 Uma tentativa intermediária no namespace restrito falhou antes de executar os testes porque Java não podia abrir `/var/run/docker.sock` (`Operation not permitted`). A repetição com acesso ao daemon autorizado encontrou Testcontainers PostgreSQL e passou; a falha intermediária não é tratada como resultado do teste/código.
 
+## Publicação e CI
+
+- Commit inicial publicado: `878aa5cadbf4383f296690849c18e03957b9750c` (`test: isolate audit rollback assertion`).
+- PR draft separado para `main`: https://github.com/LsaBarbosa/kronos_agendamento/pull/30.
+- No SHA `878aa5c`, `verify`, CodeQL, security, frontend, keycloak-image, análises Java/TypeScript e verificações de segredos passaram nos eventos observados.
+- Um dos dois jobs `oidc-browser-e2e` passou. O outro falhou no cenário de remarcação, esperando “Remarcação confirmada e persistida” e recebendo conflito HTTP 409. Essa ocorrência é alheia aos dois arquivos deste PR e não foi investigada ou alterada nesta frente, conforme o escopo. O E2E completo, portanto, não está verde neste SHA.
+
 ## Entrega
 
-Sem alteração de produção, migrations, constraints, workers, timeout, política transacional ou regra de negócio. Ainda pendentes: confirmar novamente o corte remoto de `main`/#29 antes de publicar, fazer commit, abrir PR draft separado para `main` e acompanhar App CI/CodeQL no SHA publicado.
+Sem alteração de produção, migrations, constraints, workers, timeout, política transacional ou regra de negócio. A validação focal passou. O PR draft está aberto; pendem revisão/integração e a resolução da falha de remarcação por sua frente responsável. A contagem histórica `189 → 206` permanece sem atribuição linha a linha.
