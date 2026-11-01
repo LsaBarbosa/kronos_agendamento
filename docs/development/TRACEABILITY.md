@@ -739,8 +739,10 @@ Runner TLS passou nos Keycloak `31296d4…` (artefato originalmente integrado, s
 
 | Requisito | Evidência integrada | Limite |
 |---|---|---|
-| Ancestralidade | #28 (`6cf81661cdcb14f03ca098cf2eae33bed8d820de`) foi mesclado em `main` (`86c1bf0bb6e0bb1d76df3eda4a99f4c15094bdf8`); pós-merge App CI `41254366298` e CodeQL `41254366297` passaram. #29 incorporou #28 e depois essa main por merges normais (`f23278f`, `8cee18a`). | Head consolidado de #29 ainda requer publicação e seus checks próprios. |
+| Ancestralidade | #28 (`6cf81661cdcb14f03ca098cf2eae33bed8d820de`) foi mesclado em `main` (`86c1bf0bb6e0bb1d76df3eda4a99f4c15094bdf8`); pós-merge App CI `41254366298` e CodeQL `41254366297` passaram. #29 incorporou #28 e depois essa main por merges normais (`f23278f`, `8cee18a`). | Nenhum: ancestralidade observada no head publicado. |
 | Alertas correspondem às fontes | Eliminado alerta impossível de `outcome_unknown{subsystem=exports}` e `trial_expiry` removido da regra que requer backlog; teste promtool e validação estática protegem as duas lacunas. | Não foi criada métrica/adaptador para completar esses recortes. |
-| Validador/stack | `validate`, `smoke`, `isolation-test`, bash syntax, E2E script syntax e diff check passaram após a correção; seis dashboards carregaram e recursos sentinela foram preservados. | Testes de stack são descartáveis locais; App CI/CodeQL do head #29 aguardam publicação. |
+| Validador/stack | `validate`, `smoke`, `isolation-test`, bash syntax, E2E script syntax e diff check passaram após a correção; seis dashboards carregaram e recursos sentinela foram preservados. | Testes de stack são descartáveis locais. |
 | Scrape e alertas reais | Backend ID `sha256:3210d32e5cb1c80d178e4b2ddea1c21a21dc12fdb53ae608f2b75a377d35d024`; auth 401/200, target e rota real consultáveis; saudável sem firing; PostgreSQL parado controladamente disparou `MetricsSourceUnavailable`, mantendo endpoint de scrape respondendo. | Não demonstra entrega externa nem cria reconciliação persistida. |
 | Operação | Recursos removidos somente pelos nomes dos dois projetos próprios; Compose compartilhado intacto. | Alertmanager, destinatários, SLO e plantão continuam pendentes. |
+
+No head `1f136f9eb5bd65b4a79792cfc643b6a2c38cf300`, App CI push `41256735383` e PR `41256738488` passaram todos os jobs (incluindo verify, E2E e security); CodeQL push `41256735380` e PR `41256738487` passaram ambos os analisadores. O head publicado foi o único SHA confirmado nestes resultados.

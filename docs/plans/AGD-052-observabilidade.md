@@ -50,7 +50,7 @@
 - [x] P2 financeiro corrigido em `PostgresSubscriptionDunningRepository.metricsSnapshot`: estados de resultado ambíguo são filtrados antes do limite; V45 adiciona índice parcial sem alterar V1–V44. Regressão PostgreSQL cobre uma pendência antiga com 10.001 tentativas terminais mais recentes.
 - [x] P2 de booking corrigido: `attempts` e `commands` representam somente criação; remarcação/cancelamento/conclusão/falta/correção incrementam apenas efeito confirmado, e replay não duplica efeitos. Conflitos dessas rotas não contam como conflito de criação.
 - [x] JDK 21 `spotless:check verify` passou após as correções: 94 unitários/arquiteturais e 331 integrações PostgreSQL/Testcontainers, sem falhas, erros ou skips. Testes focais adicionais: 1 `BookingMetricsTest` e 174 integrações em quatro classes.
-- [x] PR #28 integrado à `main` no SHA `86c1bf0bb6e0bb1d76df3eda4a99f4c15094bdf8`; App CI push `41254366298` e CodeQL push `41254366297` passaram. A branch local de #29 incorporou #28 e a main pós-merge por merges normais. O head consolidado de #29 aguarda publicação e seus próprios checks.
+- [x] PR #28 integrado à `main` no SHA `86c1bf0bb6e0bb1d76df3eda4a99f4c15094bdf8`; App CI push `41254366298` e CodeQL push `41254366297` passaram. #29 incorporou #28 e a main pós-merge por merges normais, está draft/base `main`, e os checks App CI push/PR (`41256735383`/`41256738488`) e CodeQL push/PR (`41256735380`/`41256738487`) passaram no head publicado `1f136f9eb5bd65b4a79792cfc643b6a2c38cf300`.
 
 ## Validação
 
