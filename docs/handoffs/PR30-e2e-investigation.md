@@ -51,6 +51,14 @@ O helper de deadline preserva os defaults dos demais chamadores de `command`/`ev
 - E2E completo do Keycloak/PostgreSQL não executado nesta rodada; o Compose compartilhado não foi operado. O harness temporal não substitui navegador/aplicação E2E.
 - A execução de Chrome/servidor localhost adicional foi tentada isoladamente, mas não completou uma prova browser reproduzível do cenário específico; não é contabilizada como validação aprovada.
 
+## Diagnóstico da revogação administrativa
+
+No run `41265515999`, job `124727532529`, o E2E falhou em `scripts/dev/test-keycloak-browser.mjs:2565` com `Administrador desativado não teve a sessão revogada.` O log histórico foi preservado localmente em `/tmp/pr30-run-41265515999/oidc-browser-e2e.log` (SHA-256 `cd3c75d1cea117401f1cd950c5b46743f8af887457e699b7cbdcfb248c4ecbcf`). O artifact `oidc-browser-e2e-logs` contém somente `agendamento-vite.log`. Nenhum deles registra o status HTTP efetivamente recebido nessa chamada; o valor histórico não pode ser recuperado.
+
+O cenário agora registra somente método, ordem, fase, status, redirecionamento, caminho final e estado concluído/pendente das chamadas a `/api/v1/admin/session`; erros de transporte ficam limitados ao nome da classe. A instrumentação confirma por booleanos se `admin_user` estava desativado, se a linha da sessão existia antes/depois da chamada e se continua ausente após a reutilização do cookie original. Também registra status/redirecionamento de um recurso protegido. Não lê ou escreve esses valores sensíveis nos logs: cookie e ID de sessão permanecem apenas em memória para consultar a persistência e restaurar o cookie antigo pelo CDP após reativar o usuário.
+
+A ordem instrumentada é explícita: marca a fase de desativação, aplica e confirma o estado no PostgreSQL, executa o fetch de sessão rotulado como explícito, verifica o recurso protegido, reativa o usuário em `finally`, restaura o cookie antigo sem registrá-lo e verifica que `/session` e o recurso protegido continuam negados. Requisições automáticas observadas no intervalo aparecem separadamente na sequência, inclusive se ainda estiverem pendentes. Esta instrumentação/controlada sequência ainda precisa executar no E2E CI; não demonstra retrospectivamente a causa do run antigo nem conclui se a resposta inesperada é sincronização do teste ou defeito do backend.
+
 ## Estado
 
 Esta é uma correção local para revisão na branch isolada. Não altera `AuditTrailIT`, produção, Clock, migrations ou workflows. Não houve push, comentário no GitHub, merge ou deploy.

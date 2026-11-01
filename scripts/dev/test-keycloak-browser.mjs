@@ -2556,22 +2556,181 @@ try {
     await waitForText('Entrar como administrador', evaluate);
     await evaluate("document.querySelector('a[href*=oauth2]').click()");
     await waitForText('Sessão administrativa ativa.', evaluate);
-    setAccessStatus('admin_user', 'DISABLED', credentials, appEnvironment);
-    try {
-        const disabledAdminStatus = await evaluate(
-            "fetch('/api/v1/admin/session', {credentials:'same-origin'}).then(response => response.status)",
-        );
-        if (disabledAdminStatus !== 403) {
-            throw new Error('Administrador desativado não teve a sessão revogada.');
+    const disabledAdminSessionCookie = (await cookies(command)).find(
+        (cookie) => cookie.name === 'AGDSESSION',
+    );
+    if (!disabledAdminSessionCookie) {
+        throw new Error('Cookie da sessão administrativa não encontrado antes da revogação.');
+    }
+    const disabledAdminSessionPresentBefore = sessionRecordExists(
+        disabledAdminSessionCookie.value,
+        appEnvironment,
+    );
+    const adminUserDisabledBefore = adminUserIsDisabled(credentials, appEnvironment);
+    if (!disabledAdminSessionPresentBefore || adminUserDisabledBefore) {
+        throw new Error('Pré-condição da sessão administrativa para teste de revogação inválida.');
+    }
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      const trace = {phase:'before-disable', nextSource:null, nextCompletionSequence:0, calls:[]};
+      window.__adminRevocationTrace = trace;
+      window.fetch = async (input, init) => {
+        const requestUrl = typeof input === 'string' ? input : input.url;
+        const url = new URL(requestUrl, location.href);
+        if (url.pathname !== '/api/v1/admin/session') return originalFetch(input, init);
+        const call = {
+          sequence: trace.calls.length + 1,
+          source: trace.nextSource || 'automatic-or-unspecified',
+          phase: trace.phase,
+          startedAtMs: performance.now(),
+          method: (init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase(),
+          completed: false,
+          completionSequence: null,
+          completedAtMs: null,
+          status: null,
+          redirected: null,
+          finalPath: null,
+          transportErrorType: null,
+        };
+        trace.nextSource = null;
+        trace.calls.push(call);
+        try {
+          const response = await originalFetch(input, init);
+          call.completed = true;
+          call.completionSequence = ++trace.nextCompletionSequence;
+          call.completedAtMs = performance.now();
+          call.status = response.status;
+          call.redirected = response.redirected;
+          call.finalPath = response.url ? new URL(response.url).pathname : null;
+          return response;
+        } catch (error) {
+          call.completed = true;
+          call.completionSequence = ++trace.nextCompletionSequence;
+          call.completedAtMs = performance.now();
+          call.transportErrorType = error?.name || 'unknown';
+          throw error;
         }
+      };
+    })()`);
+    let adminUserDisabledDuringProbe = false;
+    let disabledAdminProbe;
+    let sessionPresentAfterDisabledProbe = true;
+    let protectedResourceWhileDisabled;
+    try {
+        await evaluate("window.__adminRevocationTrace.phase = 'admin-disable-command'");
+        setAccessStatus('admin_user', 'DISABLED', credentials, appEnvironment);
+        await evaluate("window.__adminRevocationTrace.phase = 'disabled-before-explicit-fetch'");
+        adminUserDisabledDuringProbe = adminUserIsDisabled(credentials, appEnvironment);
+        disabledAdminProbe = await evaluate(`(async () => {
+          const trace = window.__adminRevocationTrace;
+          trace.nextSource = 'explicit-disabled-session-check';
+          try {
+            const response = await fetch('/api/v1/admin/session', {credentials:'same-origin', cache:'no-store'});
+            return {
+              status: response.status,
+              redirected: response.redirected,
+              finalPath: response.url ? new URL(response.url).pathname : null,
+            };
+          } catch (error) {
+            return {status:null, redirected:false, finalPath:null, transportErrorType:error?.name || 'unknown'};
+          }
+        })()`);
+        sessionPresentAfterDisabledProbe = sessionRecordExists(
+            disabledAdminSessionCookie.value,
+            appEnvironment,
+        );
+        protectedResourceWhileDisabled = await evaluate(`(async () => {
+          try {
+            const response = await fetch('/api/v1/admin/subscription', {credentials:'same-origin', cache:'no-store'});
+            return {
+              status: response.status,
+              redirected: response.redirected,
+              finalPath: response.url ? new URL(response.url).pathname : null,
+              accessible: response.ok && !response.redirected,
+            };
+          } catch (error) {
+            return {status:null, redirected:false, finalPath:null, accessible:false, transportErrorType:error?.name || 'unknown'};
+          }
+        })()`);
     } finally {
         setAccessStatus('admin_user', 'ACTIVE', credentials, appEnvironment);
     }
-    const disabledAdminReuseStatus = await evaluate(
-        "fetch('/api/v1/admin/session', {credentials:'same-origin'}).then(response => response.status)",
+    const adminUserDisabledAfterReactivation = adminUserIsDisabled(credentials, appEnvironment);
+    await evaluate("window.__adminRevocationTrace.phase = 'active-after-reactivation-old-cookie'");
+    const oldCookieRestore = await command('Network.setCookie', {
+        url: appBaseUrl,
+        name: disabledAdminSessionCookie.name,
+        value: disabledAdminSessionCookie.value,
+        path: disabledAdminSessionCookie.path,
+        secure: disabledAdminSessionCookie.secure,
+        httpOnly: disabledAdminSessionCookie.httpOnly,
+        sameSite: disabledAdminSessionCookie.sameSite,
+    });
+    const oldCookieRestored =
+        oldCookieRestore.success &&
+        (await cookies(command)).some(
+            (cookie) =>
+                cookie.name === 'AGDSESSION' &&
+                cookie.value === disabledAdminSessionCookie.value,
+        );
+    const oldCookieSessionProbe = await evaluate(`(async () => {
+      const trace = window.__adminRevocationTrace;
+      trace.nextSource = 'old-cookie-after-reactivation-session-check';
+      try {
+        const response = await fetch('/api/v1/admin/session', {credentials:'same-origin', cache:'no-store'});
+        return {
+          status: response.status,
+          redirected: response.redirected,
+          finalPath: response.url ? new URL(response.url).pathname : null,
+        };
+      } catch (error) {
+        return {status:null, redirected:false, finalPath:null, transportErrorType:error?.name || 'unknown'};
+      }
+    })()`);
+    const protectedResourceWithOldCookie = await evaluate(`(async () => {
+      const response = await fetch('/api/v1/admin/subscription', {credentials:'same-origin', cache:'no-store'});
+      return {
+        status: response.status,
+        redirected: response.redirected,
+        finalPath: response.url ? new URL(response.url).pathname : null,
+        accessible: response.ok && !response.redirected,
+      };
+    })()`);
+    const sessionPresentAfterOldCookieReuse = sessionRecordExists(
+        disabledAdminSessionCookie.value,
+        appEnvironment,
     );
-    if (disabledAdminReuseStatus !== 401) {
-        throw new Error('Cookie revogado foi aceito após reativar o administrador.');
+    const adminRevocationTrace = await evaluate(
+        'window.__adminRevocationTrace.calls.map(call => ({...call}))',
+    );
+    const revocationDiagnostic = {
+        disabledAdminProbe,
+        adminUserDisabled: adminUserDisabledDuringProbe,
+        adminUserDisabledAfterReactivation,
+        sessionPresentBefore: disabledAdminSessionPresentBefore,
+        sessionPresentAfterDisabledProbe: sessionPresentAfterDisabledProbe,
+        sessionPresentAfterOldCookieReuse: sessionPresentAfterOldCookieReuse,
+        protectedResourceWhileDisabled,
+        oldCookieRestored,
+        oldCookieSessionProbe,
+        protectedResourceWithOldCookie,
+        sessionRequests: adminRevocationTrace.slice(-12),
+    };
+    console.log(`Browser: diagnóstico minimizado de revogação administrativa ${JSON.stringify(revocationDiagnostic)}`);
+    if (
+        disabledAdminProbe.status !== 403 ||
+        disabledAdminProbe.redirected ||
+        !adminUserDisabledDuringProbe ||
+        adminUserDisabledAfterReactivation ||
+        sessionPresentAfterDisabledProbe ||
+        protectedResourceWhileDisabled.accessible ||
+        !oldCookieRestored ||
+        oldCookieSessionProbe.status !== 401 ||
+        oldCookieSessionProbe.redirected ||
+        protectedResourceWithOldCookie.accessible ||
+        sessionPresentAfterOldCookieReuse
+    ) {
+        throw new Error(`Revogação administrativa não satisfez o fluxo estrito esperado: ${JSON.stringify({status: disabledAdminProbe.status, redirected: disabledAdminProbe.redirected, adminUserDisabled: adminUserDisabledDuringProbe, adminUserActiveAfterReactivation: !adminUserDisabledAfterReactivation, sessionPresentBefore: disabledAdminSessionPresentBefore, sessionPresentAfterDisabledProbe: sessionPresentAfterDisabledProbe, protectedResourceDeniedWhileDisabled: !protectedResourceWhileDisabled.accessible, oldCookieRestored, oldCookieStatusAfterReactivation: oldCookieSessionProbe.status, protectedResourceDeniedWithOldCookie: !protectedResourceWithOldCookie.accessible, sessionPresentAfterOldCookieReuse})}`);
     }
     await navigate(frontendUrl('/admin'), command, evaluate);
     await waitForText('Entrar como administrador', evaluate);
@@ -4051,6 +4210,25 @@ async function waitForButtonByText(text, evaluate) {
 async function cookies(command) {
     const result = await command('Network.getAllCookies');
     return result.cookies.filter((cookie) => cookie.domain.includes('localhost'));
+}
+
+function adminUserIsDisabled(credentials, environment) {
+    return (
+        queryPostgres(
+            `SELECT EXISTS (SELECT 1 FROM agendamento.admin_user u JOIN agendamento.admin_tenant_membership m USING (user_id) WHERE m.tenant_id = '${credentials.DEMO_TENANT_ID}' AND u.status = 'DISABLED')`,
+            environment,
+        ) === 't'
+    );
+}
+
+function sessionRecordExists(sessionId, environment) {
+    const storedSessionId = normalizeSessionId(sessionId);
+    return (
+        queryPostgres(
+            `SELECT EXISTS (SELECT 1 FROM agendamento.spring_session WHERE replace(trim(session_id), '-', '') = '${storedSessionId}')`,
+            environment,
+        ) === 't'
+    );
 }
 
 function setAccessStatus(table, status, credentials, environment) {
