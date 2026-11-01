@@ -41,7 +41,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -53,6 +53,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.flywaydb.core.Flyway;
@@ -60,7 +61,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -92,6 +97,7 @@ import org.springframework.test.web.servlet.MockMvc;
       "app.subscriptions.trial-expiry-worker.enabled=false"
     })
 @AutoConfigureMockMvc
+@Import(ExportLifecycleIT.TestClockConfiguration.class)
 class ExportLifecycleIT {
 
   private static final String ISSUER = "https://identity.test/realms/agendamento";
@@ -111,7 +117,7 @@ class ExportLifecycleIT {
   @Autowired private ExportConfiguration configuration;
   @Autowired private MockMvc mvc;
   @MockitoBean private ExportArtifactStore artifactStore;
-  @MockitoBean private Clock clock;
+  @Autowired private MutableTestClock clock;
   @MockitoSpyBean private AuditEventRecorder audit;
   @MockitoSpyBean private OutboxEventRecorder outbox;
   private JdbcTemplate migrationJdbc;
@@ -129,9 +135,8 @@ class ExportLifecycleIT {
     objects.clear();
     tombstones.clear();
     objectLocks.clear();
-    reset(artifactStore, clock, audit, outbox);
-    when(clock.instant()).thenReturn(NOW);
-    when(clock.getZone()).thenReturn(ZoneOffset.UTC);
+    reset(artifactStore, audit, outbox);
+    clock.setInstant(NOW);
     when(artifactStore.available()).thenReturn(true);
     doAnswer(
             invocation -> {
@@ -158,6 +163,44 @@ class ExportLifecycleIT {
             })
         .when(artifactStore)
         .delete(anyString(), anyLong());
+  }
+
+  @Test
+  void mutableClockStaysConfiguredDuringConcurrentWorkerReadsAndTestAdvances() throws Exception {
+    ExecutorService executor = Executors.newFixedThreadPool(2);
+    CountDownLatch ready = new CountDownLatch(2);
+    CountDownLatch start = new CountDownLatch(1);
+    try {
+      Future<?> advances =
+          executor.submit(
+              () -> {
+                ready.countDown();
+                await(start);
+                for (int second = 0; second < 2_000; second++) {
+                  clock.setInstant(NOW.plusSeconds(second));
+                }
+              });
+      Future<Integer> reads =
+          executor.submit(
+              () -> {
+                ready.countDown();
+                await(start);
+                int completed = 0;
+                for (int read = 0; read < 2_000; read++) {
+                  assertThat(clock.instant()).isNotNull();
+                  assertThat(clock.getZone()).isEqualTo(ZoneId.of("UTC"));
+                  completed++;
+                }
+                return completed;
+              });
+      assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+      start.countDown();
+      advances.get(5, TimeUnit.SECONDS);
+      assertThat(reads.get(5, TimeUnit.SECONDS)).isEqualTo(2_000);
+    } finally {
+      start.countDown();
+      executor.shutdownNow();
+    }
   }
 
   @Test
@@ -216,7 +259,7 @@ class ExportLifecycleIT {
         .isEqualTo(1);
 
     Instant expiresAt = handle.expiresAt();
-    when(clock.instant()).thenReturn(expiresAt);
+    clock.setInstant(expiresAt);
     assertThatThrownBy(
             () ->
                 downloadExport.execute(
@@ -594,7 +637,7 @@ class ExportLifecycleIT {
     assertThat(waiting.nextAttemptAt()).isEqualTo(NOW.plusSeconds(30));
     assertThat(worker.processOne()).isFalse();
 
-    when(clock.instant()).thenReturn(NOW.plusSeconds(30));
+    clock.setInstant(NOW.plusSeconds(30));
     assertThat(worker.processOne()).isTrue();
     assertThat(getExport.execute(fixture.admin(), requested.job().exportId()).state())
         .isEqualTo(ExportState.AVAILABLE);
@@ -623,7 +666,7 @@ class ExportLifecycleIT {
     assertThat(countAction("EXPORT_AVAILABLE", fixture.tenantId())).isZero();
 
     when(artifactStore.available()).thenReturn(true);
-    when(clock.instant()).thenReturn(NOW.plusSeconds(30));
+    clock.setInstant(NOW.plusSeconds(30));
     assertThat(worker.processOne()).isTrue();
     assertThat(getExport.execute(fixture.admin(), requested.job().exportId()).state())
         .isEqualTo(ExportState.AVAILABLE);
@@ -667,7 +710,7 @@ class ExportLifecycleIT {
           .as("first worker must reach external storage while holding only a lease")
           .isTrue();
 
-      when(clock.instant()).thenReturn(NOW.plusSeconds(61));
+      clock.setInstant(NOW.plusSeconds(61));
       assertThat(worker.processOne()).isTrue();
       assertThat(getExport.execute(fixture.admin(), requested.job().exportId()).state())
           .isEqualTo(ExportState.FAILED_FINAL);
@@ -715,15 +758,15 @@ class ExportLifecycleIT {
     assertThat(worker.processOne()).isTrue();
     assertThat(getExport.execute(fixture.admin(), requested.job().exportId()).nextAttemptAt())
         .isEqualTo(NOW.plusSeconds(30));
-    when(clock.instant()).thenReturn(NOW.plusSeconds(30));
+    clock.setInstant(NOW.plusSeconds(30));
     assertThat(worker.processOne()).isTrue();
     assertThat(getExport.execute(fixture.admin(), requested.job().exportId()).nextAttemptAt())
         .isEqualTo(NOW.plusSeconds(90));
-    when(clock.instant()).thenReturn(NOW.plusSeconds(90));
+    clock.setInstant(NOW.plusSeconds(90));
     assertThat(worker.processOne()).isTrue();
     assertThat(getExport.execute(fixture.admin(), requested.job().exportId()).nextAttemptAt())
         .isEqualTo(NOW.plusSeconds(210));
-    when(clock.instant()).thenReturn(NOW.plusSeconds(210));
+    clock.setInstant(NOW.plusSeconds(210));
     assertThat(worker.processOne()).isTrue();
     var finalState = getExport.execute(fixture.admin(), requested.job().exportId());
     assertThat(finalState.state()).isEqualTo(ExportState.FAILED_FINAL);
@@ -1065,7 +1108,7 @@ class ExportLifecycleIT {
             filters());
     assertThat(worker.processOne()).isTrue();
     Instant expiresAt = getExport.execute(fixture.admin(), requested.job().exportId()).expiresAt();
-    when(clock.instant()).thenReturn(expiresAt);
+    clock.setInstant(expiresAt);
 
     mvc.perform(get("/api/v1/admin/exports/active").with(authentication(auth(fixture.admin()))))
         .andExpect(status().isNoContent())
@@ -1174,7 +1217,7 @@ class ExportLifecycleIT {
             "SELECT export_id FROM agendamento.export_job WHERE tenant_id = ?",
             UUID.class,
             fixture.tenantId());
-    when(clock.instant()).thenReturn(getExport.execute(fixture.admin(), id).expiresAt());
+    clock.setInstant(getExport.execute(fixture.admin(), id).expiresAt());
     worker.expireAndClean();
 
     mvc.perform(get("/api/v1/admin/exports/active").with(authentication(auth(fixture.admin()))))
@@ -1196,7 +1239,7 @@ class ExportLifecycleIT {
             filters());
     assertThat(worker.processOne()).isTrue();
     Instant expiresAt = getExport.execute(fixture.admin(), first.job().exportId()).expiresAt();
-    when(clock.instant()).thenReturn(expiresAt);
+    clock.setInstant(expiresAt);
 
     var second =
         requestExport.execute(
@@ -1287,7 +1330,7 @@ class ExportLifecycleIT {
                 requested.job().exportId()))
         .isZero();
 
-    when(clock.instant()).thenReturn(NOW.plusSeconds(61));
+    clock.setInstant(NOW.plusSeconds(61));
     failAvailabilityOutbox.set(false);
     assertThat(worker.processOne()).isTrue();
     assertThat(getExport.execute(fixture.admin(), requested.job().exportId()).state())
@@ -1484,6 +1527,62 @@ class ExportLifecycleIT {
   }
 
   private record Fixture(UUID tenantId, UUID serviceId, UUID appointmentId, TestAdmin admin) {}
+
+  private static void await(CountDownLatch latch) {
+    try {
+      if (!latch.await(5, TimeUnit.SECONDS)) {
+        throw new IllegalStateException("Timed out waiting for concurrency test latch");
+      }
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException(
+          "Interrupted while waiting for concurrency test", interrupted);
+    }
+  }
+
+  @TestConfiguration(proxyBeanMethods = false)
+  static class TestClockConfiguration {
+
+    @Bean
+    @Primary
+    MutableTestClock exportLifecycleTestClock() {
+      return new MutableTestClock(Instant.parse("2026-10-23T12:00:00Z"), ZoneId.of("UTC"));
+    }
+  }
+
+  static final class MutableTestClock extends Clock {
+
+    private final AtomicReference<Instant> currentInstant;
+    private final ZoneId zone;
+
+    private MutableTestClock(Instant initialInstant, ZoneId zone) {
+      this(new AtomicReference<>(initialInstant), zone);
+    }
+
+    private MutableTestClock(AtomicReference<Instant> currentInstant, ZoneId zone) {
+      this.currentInstant = currentInstant;
+      this.zone = zone;
+    }
+
+    void setInstant(Instant instant) {
+      currentInstant.set(java.util.Objects.requireNonNull(instant));
+    }
+
+    @Override
+    public ZoneId getZone() {
+      return zone;
+    }
+
+    @Override
+    public Clock withZone(ZoneId zone) {
+      return this.zone.equals(zone) ? this : new MutableTestClock(currentInstant, zone);
+    }
+
+    @Override
+    public Instant instant() {
+      return currentInstant.get();
+    }
+  }
 
   private record StoredArtifact(long fencingVersion, byte[] bytes) {}
 
