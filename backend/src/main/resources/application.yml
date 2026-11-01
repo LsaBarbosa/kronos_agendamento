@@ -52,7 +52,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        include: health,prometheus
   endpoint:
     health:
       show-details: never
@@ -67,6 +67,8 @@ logging:
     level: "%5p [traceId=%X{traceId:-}]"
 
 app:
+  observability:
+    scrape-token: ${OBSERVABILITY_SCRAPE_TOKEN:}
   public-booking:
     digest:
       active-key-id: ${PUBLIC_BOOKING_HMAC_ACTIVE_KEY_ID:}

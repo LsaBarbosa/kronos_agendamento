@@ -958,38 +958,67 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
   @Override
   @Transactional(readOnly = true)
   public DunningMetricsSnapshot metricsSnapshot(Instant asOf) {
+    jdbc.execute("SET LOCAL statement_timeout = '2s'");
     return jdbc.queryForObject(
         """
         WITH reference_time AS (SELECT ?::timestamptz AS as_of),
-        attempts AS (
+        backlog_sample AS (
           SELECT c.state AS cycle_state, a.state AS attempt_state,
-                 a.technical_attempts,
-                 CASE WHEN a.ever_started THEN a.next_attempt_at ELSE a.scheduled_at END AS due_at,
+                 CASE WHEN a.state = 'RETRYABLE_NO_EFFECT' THEN a.next_attempt_at
+                      WHEN a.state IN ('CLAIMED', 'SUBMITTING', 'RECONCILING') THEN a.lease_until
+                      ELSE a.scheduled_at END AS due_at,
                  reference_time.as_of
           FROM agendamento.billing_dunning_attempt a
           JOIN agendamento.billing_dunning_cycle c USING (cycle_id, tenant_id)
+          JOIN agendamento.subscription s USING (subscription_id, tenant_id)
           CROSS JOIN reference_time
+          WHERE c.state = 'OPEN' AND s.status = 'PAST_DUE'
+            AND s.grace_ends_at > reference_time.as_of
+            AND (
+              (a.state IN ('SCHEDULED', 'BLOCKED_CONFIGURATION')
+                AND a.scheduled_at <= reference_time.as_of)
+              OR (a.state = 'RETRYABLE_NO_EFFECT'
+                AND a.next_attempt_at <= reference_time.as_of)
+              OR (a.state IN ('CLAIMED', 'SUBMITTING', 'RECONCILING')
+                AND a.lease_until <= reference_time.as_of)
+            )
+          ORDER BY CASE WHEN a.ever_started THEN a.next_attempt_at ELSE a.scheduled_at END,
+                   a.attempt_id
+          LIMIT 10001
+        ),
+        recent_attempts AS (
+          SELECT a.state AS attempt_state, a.technical_attempts
+          FROM agendamento.billing_dunning_attempt a
+          ORDER BY a.updated_at DESC, a.attempt_id DESC
+          LIMIT 10001
+        ),
+        pending_outcomes AS (
+          SELECT a.attempt_id
+          FROM agendamento.billing_dunning_attempt a
+          WHERE a.state IN ('OUTCOME_UNKNOWN', 'RECONCILING')
+          ORDER BY a.updated_at DESC, a.attempt_id DESC
+          LIMIT 10001
         )
         SELECT
-          count(*) FILTER (WHERE cycle_state = 'OPEN' AND attempt_state IN
-            ('SCHEDULED', 'BLOCKED_CONFIGURATION', 'CLAIMED', 'SUBMITTING',
-             'RETRYABLE_NO_EFFECT', 'RECONCILING')) AS backlog,
-          count(*) FILTER (WHERE cycle_state = 'OPEN' AND attempt_state IN
+          LEAST(count(*), 10000) AS backlog,
+          LEAST(count(*) FILTER (WHERE attempt_state IN
             ('SCHEDULED', 'BLOCKED_CONFIGURATION', 'RETRYABLE_NO_EFFECT')
-            AND due_at <= as_of) AS overdue,
+            AND due_at <= backlog_sample.as_of), 10000) AS overdue,
           COALESCE(
-            MAX(EXTRACT(EPOCH FROM (as_of - due_at))) FILTER (
-              WHERE cycle_state = 'OPEN'
-                AND attempt_state IN ('SCHEDULED', 'BLOCKED_CONFIGURATION', 'RETRYABLE_NO_EFFECT')
-                AND due_at <= as_of),
+            MAX(EXTRACT(EPOCH FROM (backlog_sample.as_of - due_at))) FILTER (
+              WHERE attempt_state IN ('SCHEDULED', 'BLOCKED_CONFIGURATION', 'RETRYABLE_NO_EFFECT')
+                AND due_at <= backlog_sample.as_of),
             0)::bigint AS oldest_overdue_seconds,
-          count(*) FILTER (WHERE attempt_state IN ('OUTCOME_UNKNOWN', 'RECONCILING')) AS outcome_unknown,
-          count(*) FILTER (WHERE attempt_state = 'ACCEPTED') AS accepted_transport,
-          count(*) FILTER (WHERE attempt_state = 'DECLINED') AS declined,
-          count(*) FILTER (WHERE attempt_state = 'FAILED_FINAL') AS failed_final,
-          count(*) FILTER (WHERE attempt_state = 'SKIPPED_LATE_RECOVERY') AS skipped_late_recovery,
-          COALESCE(sum(technical_attempts), 0) AS technical_attempts
-        FROM attempts
+          LEAST((SELECT count(*) FROM pending_outcomes), 10000) AS outcome_unknown,
+          LEAST((SELECT count(*) FROM recent_attempts WHERE attempt_state = 'ACCEPTED'), 10000) AS accepted_transport,
+          LEAST((SELECT count(*) FROM recent_attempts WHERE attempt_state = 'DECLINED'), 10000) AS declined,
+          LEAST((SELECT count(*) FROM recent_attempts WHERE attempt_state = 'FAILED_FINAL'), 10000) AS failed_final,
+          LEAST((SELECT count(*) FROM recent_attempts WHERE attempt_state = 'SKIPPED_LATE_RECOVERY'), 10000) AS skipped_late_recovery,
+          LEAST(COALESCE((SELECT sum(technical_attempts) FROM recent_attempts), 0), 10000) AS technical_attempts,
+          ((SELECT count(*) FROM backlog_sample) > 10000
+            OR (SELECT count(*) FROM recent_attempts) > 10000
+            OR (SELECT count(*) FROM pending_outcomes) > 10000) AS capped
+        FROM backlog_sample CROSS JOIN reference_time
         """,
         (row, index) ->
             new DunningMetricsSnapshot(
@@ -1001,7 +1030,8 @@ public class PostgresSubscriptionDunningRepository implements SubscriptionDunnin
                 row.getLong("declined"),
                 row.getLong("failed_final"),
                 row.getLong("skipped_late_recovery"),
-                row.getLong("technical_attempts")),
+                row.getLong("technical_attempts"),
+                row.getBoolean("capped")),
         Timestamp.from(asOf));
   }
 

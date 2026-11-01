@@ -29,7 +29,7 @@ public interface NotificationRepository {
 
   int obsoleteAllReminders(UUID tenantId, UUID appointmentId);
 
-  ReminderBacklog reminderBacklog();
+  NotificationMetricsSnapshot metricsSnapshot();
 
   List<NotificationClaim> claimDue(int batchSize, Duration leaseDuration);
 
@@ -73,13 +73,15 @@ public interface NotificationRepository {
 
   record NotificationSummary(String state, long count, Long oldestPendingSeconds) {}
 
-  record ReminderBacklog(
-      long pendingCount,
-      long overdueCount,
-      long oldestOverdueSeconds,
-      long obsoleteCount,
-      long failedCount,
-      long outcomeUnknownCount) {}
+  record NotificationMetricsSnapshot(
+      long reminderEligibleCount,
+      long reminderOverdueCount,
+      long reminderOldestOverdueSeconds,
+      long outcomeUnknownCount,
+      boolean reminderCapped,
+      long notificationEligibleCount,
+      long notificationOldestEligibleAgeSeconds,
+      boolean notificationCapped) {}
 
   record NotificationOverview(
       UUID notificationId,

@@ -45,6 +45,7 @@ import com.appagendamento.subscriptions.application.SubscriptionDunningRepositor
 import com.appagendamento.subscriptions.application.SubscriptionRepository;
 import com.appagendamento.subscriptions.application.SubscriptionTrialLifecycle;
 import com.appagendamento.support.PostgresTestEnvironment;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.security.SecureRandom;
 import java.time.DayOfWeek;
 import java.time.Instant;
@@ -127,6 +128,7 @@ class PublicAppointmentIT {
   @Autowired private UpdateService updateService;
   @Autowired private SetServiceStatus setServiceStatus;
   @Autowired private MockMvc mvc;
+  @Autowired private MeterRegistry meterRegistry;
   @Autowired private ObjectMapper objectMapper;
   @MockitoBean private java.time.Clock clock;
   @MockitoBean private PublicationEvidence publicationEvidence;
@@ -1591,8 +1593,120 @@ class PublicAppointmentIT {
   }
 
   @Test
+  void administrativeCreationAndLifecycleCommandsKeepSeparateMetricsAndReplayEffectsOnce()
+      throws Exception {
+    double attemptsBefore = bookingMetric("agd.appointments.booking.attempts", "channel", "admin");
+    double createdCommandsBefore =
+        bookingMetric("agd.appointments.booking.commands", "channel", "admin", "result", "created");
+    double createdEffectsBefore =
+        bookingMetric(
+            "agd.appointments.booking.effects.confirmed", "channel", "admin", "effect", "created");
+    double rescheduledEffectsBefore =
+        bookingMetric(
+            "agd.appointments.booking.effects.confirmed",
+            "channel",
+            "admin",
+            "effect",
+            "rescheduled");
+    double cancelledEffectsBefore =
+        bookingMetric(
+            "agd.appointments.booking.effects.confirmed",
+            "channel",
+            "admin",
+            "effect",
+            "cancelled");
+    String phone = "+5511999991840";
+    String createKey = "admin-metrics-create-" + UUID.randomUUID();
+    assertThat(
+            submitAdministrativeBooking(
+                createKey, requestedStart, currentScheduleRevision(), List.of(), null, phone))
+        .isEqualTo(201);
+    UUID appointmentId = appointmentForPhone(phone);
+
+    assertThat(
+            bookingMetric("agd.appointments.booking.attempts", "channel", "admin") - attemptsBefore)
+        .isEqualTo(1.0);
+    assertThat(
+            bookingMetric(
+                    "agd.appointments.booking.commands", "channel", "admin", "result", "created")
+                - createdCommandsBefore)
+        .isEqualTo(1.0);
+    assertThat(
+            bookingMetric(
+                    "agd.appointments.booking.effects.confirmed",
+                    "channel",
+                    "admin",
+                    "effect",
+                    "created")
+                - createdEffectsBefore)
+        .isEqualTo(1.0);
+
+    String destination = bookingDate.atTime(10, 0).atZone(ZONE).toOffsetDateTime().toString();
+    String rescheduleKey = "admin-metrics-reschedule-" + UUID.randomUUID();
+    String rescheduleBody = rescheduleBody(1, currentScheduleRevision(), destination);
+    submitReschedule(appointmentId, rescheduleKey, rescheduleBody).andExpect(status().isOk());
+    submitReschedule(appointmentId, rescheduleKey, rescheduleBody)
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"));
+
+    assertThat(bookingMetric("agd.appointments.booking.attempts", "channel", "admin"))
+        .isEqualTo(attemptsBefore + 1.0);
+    assertThat(
+            bookingMetric(
+                "agd.appointments.booking.commands", "channel", "admin", "result", "created"))
+        .isEqualTo(createdCommandsBefore + 1.0);
+    assertThat(
+            bookingMetric(
+                    "agd.appointments.booking.effects.confirmed",
+                    "channel",
+                    "admin",
+                    "effect",
+                    "rescheduled")
+                - rescheduledEffectsBefore)
+        .isEqualTo(1.0);
+
+    String cancelKey = "admin-metrics-cancel-" + UUID.randomUUID();
+    postOutcome(appointmentId, "cancel", cancelKey, 2).andExpect(status().isOk());
+    postOutcome(appointmentId, "cancel", cancelKey, 2)
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"));
+    assertThat(bookingMetric("agd.appointments.booking.attempts", "channel", "admin"))
+        .isEqualTo(attemptsBefore + 1.0);
+    assertThat(
+            bookingMetric(
+                "agd.appointments.booking.commands", "channel", "admin", "result", "created"))
+        .isEqualTo(createdCommandsBefore + 1.0);
+    assertThat(
+            bookingMetric(
+                    "agd.appointments.booking.effects.confirmed",
+                    "channel",
+                    "admin",
+                    "effect",
+                    "cancelled")
+                - cancelledEffectsBefore)
+        .isEqualTo(1.0);
+  }
+
+  @Test
   void noShowFactsAreCalendarWindowTenantScopedAndCorrectionPreservesOriginalFact()
       throws Exception {
+    double attemptsBefore = bookingMetric("agd.appointments.booking.attempts", "channel", "admin");
+    double createdCommandsBefore =
+        bookingMetric("agd.appointments.booking.commands", "channel", "admin", "result", "created");
+    double outcomeEffectsBefore =
+        bookingMetric(
+            "agd.appointments.booking.effects.confirmed",
+            "channel",
+            "admin",
+            "effect",
+            "outcome_recorded");
+    double cancelledEffectsBefore =
+        bookingMetric(
+            "agd.appointments.booking.effects.confirmed",
+            "channel",
+            "admin",
+            "effect",
+            "cancelled");
     submitBooking(
             "facts-no-show-" + UUID.randomUUID(),
             requestBody(serviceId, requestedStart, "Fato de falta", "+5511999994350"))
@@ -1737,6 +1851,30 @@ class PublicAppointmentIT {
         .isEqualTo("COMPLETED:3");
     assertThat(countHistoryReason(appointmentId, "APPOINTMENT_NO_SHOW")).isEqualTo(1);
     assertThat(countHistoryReason(appointmentId, "APPOINTMENT_NO_SHOW_CORRECTED")).isEqualTo(1);
+    assertThat(bookingMetric("agd.appointments.booking.attempts", "channel", "admin"))
+        .isEqualTo(attemptsBefore);
+    assertThat(
+            bookingMetric(
+                "agd.appointments.booking.commands", "channel", "admin", "result", "created"))
+        .isEqualTo(createdCommandsBefore);
+    assertThat(
+            bookingMetric(
+                    "agd.appointments.booking.effects.confirmed",
+                    "channel",
+                    "admin",
+                    "effect",
+                    "outcome_recorded")
+                - outcomeEffectsBefore)
+        .isEqualTo(3.0);
+    assertThat(
+            bookingMetric(
+                    "agd.appointments.booking.effects.confirmed",
+                    "channel",
+                    "admin",
+                    "effect",
+                    "cancelled")
+                - cancelledEffectsBefore)
+        .isEqualTo(1.0);
     assertThat(countByAction("APPOINTMENT_NO_SHOW_CORRECTED")).isEqualTo(1);
     assertThat(countByEvent("ClientNoShowCorrected")).isEqualTo(1);
     assertThat(
@@ -4465,6 +4603,9 @@ class PublicAppointmentIT {
 
   @Test
   void conflictingReschedulePreservesOriginalIntervalAndCreatesNoSuccessEffects() throws Exception {
+    double creationConflictsBefore =
+        bookingMetric(
+            "agd.appointments.booking.commands", "channel", "admin", "result", "conflict");
     submitBooking(
             "reschedule-conflict-source-" + UUID.randomUUID(),
             requestBody(serviceId, requestedStart, "Original", "+5511999991802"))
@@ -4510,6 +4651,10 @@ class PublicAppointmentIT {
     assertThat(countByAction("APPOINTMENT_RESCHEDULED")).isEqualTo(auditBefore);
     assertThat(countByEvent("AppointmentRescheduled")).isEqualTo(outboxBefore);
     assertThat(currentScheduleRevision()).isEqualTo(revisionBefore);
+    assertThat(
+            bookingMetric(
+                "agd.appointments.booking.commands", "channel", "admin", "result", "conflict"))
+        .isEqualTo(creationConflictsBefore);
   }
 
   @Test
@@ -4639,6 +4784,15 @@ class PublicAppointmentIT {
         UUID.class,
         tenantId,
         phone);
+  }
+
+  private double bookingMetric(String name, String... tags) {
+    var search = meterRegistry.find(name);
+    for (int index = 0; index < tags.length; index += 2) {
+      search = search.tag(tags[index], tags[index + 1]);
+    }
+    var counter = search.counter();
+    return counter == null ? 0.0 : counter.count();
   }
 
   private void installClientCommandPause(UUID appointmentId, String winningCommand) {

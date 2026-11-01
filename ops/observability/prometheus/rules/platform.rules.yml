@@ -1,0 +1,47 @@
+groups:
+  - name: agd052-platform-self-observation
+    interval: 15s
+    rules:
+      - alert: PrometheusSelfScrapeFailed
+        expr: up{job="prometheus"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: prometheus-self-scrape
+        annotations:
+          summary: Prometheus não consegue coletar sua própria métrica de saúde
+          description: >-
+            O alvo local do Prometheus falha há pelo menos dois minutos. Isso
+            detecta a falha do endpoint de scrape enquanto o processo Prometheus
+            continua avaliando regras.
+          runbook_path: docs/runbooks/AGD-052/prometheus-self-scrape.md
+
+      - alert: PrometheusSelfScrapeMissing
+        expr: absent_over_time(up{job="prometheus"}[2m])
+        for: 1m
+        labels:
+          severity: critical
+          responsible_role: platform-operations
+          runbook: prometheus-self-scrape
+        annotations:
+          summary: Amostras de auto-scrape do Prometheus ausentes
+          description: >-
+            Não há amostras recentes do alvo local. O processo Prometheus ainda
+            precisa estar ativo para avaliar este alerta; indisponibilidade total
+            exige um monitor externo, ainda não configurado nesta stack local.
+          runbook_path: docs/runbooks/AGD-052/prometheus-self-scrape.md
+
+      - alert: PrometheusSelfScrapeStale
+        expr: time() - timestamp(up{job="prometheus"}) > 45
+        for: 30s
+        labels:
+          severity: warning
+          responsible_role: platform-operations
+          runbook: prometheus-self-scrape
+        annotations:
+          summary: Amostra do auto-scrape está obsoleta
+          description: >-
+            A última amostra do alvo local tem mais de 45 segundos. A regra não
+            interpreta ausência como valor zero.
+          runbook_path: docs/runbooks/AGD-052/prometheus-self-scrape.md

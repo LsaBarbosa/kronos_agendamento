@@ -410,10 +410,11 @@ class SubscriptionTrialIT {
         .isTrue();
     verify(chargeTransport).submit(any());
     var metrics = dunningRepository.metricsSnapshot(NOW);
-    assertThat(metrics.backlog()).isEqualTo(2);
+    assertThat(metrics.backlog()).isZero();
     assertThat(metrics.overdue()).isZero();
     assertThat(metrics.skippedLateRecovery()).isEqualTo(1);
     assertThat(metrics.technicalAttempts()).isEqualTo(1);
+    assertThat(metrics.capped()).isFalse();
     assertThat(count("billing_dunning_cycle", tenant.tenantId())).isEqualTo(1);
     assertThat(
             jdbc.queryForObject(
@@ -450,6 +451,81 @@ class SubscriptionTrialIT {
                 tenant.tenantId()))
         .isTrue();
     verify(chargeTransport, org.mockito.Mockito.never()).submit(any());
+  }
+
+  @Test
+  void oldUnknownOutcomeRemainsInMetricsBehindTenThousandAndOneRecentTerminalAttempts() {
+    when(identities.findVerifiedIdentity(any())).thenReturn(Optional.empty());
+    when(chargeAuthorization.isAuthorized(any(), any(), any(), any())).thenReturn(true);
+    when(chargeTransport.submit(any()))
+        .thenReturn(
+            new DunningChargeTransport.TransportResult(
+                DunningChargeTransport.Outcome.OUTCOME_UNKNOWN,
+                "synthetic",
+                null,
+                "PROVIDER_TIMEOUT"));
+    Tenant tenant = createTenant("dunning-old-unknown-metrics");
+    UUID subscriptionId = paidSubscription(tenant.tenantId(), NOW.minusSeconds(1));
+    assertThat(lifecycle.allowsNewPublicAppointments(tenant.tenantId())).isTrue();
+    assertThat(dunningWorker.processBatch()).isPositive();
+
+    migrationJdbc.update(
+        "UPDATE agendamento.billing_dunning_attempt SET updated_at = ? "
+            + "WHERE tenant_id = ? AND state = 'OUTCOME_UNKNOWN'",
+        java.sql.Timestamp.from(NOW.minus(Duration.ofDays(2))),
+        tenant.tenantId());
+    migrationJdbc.update(
+        """
+        WITH generated AS (
+          SELECT gen_random_uuid() AS cycle_id, gen_random_uuid() AS attempt_id, n
+          FROM generate_series(1, 10001) AS n
+        ), cycles AS (
+          INSERT INTO agendamento.billing_dunning_cycle
+            (cycle_id, tenant_id, subscription_id, due_at, grace_ends_at,
+             state, created_at, closed_at)
+          SELECT cycle_id, ?, ?, NOW() - n * INTERVAL '1 second',
+                 NOW() - n * INTERVAL '1 second' + INTERVAL '7 days',
+                 'PAID', NOW(), NOW()
+          FROM generated
+          RETURNING cycle_id
+        )
+        INSERT INTO agendamento.billing_dunning_attempt
+          (attempt_id, tenant_id, cycle_id, logical_sequence, scheduled_at,
+           state, technical_attempts, updated_at, ever_started,
+           external_idempotency_key, contract_amount_minor_units,
+           contract_currency, contract_terms_version, contract_offer_version,
+           contract_plan_code)
+        SELECT generated.attempt_id, ?, cycles.cycle_id, 0, NOW(), 'ACCEPTED', 1,
+               NOW() + INTERVAL '1 minute', TRUE, generated.attempt_id,
+               snapshot.contract_amount_minor_units, snapshot.contract_currency,
+               snapshot.contract_terms_version, snapshot.contract_offer_version,
+               snapshot.contract_plan_code
+        FROM generated
+        JOIN cycles USING (cycle_id)
+        CROSS JOIN LATERAL (
+          SELECT contract_amount_minor_units, contract_currency,
+                 contract_terms_version, contract_offer_version, contract_plan_code
+          FROM agendamento.billing_dunning_attempt
+          WHERE tenant_id = ? AND state = 'OUTCOME_UNKNOWN'
+          ORDER BY attempt_id
+          LIMIT 1
+        ) snapshot
+        """,
+        tenant.tenantId(),
+        subscriptionId,
+        tenant.tenantId(),
+        tenant.tenantId());
+
+    assertThat(
+            migrationJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.billing_dunning_attempt "
+                    + "WHERE tenant_id = ? AND state = 'ACCEPTED'",
+                Long.class,
+                tenant.tenantId()))
+        .isEqualTo(10001L);
+    var metrics = dunningRepository.metricsSnapshot(NOW);
+    assertThat(metrics.outcomeUnknown()).isPositive();
+    assertThat(metrics.capped()).isTrue();
   }
 
   @Test

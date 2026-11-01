@@ -10,6 +10,10 @@ public interface ExportWorkerRepository {
 
   Optional<ExportClaim> claim(Instant now, long leaseSeconds);
 
+  default Optional<ExportMetricsSnapshot> metricsSnapshot(Instant asOf) {
+    return Optional.empty();
+  }
+
   Optional<ExportTransition> complete(
       ExportClaim claim,
       String objectKey,
