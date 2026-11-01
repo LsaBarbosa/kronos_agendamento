@@ -2,6 +2,13 @@ package com.appagendamento.exports.application;
 
 public interface ExportArtifactStore {
 
+  /**
+   * Whether storage credentials and required location are configured, independent of reachability.
+   */
+  default boolean configured() {
+    return true;
+  }
+
   boolean available();
 
   /**

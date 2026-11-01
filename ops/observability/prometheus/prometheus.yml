@@ -1,0 +1,30 @@
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    environment: local
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: kronos-application
+    metrics_path: /actuator/prometheus
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/agd052_observability_scrape_token
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/targets/application.yml
+        refresh_interval: 30s
+
+# The committed file-service-discovery group is empty. An operator can provide
+# a local-only target file outside Git using AGD052_PROMETHEUS_TARGET_DIR. Do
+# not infer a healthy/zero application when no target or sample exists.

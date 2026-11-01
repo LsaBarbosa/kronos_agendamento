@@ -5,9 +5,9 @@ import com.appagendamento.notifications.application.NotificationRepository.Attem
 import com.appagendamento.notifications.application.NotificationRepository.EvidenceAdmission;
 import com.appagendamento.notifications.application.NotificationRepository.NotificationClaim;
 import com.appagendamento.notifications.application.NotificationRepository.NotificationDetail;
+import com.appagendamento.notifications.application.NotificationRepository.NotificationMetricsSnapshot;
 import com.appagendamento.notifications.application.NotificationRepository.NotificationOverview;
 import com.appagendamento.notifications.application.NotificationRepository.NotificationSummary;
-import com.appagendamento.notifications.application.NotificationRepository.ReminderBacklog;
 import com.appagendamento.notifications.application.NotificationRepository.VerifiedDeliveryEvidence;
 import com.appagendamento.notifications.domain.NotificationType;
 import java.time.Duration;
@@ -115,27 +115,62 @@ public class PostgresNotificationRepository implements NotificationRepository {
   }
 
   @Override
-  public ReminderBacklog reminderBacklog() {
+  @Transactional(readOnly = true)
+  public NotificationMetricsSnapshot metricsSnapshot() {
+    jdbc.execute("SET LOCAL statement_timeout = '2s'");
     return jdbc.queryForObject(
         """
-        SELECT count(*) FILTER (WHERE state IN ('PENDING', 'RETRY', 'CLAIMED')) AS pending_count,
-               count(*) FILTER (WHERE state IN ('PENDING', 'RETRY') AND due_at <= clock_timestamp()) AS overdue_count,
-               coalesce(greatest(0, extract(epoch FROM clock_timestamp() - min(due_at)
-                 FILTER (WHERE state IN ('PENDING', 'RETRY') AND due_at <= clock_timestamp())))::bigint, 0) AS oldest_overdue_seconds,
-               count(*) FILTER (WHERE state = 'OBSOLETE') AS obsolete_count,
-               count(*) FILTER (WHERE state = 'FAILED_FINAL') AS failed_count,
-               count(*) FILTER (WHERE state = 'OUTCOME_UNKNOWN') AS outcome_unknown_count
-        FROM agendamento.notification_intent
-        WHERE message_type = 'APPOINTMENT_REMINDER'
+        WITH reference_time AS (SELECT clock_timestamp() AS observed_at),
+        reminder_eligible AS (
+          SELECT due_at
+          FROM agendamento.notification_intent
+          WHERE message_type = 'APPOINTMENT_REMINDER'
+            AND reminder_eligible AND state IN ('PENDING', 'RETRY')
+            AND next_attempt_at <= (SELECT observed_at FROM reference_time)
+            AND due_at <= (SELECT observed_at FROM reference_time)
+          ORDER BY next_attempt_at, due_at, notification_id
+          LIMIT 10001
+        ),
+        unknown AS (
+          SELECT notification_id
+          FROM agendamento.notification_intent
+          WHERE state = 'OUTCOME_UNKNOWN'
+          ORDER BY notification_id DESC
+          LIMIT 10001
+        ),
+        notification_eligible AS (
+          SELECT next_attempt_at
+          FROM agendamento.notification_intent
+          WHERE message_type <> 'APPOINTMENT_REMINDER'
+            AND state IN ('PENDING', 'RETRY')
+            AND next_attempt_at <= (SELECT observed_at FROM reference_time)
+          ORDER BY next_attempt_at, created_at, notification_id
+          LIMIT 10001
+        )
+        SELECT LEAST((SELECT count(*) FROM reminder_eligible), 10000) AS reminder_eligible_count,
+               LEAST((SELECT count(*) FROM reminder_eligible), 10000) AS reminder_overdue_count,
+               COALESCE((SELECT greatest(0, extract(epoch FROM
+                 ((SELECT observed_at FROM reference_time) - min(due_at))))::bigint FROM reminder_eligible), 0)
+                 AS reminder_oldest_overdue_seconds,
+               LEAST((SELECT count(*) FROM unknown), 10000) AS outcome_unknown_count,
+               ((SELECT count(*) FROM reminder_eligible) > 10000
+                 OR (SELECT count(*) FROM unknown) > 10000) AS reminder_capped,
+               LEAST((SELECT count(*) FROM notification_eligible), 10000) AS notification_eligible_count,
+               COALESCE((SELECT greatest(0, extract(epoch FROM
+                 ((SELECT observed_at FROM reference_time) - min(next_attempt_at))))::bigint
+                 FROM notification_eligible), 0) AS notification_oldest_eligible_age_seconds,
+               (SELECT count(*) FROM notification_eligible) > 10000 AS notification_capped
         """,
         (row, index) ->
-            new ReminderBacklog(
-                row.getLong("pending_count"),
-                row.getLong("overdue_count"),
-                row.getLong("oldest_overdue_seconds"),
-                row.getLong("obsolete_count"),
-                row.getLong("failed_count"),
-                row.getLong("outcome_unknown_count")));
+            new NotificationMetricsSnapshot(
+                row.getLong("reminder_eligible_count"),
+                row.getLong("reminder_overdue_count"),
+                row.getLong("reminder_oldest_overdue_seconds"),
+                row.getLong("outcome_unknown_count"),
+                row.getBoolean("reminder_capped"),
+                row.getLong("notification_eligible_count"),
+                row.getLong("notification_oldest_eligible_age_seconds"),
+                row.getBoolean("notification_capped")));
   }
 
   @Override

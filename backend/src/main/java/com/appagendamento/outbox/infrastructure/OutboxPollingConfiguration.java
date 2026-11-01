@@ -2,6 +2,7 @@ package com.appagendamento.outbox.infrastructure;
 
 import com.appagendamento.outbox.api.OutboxPublisher;
 import com.appagendamento.outbox.application.OutboxWorker;
+import com.appagendamento.platform.api.WorkerMetrics;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Configuration;
@@ -14,18 +15,20 @@ import org.springframework.scheduling.annotation.Scheduled;
 public class OutboxPollingConfiguration {
 
   private final OutboxWorker worker;
+  private final WorkerMetrics metrics;
 
   public OutboxPollingConfiguration(
-      OutboxWorker worker, ObjectProvider<OutboxPublisher> publishers) {
+      OutboxWorker worker, ObjectProvider<OutboxPublisher> publishers, WorkerMetrics metrics) {
     if (publishers.getIfAvailable() == null) {
       throw new IllegalStateException(
           "OUTBOX_WORKER_ENABLED requer um destino OutboxPublisher configurado");
     }
     this.worker = worker;
+    this.metrics = metrics;
   }
 
   @Scheduled(fixedDelayString = "${app.outbox.worker.poll-delay-ms:1000}")
   void poll() {
-    worker.processBatch();
+    metrics.execute(WorkerMetrics.Worker.OUTBOX, worker::processBatch);
   }
 }

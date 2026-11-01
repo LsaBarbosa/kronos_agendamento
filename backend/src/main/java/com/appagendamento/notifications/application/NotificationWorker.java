@@ -5,12 +5,18 @@ import com.appagendamento.clients.api.ClientNotificationContactQuery;
 import com.appagendamento.notifications.application.NotificationRepository.NotificationClaim;
 import com.appagendamento.notifications.domain.ReminderSchedule;
 import com.appagendamento.notifications.domain.TransportFailure;
+import com.appagendamento.platform.api.DependencyMetrics;
+import com.appagendamento.platform.api.DependencyMetrics.Dependency;
+import com.appagendamento.platform.api.MetricsSourceRecorder;
+import com.appagendamento.platform.api.MetricsSourceRecorder.Source;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -29,11 +35,17 @@ public class NotificationWorker {
   private final Duration lease;
   private final int maxAttempts;
   private final MeterRegistry meters;
+  private final MetricsSourceRecorder sourceMetrics;
+  private final DependencyMetrics dependencyMetrics;
   private final Clock clock;
   private final AtomicLong reminderBacklog;
   private final AtomicLong reminderOverdue;
   private final AtomicLong reminderOldestOverdueSeconds;
   private final AtomicLong reminderOutcomeUnknown;
+  private final AtomicLong reminderBacklogCapped;
+  private final AtomicLong notificationBacklog;
+  private final AtomicLong notificationOldestAgeSeconds;
+  private final AtomicLong notificationBacklogCapped;
 
   public NotificationWorker(
       NotificationRepository notifications,
@@ -45,6 +57,33 @@ public class NotificationWorker {
       @Value("${app.notifications.worker.batch-size:20}") int batchSize,
       @Value("${app.notifications.worker.lease-seconds:60}") long leaseSeconds,
       @Value("${app.notifications.worker.max-attempts:8}") int maxAttempts) {
+    this(
+        notifications,
+        appointments,
+        contacts,
+        transports,
+        meters,
+        clock,
+        new MetricsSourceRecorder(meters, clock),
+        null,
+        batchSize,
+        leaseSeconds,
+        maxAttempts);
+  }
+
+  @Autowired
+  public NotificationWorker(
+      NotificationRepository notifications,
+      AppointmentNotificationQuery appointments,
+      ClientNotificationContactQuery contacts,
+      ObjectProvider<NotificationTransport> transports,
+      MeterRegistry meters,
+      Clock clock,
+      MetricsSourceRecorder sourceMetrics,
+      DependencyMetrics dependencyMetrics,
+      @Value("${app.notifications.worker.batch-size:20}") int batchSize,
+      @Value("${app.notifications.worker.lease-seconds:60}") long leaseSeconds,
+      @Value("${app.notifications.worker.max-attempts:8}") int maxAttempts) {
     if (batchSize < 1 || leaseSeconds < 1 || maxAttempts < 1) {
       throw new IllegalArgumentException("Configuração do worker de notificação inválida");
     }
@@ -53,16 +92,28 @@ public class NotificationWorker {
     this.contacts = contacts;
     this.transports = transports;
     this.meters = meters;
+    this.sourceMetrics = sourceMetrics;
+    this.dependencyMetrics = dependencyMetrics;
+    if (dependencyMetrics != null) {
+      dependencyMetrics.configured(Dependency.WHATSAPP, transports.getIfAvailable() != null);
+    }
     this.batchSize = batchSize;
     this.lease = Duration.ofSeconds(leaseSeconds);
     this.maxAttempts = maxAttempts;
     this.clock = clock;
-    this.reminderBacklog = meters.gauge("agd.notifications.reminders.backlog", new AtomicLong());
-    this.reminderOverdue = meters.gauge("agd.notifications.reminders.overdue", new AtomicLong());
+    this.reminderBacklog = taggedGauge("agd.workers.backlog.eligible", "worker", "reminders");
+    this.reminderOverdue = taggedGauge("agd.workers.backlog.overdue", "worker", "reminders");
     this.reminderOldestOverdueSeconds =
-        meters.gauge("agd.notifications.reminders.oldest_overdue_seconds", new AtomicLong());
+        taggedGauge("agd.workers.backlog.oldest_age", "worker", "reminders");
     this.reminderOutcomeUnknown =
-        meters.gauge("agd.notifications.reminders.outcome_unknown", new AtomicLong());
+        taggedGauge("agd.reconciliation.outcome_unknown", "subsystem", "notifications");
+    this.reminderBacklogCapped = taggedGauge("agd.workers.backlog.capped", "worker", "reminders");
+    this.notificationBacklog =
+        taggedGauge("agd.workers.backlog.eligible", "worker", "notifications");
+    this.notificationOldestAgeSeconds =
+        taggedGauge("agd.workers.backlog.oldest_age", "worker", "notifications");
+    this.notificationBacklogCapped =
+        taggedGauge("agd.workers.backlog.capped", "worker", "notifications");
   }
 
   public int processBatch() {
@@ -176,6 +227,9 @@ public class NotificationWorker {
                   snapshot.serviceEndsAt(),
                   snapshot.timeZone(),
                   claim.externalIdempotencyKey()));
+      if (dependencyMetrics != null) {
+        dependencyMetrics.observed(Dependency.WHATSAPP, true);
+      }
       if (result.accepted()) {
         notifications.markAccepted(claim, result.providerCode(), result.providerReference());
         meters.counter("agd.notifications.attempts", "outcome", "accepted").increment();
@@ -187,6 +241,9 @@ public class NotificationWorker {
             .increment();
       }
     } catch (RuntimeException failure) {
+      if (dependencyMetrics != null) {
+        dependencyMetrics.observed(Dependency.WHATSAPP, false);
+      }
       notifications.markUnknown(claim, "TRANSPORT_OUTCOME_UNKNOWN");
       meters.counter("agd.notifications.attempts", "outcome", "unknown").increment();
       reminderOutcome(claim, "unknown");
@@ -225,11 +282,33 @@ public class NotificationWorker {
   }
 
   private void refreshReminderMetrics() {
-    NotificationRepository.ReminderBacklog snapshot = notifications.reminderBacklog();
-    reminderBacklog.set(snapshot.pendingCount());
-    reminderOverdue.set(snapshot.overdueCount());
-    reminderOldestOverdueSeconds.set(snapshot.oldestOverdueSeconds());
-    reminderOutcomeUnknown.set(snapshot.outcomeUnknownCount());
+    var sample = sourceMetrics.start();
+    try {
+      NotificationRepository.NotificationMetricsSnapshot snapshot = notifications.metricsSnapshot();
+      reminderBacklog.set(snapshot.reminderEligibleCount());
+      reminderOverdue.set(snapshot.reminderOverdueCount());
+      reminderOldestOverdueSeconds.set(snapshot.reminderOldestOverdueSeconds());
+      reminderOutcomeUnknown.set(snapshot.outcomeUnknownCount());
+      reminderBacklogCapped.set(snapshot.reminderCapped() ? 1 : 0);
+      notificationBacklog.set(snapshot.notificationEligibleCount());
+      notificationOldestAgeSeconds.set(snapshot.notificationOldestEligibleAgeSeconds());
+      notificationBacklogCapped.set(snapshot.notificationCapped() ? 1 : 0);
+      sourceMetrics.success(Source.NOTIFICATIONS, sample);
+    } catch (RuntimeException failure) {
+      sourceMetrics.failure(Source.NOTIFICATIONS, sample, failure);
+      LOGGER.warn(
+          "Metrics snapshot unavailable: source=notifications failureType={}",
+          failure.getClass().getSimpleName());
+    }
+  }
+
+  private AtomicLong taggedGauge(String name, String tagKey, String tagValue) {
+    AtomicLong value = new AtomicLong();
+    Gauge.builder(name, value, AtomicLong::doubleValue)
+        .tag(tagKey, tagValue)
+        .strongReference(true)
+        .register(meters);
+    return value;
   }
 
   private static Duration backoff(int attempt) {

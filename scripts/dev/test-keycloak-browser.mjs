@@ -1529,21 +1529,13 @@ try {
         evaluate("document.querySelector('.admin-agenda__block--cancelled')?.innerText.includes('Manutenção E2E')"),
     );
     console.log('Browser: exceção fechada, horário especial, restauração e bloqueio cancelado persistem após reload.');
+    await armNextAdminScheduleRefreshHold(evaluate);
     await clickButtonByText('Nova reserva', evaluate);
-    await setSelectByLabel('Serviço ativo', publicService.serviceId, evaluate);
-    await evaluate(`(() => {
-      const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
-      const label = [...form.querySelectorAll('label')].find(item => item.innerText.includes('Novo cliente'));
-      label?.querySelector('input')?.click();
-    })()`);
-    await waitUntil(() =>
-        evaluate(`Boolean((() => {
-          const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
-          return [...(form?.querySelectorAll('label') ?? [])].some(item =>
-            item.innerText.trim().startsWith('Nome') && item.querySelector('input'),
-          );
-        })())`),
-    );
+    await verifyAndReleaseAdminScheduleRefresh(evaluate, publicService.serviceId);
+    await waitForAdminAppointmentFormInteractivity(evaluate);
+    await setAdminAppointmentSelect('Serviço ativo', publicService.serviceId, evaluate);
+    await clickAdminAppointmentClientMode('Novo cliente', evaluate);
+    await waitForAdminNewClientFields(evaluate);
     await setAdminAppointmentField('Nome', 'Reserva administrativa E2E', evaluate);
     await setAdminAppointmentField('Telefone para cadastro', '+5511999998310', evaluate);
     await setAdminAppointmentField('Data local', publicDate, evaluate);
@@ -3717,6 +3709,188 @@ async function setAdminAppointmentField(label, value, evaluate) {
       field.dispatchEvent(new Event('input', { bubbles: true }));
       field.dispatchEvent(new Event('change', { bubbles: true }));
     })()`);
+}
+
+async function armNextAdminScheduleRefreshHold(evaluate) {
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__agdHeldScheduleOriginalFetch = originalFetch;
+      window.__agdScheduleResponsePaused = false;
+      window.__agdScheduleResponseHold = false;
+      window.__agdReleaseScheduleResponse = null;
+      const openButton = [...document.querySelectorAll('button')]
+        .find(button => button.textContent.trim() === 'Nova reserva');
+      if (!openButton) throw new Error('Admin new-booking button not found');
+      openButton.addEventListener('click', () => {
+        window.__agdScheduleResponseHold = true;
+      }, {capture: true, once: true});
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        const request = args[0] instanceof Request ? args[0].url : args[0];
+        const pathname = new URL(request, location.href).pathname;
+        if (window.__agdScheduleResponseHold && pathname.endsWith('/v1/admin/schedule/weekly-periods')) {
+          window.__agdScheduleResponseHold = false;
+          window.__agdScheduleResponsePaused = true;
+          await new Promise(resolve => { window.__agdReleaseScheduleResponse = resolve; });
+        }
+        return response;
+      };
+    })()`);
+}
+
+async function verifyAndReleaseAdminScheduleRefresh(evaluate, serviceId) {
+    try {
+        await waitUntil(() => evaluate('window.__agdScheduleResponsePaused === true'));
+    } catch (cause) {
+        const state = await adminAppointmentFormSnapshot(evaluate);
+        throw new Error(
+            `A resposta real da revisão da agenda não foi pausada: ${JSON.stringify({state, scheduleResponses: await relevantScheduleResponses()})}`,
+            {cause},
+        );
+    }
+    const beforeInteraction = await adminAppointmentFormSnapshot(evaluate);
+    if (
+        !beforeInteraction.formFound ||
+        !beforeInteraction.fieldsetDisabled ||
+        !beforeInteraction.serviceDisabled ||
+        !beforeInteraction.newClientRadioDisabled ||
+        beforeInteraction.newClientRadioChecked
+    ) {
+        throw new Error(
+            `Estado inesperado durante atualização pausada da agenda: ${JSON.stringify({state: beforeInteraction, scheduleResponses: await relevantScheduleResponses()})}`,
+        );
+    }
+    await setAdminAppointmentSelect('Serviço ativo', serviceId, evaluate);
+    const disabledRadioClick = await evaluate(`(() => {
+      const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
+      if (!form) throw new Error('Administrative appointment form not found');
+      const label = [...form.querySelectorAll('label')].find(item => item.textContent.trim() === 'Novo cliente');
+      if (!label) throw new Error('Administrative appointment client label not found: Novo cliente');
+      const radio = label.querySelector('input[type="radio"]');
+      if (!radio) throw new Error('Administrative appointment client radio not found: Novo cliente');
+      radio.click();
+      return radio.checked;
+    })()`);
+    const afterDisabledClick = await adminAppointmentFormSnapshot(evaluate);
+    if (disabledRadioClick || afterDisabledClick.newClientRadioChecked) {
+        throw new Error(
+            `Clique sintético alterou rádio dentro do fieldset desabilitado: ${JSON.stringify({state: afterDisabledClick, scheduleResponses: await relevantScheduleResponses()})}`,
+        );
+    }
+    console.log(
+        `Browser: controle confirmado durante resposta real pausada da agenda: ${JSON.stringify({beforeInteraction, afterDisabledClick, scheduleResponses: await relevantScheduleResponses()})}`,
+    );
+    await evaluate(`(() => {
+      if (typeof window.__agdReleaseScheduleResponse !== 'function') {
+        throw new Error('Admin schedule response release was not armed');
+      }
+      window.__agdReleaseScheduleResponse();
+      window.fetch = window.__agdHeldScheduleOriginalFetch;
+      delete window.__agdHeldScheduleOriginalFetch;
+      window.__agdScheduleResponsePaused = false;
+    })()`);
+}
+
+async function adminAppointmentFormSnapshot(evaluate) {
+    return evaluate(`(() => {
+      const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
+      if (!form) return {formFound: false};
+      const fieldset = form.querySelector(':scope > fieldset');
+      const findLabeledControl = (text, selector) => {
+        const label = [...form.querySelectorAll('label')].find(item => item.textContent.trim().startsWith(text));
+        return label ? label.querySelector(selector) : null;
+      };
+      const service = findLabeledControl('Serviço ativo', 'select');
+      const newClientLabel = [...form.querySelectorAll('label')]
+        .find(item => item.textContent.trim() === 'Novo cliente');
+      const newClient = newClientLabel
+        ? newClientLabel.querySelector('input[type="radio"]')
+        : null;
+      const name = findLabeledControl('Nome', 'input');
+      return {
+        formFound: true,
+        fieldsetFound: Boolean(fieldset),
+        fieldsetDisabled: fieldset ? fieldset.matches(':disabled') : null,
+        serviceFound: Boolean(service),
+        serviceDisabled: service ? service.matches(':disabled') : null,
+        serviceSelected: service ? service.value !== '' : null,
+        newClientRadioFound: Boolean(newClient),
+        newClientRadioDisabled: newClient ? newClient.matches(':disabled') : null,
+        newClientRadioChecked: newClient ? newClient.checked : null,
+        nameFieldPresent: Boolean(name),
+        nameFieldDisabled: name ? name.matches(':disabled') : null,
+      };
+    })()`);
+}
+
+async function relevantScheduleResponses() {
+    return recentHttpResponses
+        .filter(({ path }) =>
+            path.endsWith('/v1/admin/schedule/weekly-periods') ||
+            path.endsWith('/v1/admin/availability-policy'),
+        )
+        .slice(-4);
+}
+
+async function waitForAdminAppointmentFormInteractivity(evaluate) {
+    try {
+        await waitUntil(async () => {
+            const state = await adminAppointmentFormSnapshot(evaluate);
+            return state.formFound && state.fieldsetFound && !state.fieldsetDisabled;
+        });
+    } catch (cause) {
+        const state = await adminAppointmentFormSnapshot(evaluate);
+        throw new Error(
+            `Formulário administrativo não ficou interativo: ${JSON.stringify({state, scheduleResponses: await relevantScheduleResponses()})}`,
+            {cause},
+        );
+    }
+}
+
+async function setAdminAppointmentSelect(labelText, value, evaluate) {
+    await evaluate(`(() => {
+      const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
+      if (!form) throw new Error('Administrative appointment form not found');
+      const label = [...form.querySelectorAll('label')].find(item => item.textContent.trim().startsWith(${JSON.stringify(labelText)}));
+      if (!label) throw new Error('Administrative appointment label not found: ' + ${JSON.stringify(labelText)});
+      const select = label.querySelector('select');
+      if (!select) throw new Error('Administrative appointment select not found: ' + ${JSON.stringify(labelText)});
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+      descriptor.set.call(select, ${JSON.stringify(value)});
+      select.dispatchEvent(new Event('input', {bubbles: true}));
+      select.dispatchEvent(new Event('change', {bubbles: true}));
+    })()`);
+}
+
+async function clickAdminAppointmentClientMode(labelText, evaluate) {
+    const state = await evaluate(`(() => {
+      const form = document.querySelector('form[aria-label="Criar reserva administrativa"]');
+      if (!form) throw new Error('Administrative appointment form not found');
+      const label = [...form.querySelectorAll('label')].find(item => item.textContent.trim() === ${JSON.stringify(labelText)});
+      if (!label) throw new Error('Administrative appointment client label not found: ' + ${JSON.stringify(labelText)});
+      const radio = label.querySelector('input[type="radio"]');
+      if (!radio) throw new Error('Administrative appointment client radio not found: ' + ${JSON.stringify(labelText)});
+      radio.click();
+      return {checked: radio.checked, disabled: radio.matches(':disabled')};
+    })()`);
+    if (!state.checked || state.disabled) {
+        throw new Error(`Não foi possível selecionar ${labelText} no formulário interativo: ${JSON.stringify(state)}`);
+    }
+}
+
+async function waitForAdminNewClientFields(evaluate) {
+    try {
+        await waitUntil(async () => {
+            const state = await adminAppointmentFormSnapshot(evaluate);
+            return state.newClientRadioChecked && state.nameFieldPresent && !state.nameFieldDisabled;
+        });
+    } catch (cause) {
+        const state = await adminAppointmentFormSnapshot(evaluate);
+        throw new Error(
+            `Campos de novo cliente não apareceram após confirmar o rádio: ${JSON.stringify({state, scheduleResponses: await relevantScheduleResponses()})}`,
+            {cause},
+        );
+    }
 }
 
 async function setAdminAppointmentTextarea(label, value, evaluate) {

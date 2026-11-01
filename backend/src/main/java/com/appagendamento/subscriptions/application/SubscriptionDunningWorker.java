@@ -1,11 +1,17 @@
 package com.appagendamento.subscriptions.application;
 
+import com.appagendamento.platform.api.DependencyMetrics;
+import com.appagendamento.platform.api.DependencyMetrics.Dependency;
+import com.appagendamento.platform.api.MetricsSourceRecorder;
+import com.appagendamento.platform.api.MetricsSourceRecorder.Source;
 import com.appagendamento.subscriptions.domain.DunningAttemptClaim;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -23,6 +29,8 @@ public class SubscriptionDunningWorker {
   private final int batchSize;
   private final int maxTechnicalAttempts;
   private final MeterRegistry meters;
+  private final MetricsSourceRecorder sourceMetrics;
+  private final DependencyMetrics dependencyMetrics;
   private final AtomicLong backlog;
   private final AtomicLong overdue;
   private final AtomicLong oldestOverdueSeconds;
@@ -32,6 +40,7 @@ public class SubscriptionDunningWorker {
   private final AtomicLong failedFinal;
   private final AtomicLong skippedLateRecovery;
   private final AtomicLong technicalAttempts;
+  private final AtomicLong backlogCapped;
 
   public SubscriptionDunningWorker(
       SubscriptionDunningRepository dunning,
@@ -43,6 +52,32 @@ public class SubscriptionDunningWorker {
       @Value("${app.subscriptions.dunning-worker.lease-seconds:60}") long leaseSeconds,
       @Value("${app.subscriptions.dunning-worker.max-technical-attempts:5}")
           int maxTechnicalAttempts) {
+    this(
+        dunning,
+        transports,
+        reconcilers,
+        meters,
+        clock,
+        new MetricsSourceRecorder(meters, clock),
+        null,
+        batchSize,
+        leaseSeconds,
+        maxTechnicalAttempts);
+  }
+
+  @Autowired
+  public SubscriptionDunningWorker(
+      SubscriptionDunningRepository dunning,
+      ObjectProvider<DunningChargeTransport> transports,
+      ObjectProvider<DunningAttemptReconciler> reconcilers,
+      MeterRegistry meters,
+      Clock clock,
+      MetricsSourceRecorder sourceMetrics,
+      DependencyMetrics dependencyMetrics,
+      @Value("${app.subscriptions.dunning-worker.batch-size:20}") int batchSize,
+      @Value("${app.subscriptions.dunning-worker.lease-seconds:60}") long leaseSeconds,
+      @Value("${app.subscriptions.dunning-worker.max-technical-attempts:5}")
+          int maxTechnicalAttempts) {
     if (batchSize < 1 || batchSize > 100 || leaseSeconds < 5 || maxTechnicalAttempts < 1) {
       throw new IllegalArgumentException("Configuração do worker de inadimplência inválida");
     }
@@ -50,19 +85,31 @@ public class SubscriptionDunningWorker {
     this.transports = transports;
     this.reconcilers = reconcilers;
     this.meters = meters;
+    this.sourceMetrics = sourceMetrics;
+    this.dependencyMetrics = dependencyMetrics;
+    if (dependencyMetrics != null) {
+      dependencyMetrics.configured(
+          Dependency.PAYMENT_PROVIDER, transports.getIfAvailable() != null);
+      dependencyMetrics.configured(
+          Dependency.PAYMENT_RECONCILER, reconcilers.getIfAvailable() != null);
+    }
     this.clock = clock;
     this.batchSize = batchSize;
     this.lease = Duration.ofSeconds(leaseSeconds);
     this.maxTechnicalAttempts = maxTechnicalAttempts;
-    this.backlog = gauge("backlog");
-    this.overdue = gauge("overdue");
-    this.oldestOverdueSeconds = gauge("oldest_overdue_seconds");
-    this.outcomeUnknown = gauge("outcome_unknown");
+    this.backlog = taggedGauge("agd.workers.backlog.eligible", "worker", "subscription_dunning");
+    this.overdue = taggedGauge("agd.workers.backlog.overdue", "worker", "subscription_dunning");
+    this.oldestOverdueSeconds =
+        taggedGauge("agd.workers.backlog.oldest_age", "worker", "subscription_dunning");
+    this.outcomeUnknown =
+        taggedGauge("agd.reconciliation.outcome_unknown", "subsystem", "payments");
     this.acceptedTransport = gauge("accepted_transport");
     this.declined = gauge("declined");
     this.failedFinal = gauge("failed_final");
     this.skippedLateRecovery = gauge("skipped_late_recovery");
     this.technicalAttempts = gauge("technical_attempts");
+    this.backlogCapped =
+        taggedGauge("agd.workers.backlog.capped", "worker", "subscription_dunning");
   }
 
   /** Processes at most one claimed attempt at a time; network calls run outside DB transactions. */
@@ -102,8 +149,14 @@ public class SubscriptionDunningWorker {
       try {
         result = transport.submit(toRequest(work));
         if (result == null) throw new IllegalStateException("Resposta vazia do transporte");
+        if (dependencyMetrics != null) {
+          dependencyMetrics.observed(Dependency.PAYMENT_PROVIDER, true);
+        }
       } catch (RuntimeException ambiguous) {
         result = unknown("TRANSPORT_OUTCOME_UNKNOWN");
+        if (dependencyMetrics != null) {
+          dependencyMetrics.observed(Dependency.PAYMENT_PROVIDER, false);
+        }
       }
       dunning.recordTransportResult(
           work, result, backoff(work.technicalAttempts() + 1), maxTechnicalAttempts);
@@ -116,17 +169,37 @@ public class SubscriptionDunningWorker {
     return meters.gauge("agd.subscriptions.dunning." + name, new AtomicLong());
   }
 
+  private AtomicLong taggedGauge(String name, String tagKey, String tagValue) {
+    AtomicLong value = new AtomicLong();
+    Gauge.builder(name, value, AtomicLong::doubleValue)
+        .tag(tagKey, tagValue)
+        .strongReference(true)
+        .register(meters);
+    return value;
+  }
+
   private void refreshMetrics() {
-    var snapshot = dunning.metricsSnapshot(clock.instant());
-    backlog.set(snapshot.backlog());
-    overdue.set(snapshot.overdue());
-    oldestOverdueSeconds.set(snapshot.oldestOverdueSeconds());
-    outcomeUnknown.set(snapshot.outcomeUnknown());
-    acceptedTransport.set(snapshot.acceptedTransport());
-    declined.set(snapshot.declined());
-    failedFinal.set(snapshot.failedFinal());
-    skippedLateRecovery.set(snapshot.skippedLateRecovery());
-    technicalAttempts.set(snapshot.technicalAttempts());
+    var sample = sourceMetrics.start();
+    try {
+      var snapshot = dunning.metricsSnapshot(clock.instant());
+      backlog.set(snapshot.backlog());
+      overdue.set(snapshot.overdue());
+      oldestOverdueSeconds.set(snapshot.oldestOverdueSeconds());
+      outcomeUnknown.set(snapshot.outcomeUnknown());
+      acceptedTransport.set(snapshot.acceptedTransport());
+      declined.set(snapshot.declined());
+      failedFinal.set(snapshot.failedFinal());
+      skippedLateRecovery.set(snapshot.skippedLateRecovery());
+      technicalAttempts.set(snapshot.technicalAttempts());
+      backlogCapped.set(snapshot.capped() ? 1 : 0);
+      sourceMetrics.success(Source.SUBSCRIPTIONS, sample);
+    } catch (RuntimeException failure) {
+      sourceMetrics.failure(Source.SUBSCRIPTIONS, sample, failure);
+      org.slf4j.LoggerFactory.getLogger(SubscriptionDunningWorker.class)
+          .warn(
+              "Metrics snapshot unavailable: source=subscriptions failureType={}",
+              failure.getClass().getSimpleName());
+    }
   }
 
   private void processReconciliation(
@@ -141,8 +214,14 @@ public class SubscriptionDunningWorker {
               claim.externalIdempotencyKey(),
               claim.providerReference());
       if (result == null) throw new IllegalStateException("Resposta de reconciliação vazia");
+      if (dependencyMetrics != null) {
+        dependencyMetrics.observed(Dependency.PAYMENT_RECONCILER, true);
+      }
     } catch (RuntimeException unavailable) {
       result = unknown("RECONCILIATION_OUTCOME_UNKNOWN");
+      if (dependencyMetrics != null) {
+        dependencyMetrics.observed(Dependency.PAYMENT_RECONCILER, false);
+      }
     }
     dunning.recordReconciliationResult(
         claim, result, backoff(claim.technicalAttempts() + 1), maxTechnicalAttempts);

@@ -4,6 +4,8 @@ import com.appagendamento.identityaccess.api.AdminAccessPolicy;
 import com.appagendamento.identityaccess.api.AdminOidcUserService;
 import com.appagendamento.identityaccess.api.AuthenticatedAdmin;
 import jakarta.servlet.http.HttpServletResponse;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -34,6 +36,7 @@ public class SecurityConfiguration {
       ObjectProvider<AdminAccessPolicy> adminAccessPolicy,
       @Value("${identity.oidc.enabled:false}") boolean oidcEnabled,
       @Value("${identity.oidc.frontend-url:http://localhost:5173/admin}") String frontendUrl,
+      @Value("${app.observability.scrape-token:}") String scrapeToken,
       @Value("${app.client-access.e2e-emitter-enabled:false}") boolean e2eEmitterEnabled)
       throws Exception {
     http.sessionManagement(
@@ -61,6 +64,11 @@ public class SecurityConfiguration {
                         "/actuator/health/liveness",
                         "/actuator/health/readiness")
                     .permitAll()
+                    .requestMatchers(HttpMethod.GET, "/actuator/prometheus")
+                    .access(
+                        (authentication, context) ->
+                            new AuthorizationDecision(
+                                hasValidScrapeToken(context.getRequest(), scrapeToken)))
                     .requestMatchers(HttpMethod.GET, "/api/v1/csrf")
                     .permitAll()
                     .requestMatchers(
@@ -155,6 +163,16 @@ public class SecurityConfiguration {
       http.logout(AbstractHttpConfigurer::disable);
     }
     return http.build();
+  }
+
+  private static boolean hasValidScrapeToken(
+      jakarta.servlet.http.HttpServletRequest request, String configuredToken) {
+    if (configuredToken == null || configuredToken.isBlank()) return false;
+    String authorization = request.getHeader("Authorization");
+    if (authorization == null || !authorization.startsWith("Bearer ")) return false;
+    byte[] expected = configuredToken.getBytes(StandardCharsets.UTF_8);
+    byte[] supplied = authorization.substring("Bearer ".length()).getBytes(StandardCharsets.UTF_8);
+    return MessageDigest.isEqual(expected, supplied);
   }
 
   private static boolean isAnonymousPublicTelemetryRequest(

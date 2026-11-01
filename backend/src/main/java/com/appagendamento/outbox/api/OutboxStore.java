@@ -2,6 +2,7 @@ package com.appagendamento.outbox.api;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface OutboxStore {
@@ -17,4 +18,8 @@ public interface OutboxStore {
   boolean markOutcomeUnknown(OutboxClaim claim, String errorCode);
 
   boolean reprocess(UUID eventId);
+
+  default Optional<OutboxMetricsSnapshot> metricsSnapshot() {
+    return Optional.empty();
+  }
 }

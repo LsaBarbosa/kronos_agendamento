@@ -9,4 +9,5 @@ public record DunningMetricsSnapshot(
     long declined,
     long failedFinal,
     long skippedLateRecovery,
-    long technicalAttempts) {}
+    long technicalAttempts,
+    boolean capped) {}

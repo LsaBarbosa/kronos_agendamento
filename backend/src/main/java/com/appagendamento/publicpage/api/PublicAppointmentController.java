@@ -21,14 +21,17 @@ public class PublicAppointmentController {
   private final CreatePublicAppointment createAppointment;
   private final PreparePublicBookingIntent prepareIntent;
   private final GetPublicBookingIntent getIntent;
+  private final com.appagendamento.appointments.api.BookingMetrics bookingMetrics;
 
   public PublicAppointmentController(
       CreatePublicAppointment createAppointment,
       PreparePublicBookingIntent prepareIntent,
-      GetPublicBookingIntent getIntent) {
+      GetPublicBookingIntent getIntent,
+      com.appagendamento.appointments.api.BookingMetrics bookingMetrics) {
     this.createAppointment = createAppointment;
     this.prepareIntent = prepareIntent;
     this.getIntent = getIntent;
+    this.bookingMetrics = bookingMetrics;
   }
 
   @PostMapping("/api/v1/public/{slug}/booking-intents/current")
@@ -62,6 +65,7 @@ public class PublicAppointmentController {
       @RequestHeader("Idempotency-Key") @Size(min = 16, max = 128) String key,
       @RequestHeader("X-Booking-Recovery") String recoveryCapability,
       @Valid @RequestBody PublicAppointmentRequest request) {
+    bookingMetrics.attempt("public");
     var result =
         createAppointment.execute(
             slug,
@@ -71,6 +75,7 @@ public class PublicAppointmentController {
             request.client().name(),
             request.client().phone(),
             recoveryCapability);
+    bookingMetrics.created("public", result.replayed(), "created");
     return ResponseEntity.status(org.springframework.http.HttpStatus.CREATED)
         .cacheControl(CacheControl.noStore())
         .header("Idempotency-Replayed", Boolean.toString(result.replayed()))
