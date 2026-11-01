@@ -3354,9 +3354,13 @@ try {
     }
     await waitForText('Sessão administrativa ativa.', evaluate);
     await waitForText('Operação preparada: MONTHLY', evaluate);
+    const checkoutRetryPreviousDocumentTimeOrigin = await evaluate('performance.timeOrigin');
+    const checkoutRetryWaitDeadline = Date.now() + 60_000;
+    const checkoutRetryWaitRemainingMs = () => Math.max(1, checkoutRetryWaitDeadline - Date.now());
     const checkoutRetryScript = await command('Page.addScriptToEvaluateOnNewDocument', {
         source: `(() => {
           const originalFetch = window.fetch.bind(window);
+          window.__checkoutRetryInterceptorInstalled = true;
           window.__checkoutRequests = [];
           window.fetch = async (input, init) => {
             const url = new URL(typeof input === 'string' ? input : input.url, location.href);
@@ -3372,11 +3376,48 @@ try {
         })();`,
     });
     await command('Page.reload', { ignoreCache: true });
+    try {
+        await waitUntil(
+            () => evaluate(`window.__checkoutRetryInterceptorInstalled === true && performance.timeOrigin !== ${checkoutRetryPreviousDocumentTimeOrigin} && document.readyState === 'complete'`),
+            checkoutRetryWaitRemainingMs(),
+        );
+    } catch (error) {
+        const diagnostic = await evaluate(`JSON.stringify({
+          page: location.origin + location.pathname,
+          readyState: document.readyState,
+          documentChanged: performance.timeOrigin !== ${checkoutRetryPreviousDocumentTimeOrigin},
+          interceptorInstalled: window.__checkoutRetryInterceptorInstalled === true,
+          requestQueueType: typeof window.__checkoutRequests,
+          requestCount: Array.isArray(window.__checkoutRequests) ? window.__checkoutRequests.length : null,
+          checkoutButton: (() => { const button = [...document.querySelectorAll('button')].find(item => item.innerText.trim() === 'Iniciar ou recuperar a mesma operação'); return button ? {present:true, enabled:!button.disabled} : {present:false}; })(),
+          operationIntentPresent: sessionStorage.getItem(${JSON.stringify(checkoutIntentStorageKey)}) !== null
+        })`);
+        throw new Error(`Documento pós-reload/interceptador de checkout não ficou pronto: ${diagnostic}`, {cause:error});
+    }
     await waitForText('Trial encerrado', evaluate);
     await waitForText('Operação preparada: MONTHLY', evaluate);
     await waitUntil(() => evaluate(`(() => { const button = [...document.querySelectorAll('button')].find(item => item.innerText.trim() === 'Iniciar ou recuperar a mesma operação'); return Boolean(button && !button.disabled); })()`));
     await clickButtonByText('Iniciar ou recuperar a mesma operação', evaluate);
-    await waitUntil(() => evaluate('window.__checkoutRequests?.length === 1'));
+    try {
+        await waitUntil(
+            () => evaluate('window.__checkoutRequests?.length === 1'),
+            checkoutRetryWaitRemainingMs(),
+        );
+    } catch (error) {
+        const diagnostic = await evaluate(`JSON.stringify({
+          page: location.origin + location.pathname,
+          readyState: document.readyState,
+          interceptorInstalled: window.__checkoutRetryInterceptorInstalled === true,
+          documentChanged: performance.timeOrigin !== ${checkoutRetryPreviousDocumentTimeOrigin},
+          requestQueueType: typeof window.__checkoutRequests,
+          requestCount: Array.isArray(window.__checkoutRequests) ? window.__checkoutRequests.length : null,
+          requestFieldPresence: Array.isArray(window.__checkoutRequests) ? window.__checkoutRequests.map(request => ({key:!!request.key, context:!!request.context, body:!!request.body})) : [],
+          checkoutButtonPresent: [...document.querySelectorAll('button')].some(item => item.innerText.trim() === 'Iniciar ou recuperar a mesma operação'),
+          operationIntentPresent: sessionStorage.getItem(${JSON.stringify(checkoutIntentStorageKey)}) !== null,
+          relevantResponses: ${JSON.stringify(recentHttpResponses.filter(({path}) => ['/api/v1/admin/subscription/checkout', '/api/v1/csrf'].includes(path)).slice(-8))}
+        })`);
+        throw new Error(`Checkout não produziu exatamente a primeira requisição observada: ${diagnostic}`, {cause:error});
+    }
     await waitForText('Resultado ainda incerto.', evaluate);
     const pendingCheckoutIntent = await evaluate(`({
       requests: window.__checkoutRequests,
