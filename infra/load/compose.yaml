@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: postgres@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50
+    environment:
+      POSTGRES_DB: agd054_load
+      POSTGRES_USER: agd054_owner
+      POSTGRES_PASSWORD: ${LOAD_POSTGRES_PASSWORD:?synthetic temporary value required}
+      APP_DB_PASSWORD: ${LOAD_APP_DB_PASSWORD:?synthetic temporary value required}
+    volumes:
+      - load_postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    networks: [load]
+
+  app:
+    build:
+      context: ./backend
+      additional_contexts:
+        temurin: ./infra/temurin
+      args:
+        INCLUDE_E2E_FIXTURES: "true"
+    image: ${LOAD_APP_IMAGE:-agd054-load-app:local}
+    environment:
+      SPRING_PROFILES_ACTIVE: e2e
+      DB_URL: jdbc:postgresql://postgres:5432/agd054_load
+      DB_USERNAME: agendamento_app
+      DB_PASSWORD: ${LOAD_APP_DB_PASSWORD:?synthetic temporary value required}
+      FLYWAY_DB_URL: jdbc:postgresql://postgres:5432/agd054_load
+      FLYWAY_DB_USERNAME: agd054_owner
+      FLYWAY_DB_PASSWORD: ${LOAD_POSTGRES_PASSWORD:?synthetic temporary value required}
+      PUBLIC_BOOKING_HMAC_ACTIVE_KEY_ID: agd054-load-v1
+      PUBLIC_BOOKING_HMAC_KEYS: agd054-load-v1=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      SESSION_COOKIE_SECURE: "false"
+      OUTBOX_WORKER_ENABLED: "false"
+      SUBSCRIPTION_TRIAL_EXPIRY_WORKER_ENABLED: "false"
+      EXPORTS_ENABLED: "false"
+      EXPORTS_WORKER_ENABLED: "false"
+    ports:
+      - "127.0.0.1::8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/actuator/health/readiness"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+      start_period: 25s
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    networks: [load]
+
+networks:
+  load:
+    driver: bridge
+
+volumes:
+  load_postgres_data:
