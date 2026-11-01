@@ -173,34 +173,69 @@ class AuditTrailIT {
   @Test
   void auditInsertFailureRollsBackCriticalTenantMutation() {
     String slug = "audit-fail-" + suffix();
-    int previousEventCount =
-        migrationJdbc.queryForObject("SELECT count(*) FROM agendamento.audit_event", Integer.class);
+    Tenant unrelatedTenantBeforeTrigger =
+        createTenant.execute("Unrelated tenant", "audit-unrelated-" + suffix(), "UTC");
+    UUID operationCorrelationId = UUID.randomUUID();
     migrationJdbc.execute(
         """
         CREATE OR REPLACE FUNCTION agendamento.reject_audit_insert() RETURNS trigger
-        LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'audit storage unavailable'; END $$
-        """);
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.correlation_id = '%s'::uuid OR NEW.trace_id = '%s'::uuid THEN
+            RAISE EXCEPTION 'audit storage unavailable';
+          END IF;
+          RETURN NEW;
+        END
+        $$
+        """
+            .formatted(operationCorrelationId, operationCorrelationId));
     migrationJdbc.execute(
         """
         CREATE TRIGGER reject_audit_insert BEFORE INSERT ON agendamento.audit_event
         FOR EACH ROW EXECUTE FUNCTION agendamento.reject_audit_insert()
         """);
     try {
-      assertThatThrownBy(() -> createTenant.execute("Atomic tenant", slug, "UTC"))
+      Tenant unrelatedTenantDuringTrigger =
+          createTenant.execute(
+              "Another unrelated tenant", "audit-during-trigger-" + suffix(), "UTC");
+
+      assertThatThrownBy(
+              () ->
+                  withCorrelationId(
+                      operationCorrelationId,
+                      () -> createTenant.execute("Atomic tenant", slug, "UTC")))
           .isInstanceOf(DataAccessException.class);
       assertThat(
               migrationJdbc.queryForObject(
                   "SELECT count(*) FROM agendamento.tenant WHERE slug = ?", Integer.class, slug))
           .isZero();
-      assertThat(
-              migrationJdbc.queryForObject(
-                  "SELECT count(*) FROM agendamento.audit_event", Integer.class))
-          .isEqualTo(previousEventCount);
+      assertNoAuditEventForCorrelation(operationCorrelationId);
+      assertTenantCreatedEventExists(unrelatedTenantBeforeTrigger);
+      assertTenantCreatedEventExists(unrelatedTenantDuringTrigger);
     } finally {
       migrationJdbc.execute(
           "DROP TRIGGER IF EXISTS reject_audit_insert ON agendamento.audit_event");
       migrationJdbc.execute("DROP FUNCTION IF EXISTS agendamento.reject_audit_insert()");
     }
+  }
+
+  @Test
+  void auditRollbackAssertionDetectsAnEventWithTheOperationsCorrelationId() {
+    UUID correlationId = UUID.randomUUID();
+
+    withCorrelationId(
+        correlationId,
+        () -> createTenant.execute("Committed tenant", "audit-positive-" + suffix(), "UTC"));
+
+    assertThat(
+            migrationJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.audit_event WHERE correlation_id = ? OR trace_id = ?",
+                Integer.class,
+                correlationId,
+                correlationId))
+        .isEqualTo(1);
+    assertThatThrownBy(() -> assertNoAuditEventForCorrelation(correlationId))
+        .isInstanceOf(AssertionError.class);
   }
 
   @Test
@@ -301,6 +336,38 @@ class AuditTrailIT {
         return tenantId;
       }
     };
+  }
+
+  private void assertNoAuditEventForCorrelation(UUID correlationId) {
+    assertThat(
+            migrationJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.audit_event WHERE correlation_id = ? OR trace_id = ?",
+                Integer.class,
+                correlationId,
+                correlationId))
+        .as("no audit event from the operation under test is committed")
+        .isZero();
+  }
+
+  private void assertTenantCreatedEventExists(Tenant tenant) {
+    assertThat(
+            migrationJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.audit_event WHERE tenant_id = ? AND action = 'TENANT_CREATED'",
+                Integer.class,
+                tenant.tenantId()))
+        .as("the unrelated tenant's legitimate creation event remains persisted")
+        .isEqualTo(1);
+  }
+
+  private static void withCorrelationId(UUID correlationId, Runnable action) {
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setAttribute(CorrelationIdFilter.ATTRIBUTE, correlationId.toString());
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+    try {
+      action.run();
+    } finally {
+      RequestContextHolder.resetRequestAttributes();
+    }
   }
 
   private static String suffix() {
