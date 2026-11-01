@@ -41,7 +41,8 @@ Uma tentativa intermediária no namespace restrito falhou antes de executar os t
 - PR draft separado para `main`: https://github.com/LsaBarbosa/kronos_agendamento/pull/30.
 - No SHA `878aa5c`, `verify`, CodeQL, security, frontend, keycloak-image, análises Java/TypeScript e verificações de segredos passaram nos eventos observados.
 - Um dos dois jobs `oidc-browser-e2e` passou. O outro falhou no cenário de remarcação, esperando “Remarcação confirmada e persistida” e recebendo conflito HTTP 409. Essa ocorrência é alheia aos dois arquivos deste PR e não foi investigada ou alterada nesta frente, conforme o escopo. O E2E completo, portanto, não está verde neste SHA.
+- Atualização de handoff publicada em `71e059db60d36b684f8a761cac89a9c46f28ed11`; nesse SHA todos os checks dos eventos push e PR passaram, incluindo `verify`, os dois `oidc-browser-e2e`, CodeQL, security, frontend, keycloak-image, análises Java/TypeScript e verificações de segredos. O 409 acima não se repetiu; não foi investigado como outra intermitência nem alterado nesta frente.
 
 ## Entrega
 
-Sem alteração de produção, migrations, constraints, workers, timeout, política transacional ou regra de negócio. A validação focal passou. O PR draft está aberto; pendem revisão/integração e a resolução da falha de remarcação por sua frente responsável. A contagem histórica `189 → 206` permanece sem atribuição linha a linha.
+Sem alteração de produção, migrations, constraints, workers, timeout, política transacional ou regra de negócio. A validação focal passou e todos os checks passaram no SHA `71e059db60d36b684f8a761cac89a9c46f28ed11`. O PR draft está aberto e aguarda revisão/integração. A contagem histórica `189 → 206` permanece sem atribuição linha a linha.
