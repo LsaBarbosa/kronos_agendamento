@@ -1,9 +1,11 @@
-# Runbook: exportação ambígua ou worker de exportação falhando
+# Runbook: worker de exportação falhando
 
-Aplica-se a `ExportOutcomeUnknownPending` (estado persistido > 0 por 1 min) e
-`ExportWorkerRepeatedFailures` (3 falhas/10 min por 2 min com worker enabled e
-backlog elegível). Severidade warning; responsável: operações de exportação.
+Aplica-se a `ExportWorkerRepeatedFailures` (3 falhas/10 min por 2 min com worker
+enabled e backlog elegível). Severidade warning; responsável: operações de exportação.
 Limiares demonstrativos, não SLO/SLA; pessoa/plantão pendentes.
+
+O contrato v1.4 não publica contagem `outcome_unknown` para exports, portanto não
+há alerta automático de reconciliação de exportações nesta versão.
 
 ## Diagnóstico
 

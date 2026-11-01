@@ -78,6 +78,7 @@ docker run --rm --entrypoint /bin/promtool \
 
 python3 - "$repo_root/ops/observability/grafana" "$repo_root" <<'PY'
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -103,6 +104,24 @@ for path in sorted(definitions.glob("*.json")):
 rules = (repo / "ops/observability/prometheus/rules/contract.rules.yml").read_text(encoding="utf-8")
 if 'source="postgresql"' in rules or 'source="appointments"' in rules:
     raise SystemExit("Regra de source exige projeção não implementada no contrato atual")
+outcome_unknown_subsystems = set(
+    re.findall(r'agd_reconciliation_outcome_unknown\{[^}]*subsystem="([^"]+)"', rules)
+)
+unsupported_outcome_unknown = outcome_unknown_subsystems - {"payments", "notifications"}
+if unsupported_outcome_unknown:
+    raise SystemExit(
+        f"Regra outcome_unknown usa subsistema sem projeção no contrato v1.4: {sorted(unsupported_outcome_unknown)}"
+    )
+backlog_workers = {"outbox", "reminders", "notifications", "subscription_dunning", "exports"}
+execution_worker_patterns = re.findall(
+    r'agd_worker_executions_total\{[^}]*worker=~"([^"]+)"', rules
+)
+for worker_pattern in execution_worker_patterns:
+    unsupported_workers = set(worker_pattern.split("|")) - backlog_workers
+    if unsupported_workers:
+        raise SystemExit(
+            f"Regra de worker com falhas exige backlog não publicado para: {sorted(unsupported_workers)}"
+        )
 if "MetricsSourceNeverSampled" not in rules or "agd_metrics_source_sampled" not in rules:
     raise SystemExit("Regras não diferenciam startup sem primeira amostra")
 if any('agd_reconciliation_pending{subsystem="payments"}' in expr for expr in expressions):

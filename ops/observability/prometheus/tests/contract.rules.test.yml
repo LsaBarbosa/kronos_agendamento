@@ -424,6 +424,10 @@ tests:
         values: "1x15"
       - series: 'agd_worker_executions_total{worker="exports", result="failed", instance="one"}'
         values: "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14"
+      - series: 'agd_worker_configuration{worker="trial_expiry", state="enabled", instance="one"}'
+        values: "1x15"
+      - series: 'agd_worker_executions_total{worker="trial_expiry", result="failed", instance="one"}'
+        values: "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14"
     alert_rule_test:
       - eval_time: 12m
         alertname: NotificationWorkerRepeatedFailures
@@ -453,3 +457,6 @@ tests:
                 Alerta sobre ciclos do worker, não sobre falha final de cada job. Exige
                 trabalho elegível e estado enabled.
               runbook_path: docs/runbooks/AGD-052/export-reconciliation.md
+      - eval_time: 12m
+        alertname: WorkerRepeatedExecutionFailures
+        exp_alerts: []

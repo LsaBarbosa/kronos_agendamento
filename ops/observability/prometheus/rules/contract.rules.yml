@@ -172,7 +172,7 @@ groups:
 
       - alert: WorkerRepeatedExecutionFailures
         expr: |
-          (sum by (worker) (increase(agd_worker_executions_total{result="failed",worker=~"outbox|reminders|subscription_dunning|trial_expiry"}[10m])) >= 3)
+          (sum by (worker) (increase(agd_worker_executions_total{result="failed",worker=~"outbox|reminders|subscription_dunning"}[10m])) >= 3)
           and on (worker) (max by (worker) (agd_workers_backlog_eligible) > 0)
           and on (worker)
             (max by (worker) (agd_worker_configuration{state="enabled"} == 1) == 1)
@@ -218,20 +218,6 @@ groups:
             Contagem de estado persistido quando suportada. Aceite do transporte
             não significa entrega; não repetir mensagem às cegas.
           runbook_path: docs/runbooks/AGD-052/notification-reconciliation.md
-
-      - alert: ExportOutcomeUnknownPending
-        expr: max by (subsystem) (agd_reconciliation_outcome_unknown{subsystem="exports"}) > 0
-        for: 1m
-        labels:
-          severity: warning
-          responsible_role: export-operations
-          runbook: export-reconciliation
-        annotations:
-          summary: Resultado de exportação ambíguo aguarda reconciliação
-          description: >-
-            Contagem de estado persistido quando suportada; preserve o job e não
-            crie nova identidade de exportação para contornar resultado incerto.
-          runbook_path: docs/runbooks/AGD-052/export-reconciliation.md
 
       - alert: NotificationWorkerRepeatedFailures
         expr: |
