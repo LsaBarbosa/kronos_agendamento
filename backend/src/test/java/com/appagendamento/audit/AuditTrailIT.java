@@ -173,8 +173,16 @@ class AuditTrailIT {
   @Test
   void auditInsertFailureRollsBackCriticalTenantMutation() {
     String slug = "audit-fail-" + suffix();
-    int previousEventCount =
+    int auditCountBeforeUnrelatedCreate =
         migrationJdbc.queryForObject("SELECT count(*) FROM agendamento.audit_event", Integer.class);
+    Tenant unrelatedTenant =
+        createTenant.execute("Unrelated tenant", "audit-unrelated-" + suffix(), "UTC");
+    assertThat(
+            migrationJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.audit_event", Integer.class))
+        .isEqualTo(auditCountBeforeUnrelatedCreate + 1);
+
+    UUID operationCorrelationId = UUID.randomUUID();
     migrationJdbc.execute(
         """
         CREATE OR REPLACE FUNCTION agendamento.reject_audit_insert() RETURNS trigger
@@ -186,21 +194,53 @@ class AuditTrailIT {
         FOR EACH ROW EXECUTE FUNCTION agendamento.reject_audit_insert()
         """);
     try {
-      assertThatThrownBy(() -> createTenant.execute("Atomic tenant", slug, "UTC"))
+      assertThatThrownBy(
+              () ->
+                  withCorrelationId(
+                      operationCorrelationId,
+                      () -> createTenant.execute("Atomic tenant", slug, "UTC")))
           .isInstanceOf(DataAccessException.class);
       assertThat(
               migrationJdbc.queryForObject(
                   "SELECT count(*) FROM agendamento.tenant WHERE slug = ?", Integer.class, slug))
           .isZero();
+      assertNoAuditEventForCorrelation(operationCorrelationId);
+      assertThat(
+              migrationJdbc.queryForObject(
+                  "SELECT count(*) FROM agendamento.audit_event WHERE tenant_id = ? AND action = 'TENANT_CREATED'",
+                  Integer.class,
+                  unrelatedTenant.tenantId()))
+          .isEqualTo(1);
       assertThat(
               migrationJdbc.queryForObject(
                   "SELECT count(*) FROM agendamento.audit_event", Integer.class))
-          .isEqualTo(previousEventCount);
+          .as("the unrelated TENANT_CREATED event changes the global count")
+          .isEqualTo(auditCountBeforeUnrelatedCreate + 1)
+          .isNotEqualTo(auditCountBeforeUnrelatedCreate);
     } finally {
       migrationJdbc.execute(
           "DROP TRIGGER IF EXISTS reject_audit_insert ON agendamento.audit_event");
       migrationJdbc.execute("DROP FUNCTION IF EXISTS agendamento.reject_audit_insert()");
     }
+  }
+
+  @Test
+  void auditRollbackAssertionDetectsAnEventWithTheOperationsCorrelationId() {
+    UUID correlationId = UUID.randomUUID();
+
+    withCorrelationId(
+        correlationId,
+        () -> createTenant.execute("Committed tenant", "audit-positive-" + suffix(), "UTC"));
+
+    assertThat(
+            migrationJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.audit_event WHERE correlation_id = ? OR trace_id = ?",
+                Integer.class,
+                correlationId,
+                correlationId))
+        .isEqualTo(1);
+    assertThatThrownBy(() -> assertNoAuditEventForCorrelation(correlationId))
+        .isInstanceOf(AssertionError.class);
   }
 
   @Test
@@ -301,6 +341,28 @@ class AuditTrailIT {
         return tenantId;
       }
     };
+  }
+
+  private void assertNoAuditEventForCorrelation(UUID correlationId) {
+    assertThat(
+            migrationJdbc.queryForObject(
+                "SELECT count(*) FROM agendamento.audit_event WHERE correlation_id = ? OR trace_id = ?",
+                Integer.class,
+                correlationId,
+                correlationId))
+        .as("no audit event from the operation under test is committed")
+        .isZero();
+  }
+
+  private static void withCorrelationId(UUID correlationId, Runnable action) {
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setAttribute(CorrelationIdFilter.ATTRIBUTE, correlationId.toString());
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+    try {
+      action.run();
+    } finally {
+      RequestContextHolder.resetRequestAttributes();
+    }
   }
 
   private static String suffix() {
