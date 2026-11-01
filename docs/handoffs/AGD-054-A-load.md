@@ -34,4 +34,4 @@ Ambiente: Linux amd64, kernel `6.12.88+deb13-amd64`, Intel Core i5-8350U a 1.70G
 
 ## Publicação
 
-Destino solicitado: PR draft para `main`; sem merge ou deploy. SHA final e URL serão informados na entrega da branch.
+PR draft: https://github.com/LsaBarbosa/kronos_agendamento/pull/32 (base `main`, branch `agd-054a-load-baseline`). O commit funcional publicado é `d430221ded82de7bc23cb25f71cc1187087c9b95`; o commit final que registra este handoff é reportado na entrega. O PR permanece draft e não foi integrado.

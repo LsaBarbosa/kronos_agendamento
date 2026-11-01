@@ -34,7 +34,7 @@ Parâmetros padrão: 4 tenants, 100 consultas de disponibilidade, 24 criações 
 - [x] 2026-11-01 — Escopo e dependências de fixture revisados em migrations, teste de integração pública e adapters `e2e` existentes.
 - [x] Implementar/validar automação de execução e invariantes em PostgreSQL.
 - [x] Registrar primeira medição, host, versões, volumes e limitações.
-- [ ] Publicar PR draft contra `main`; sem merge/deploy.
+- [x] Publicar PR draft contra `main`; sem merge/deploy (PR #32).
 
 ## Validação
 
