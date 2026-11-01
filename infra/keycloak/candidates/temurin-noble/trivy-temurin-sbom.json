@@ -1,0 +1,10 @@
+{
+  "SchemaVersion": 2,
+  "Trivy": {
+    "Version": "0.75.0"
+  },
+  "ReportID": "01a188a8-d987-71d5-b6f6-f94708d6667a",
+  "CreatedAt": "2026-10-29T17:15:29.543122086Z",
+  "ArtifactName": "/work/infra/keycloak/candidates/temurin-noble/temurin-21.0.13+9-sbom.cdx.json",
+  "ArtifactType": "cyclonedx"
+}

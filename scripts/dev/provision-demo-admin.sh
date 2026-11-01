@@ -10,8 +10,9 @@ fi
 slug=$1
 tenant_name=$2
 username=${3:-demo-admin}
-compose_project=${AGD_COMPOSE_PROJECT:-agendamento}
-keycloak_issuer_uri=${AGD_KEYCLOAK_ISSUER_URI:-http://localhost:8180/realms/agendamento}
+compose_project=${COMPOSE_PROJECT_NAME:-${AGD_COMPOSE_PROJECT:-agendamento}}
+keycloak_public_url=${KEYCLOAK_PUBLIC_URL:-${AGD_KEYCLOAK_EXTERNAL_URL:-http://localhost:8180}}
+keycloak_issuer_uri=${AGD_KEYCLOAK_ISSUER_URI:-$keycloak_public_url/realms/agendamento}
 if [[ ! "$slug" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
   echo "Slug deve ser minúsculo e kebab-case." >&2
   exit 2
@@ -60,7 +61,7 @@ if [[ -z "$subject" ]]; then
   echo "Não foi possível obter o subject provisionado no Keycloak." >&2
   exit 1
 fi
-existing_tenant=$(docker compose -p "$compose_project" exec -T \
+existing_tenant=$("${compose[@]}" exec -T \
   -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
   psql -X -qAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
   -d "${POSTGRES_DB:-agendamento}" -v tenant_slug="$slug" <<'SQL'
@@ -72,7 +73,7 @@ if [[ "$existing_tenant" == "t" ]]; then
   echo "Slug já provisionado; use um slug novo. Nenhuma credencial foi alterada." >&2
   exit 1
 fi
-existing_identity=$(docker compose -p "$compose_project" exec -T \
+existing_identity=$("${compose[@]}" exec -T \
   -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
   psql -X -qAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
   -d "${POSTGRES_DB:-agendamento}" -v issuer="$keycloak_issuer_uri" \
@@ -105,7 +106,7 @@ unlinked_subject=$(jq -r '.[0].id // empty' <<<"$unlinked_users")
   --new-password "$unlinked_password" >/dev/null
 
 tenant_id=$(uuidgen)
-tenant_id=$(docker compose -p "$compose_project" exec -T \
+tenant_id=$("${compose[@]}" exec -T \
   -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
   psql -X -qAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
   -d "${POSTGRES_DB:-agendamento}" \
@@ -136,7 +137,7 @@ SQL
 
 if [[ "${AGD_E2E_RETENTION_FIXTURE:-false}" == "true" ]]; then
   retention_client_id=$(uuidgen)
-  docker compose -p "$compose_project" exec -T \
+  "${compose[@]}" exec -T \
     -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
     psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
     -d "${POSTGRES_DB:-agendamento}" \
@@ -155,7 +156,7 @@ if [[ "${AGD_E2E_TRIAL_FIXTURE:-false}" == "true" ]]; then
   trial_operation_id=$(uuidgen)
   trial_trace_id=$(uuidgen)
   trial_identity_digest=$(printf '%s' 'e2e-only-stable-commercial-identity' | sha256sum | cut -d' ' -f1)
-  docker compose -p "$compose_project" exec -T \
+  "${compose[@]}" exec -T \
     -e PGPASSWORD="$POSTGRES_PASSWORD" postgres \
     psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" \
     -d "${POSTGRES_DB:-agendamento}" \
