@@ -5,7 +5,7 @@
 - Corte revisado: `d87b101bf8d3dbc07bff898f570adfe53445e9be`.
 - Branch de diagnóstico: `diagnose/pr30-e2e`.
 - `AuditTrailIT` foi inspecionado em leitura na worktree do Terminal 2; nenhum arquivo dessa frente foi alterado.
-- Alteração local limitada a `scripts/dev/test-keycloak-browser.mjs` e este handoff.
+- Alterações nesta continuação limitadas ao roteiro E2E, helper/harness próprios e este handoff.
 
 ## Revisão de `AuditTrailIT`
 
@@ -27,20 +27,28 @@ Limite da prova: a reprodução foi um harness com navegação controlada, não 
 
 ### Correção no roteiro
 
-Antes do reload o roteiro guarda `performance.timeOrigin`. O script injetado no próximo documento define um marcador explícito. Antes de esperar textos ou clicar, o roteiro agora aguarda simultaneamente:
+Antes do reload o roteiro guarda `performance.timeOrigin` e inicia um único orçamento monotônico de 60 segundos. A espera combina, sem reiniciar esse orçamento:
 
 - `timeOrigin` diferente do documento anterior;
 - marcador de instalação do interceptador;
-- `document.readyState === 'complete'`.
+- `document.readyState === 'complete'`;
+- textos `Trial encerrado` e `Operação preparada: MONTHLY`;
+- botão habilitado;
+- exatamente uma requisição após o clique.
 
-Se a espera pela primeira requisição expirar, a nova mensagem de diagnóstico informa somente origem/caminho, prontidão do documento, marcador, tipo/comprimento da fila, presença booleana dos campos capturados, existência da intenção e respostas recentes limitadas a CSRF/checkout. Não registra chave, contexto, corpo, cookies, credenciais ou conteúdo da intenção. As assertions originais de chave, contexto, corpo, receipt e efeito único permanecem intactas.
+Reload, avaliações CDP, clique, polls de estado e espera da primeira requisição compartilham a mesma deadline. Cada chamada CDP recebe timeout restante e sinal de cancelamento. Ao expirar, uma requisição CDP pendente é retirada da fila local e seu timer cancelado; timers de deadline e polling são limpos/consumidos. O erro identifica a etapa e imprime apenas estado minimizado: caminho, prontidão, marcador, tipo/contagem da fila, presença booleana dos campos, existência da intenção e respostas recentes limitadas a CSRF/checkout. Não registra chave, contexto, corpo, cookies, credenciais ou conteúdo da intenção. As assertions originais de chave, contexto, corpo, receipt e efeito único permanecem intactas.
+
+O helper de deadline preserva os defaults dos demais chamadores de `command`/`evaluate` (30 segundos por comando); cancelamento é opcional e só é usado neste cenário. O orçamento do percurso não excede os 60 segundos anteriores.
 
 ## Validação e limites
 
 - `node --check scripts/dev/test-keycloak-browser.mjs`: aprovado.
+- `node --check scripts/dev/checkout-retry-deadline.mjs`: aprovado.
+- `node --check scripts/dev/test-checkout-retry-deadline.mjs`: aprovado.
+- `node scripts/dev/test-checkout-retry-deadline.mjs`: aprovado; fake clock prova consumo do orçamento entre estágios, timeout total e ausência de timers ativos, sem esperar 60 segundos reais.
+- O mesmo harness força uma avaliação e um comando de clique pendentes; ambos recebem abort e deixam zero timers ativos.
 - `git diff --check`: aprovado.
-- Harness determinístico do interleaving ACK-before-navigation com barreira explícita: aprovado; não substitui navegador/aplicação E2E.
-- E2E completo do Keycloak/PostgreSQL não executado nesta worktree; o Compose compartilhado não foi operado. A reprodução não substitui esse E2E.
+- E2E completo do Keycloak/PostgreSQL não executado nesta rodada; o Compose compartilhado não foi operado. O harness temporal não substitui navegador/aplicação E2E.
 - A execução de Chrome/servidor localhost adicional foi tentada isoladamente, mas não completou uma prova browser reproduzível do cenário específico; não é contabilizada como validação aprovada.
 
 ## Estado

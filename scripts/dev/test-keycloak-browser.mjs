@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
+import { createDeadlineWaiter } from './checkout-retry-deadline.mjs';
 
 const chromePath = process.env.CHROME_BIN || '/usr/bin/google-chrome';
 const frontendBaseUrl = process.env.E2E_FRONTEND_URL || 'http://localhost:5173';
@@ -3341,7 +3342,7 @@ try {
         checkoutAfterContextChange.intent?.key !== intentBeforeContextChange.key ||
         JSON.stringify(checkoutAfterContextChange.intent?.body) !== JSON.stringify(intentBeforeContextChange.body)
     ) {
-        throw new Error(`A troca de contexto durante CSRF enviou checkout ou perdeu a intenção original: ${JSON.stringify(checkoutAfterContextChange)}`);
+        throw new Error(`A troca de contexto durante CSRF falhou: ${JSON.stringify({postCount: checkoutAfterContextChange.postCount, intentPresent: Boolean(checkoutAfterContextChange.intent), originalKeyPreserved: checkoutAfterContextChange.intent?.key === intentBeforeContextChange.key, originalBodyPreserved: JSON.stringify(checkoutAfterContextChange.intent?.body) === JSON.stringify(intentBeforeContextChange.body)})}`);
     }
     await evaluate("document.querySelector('a[href*=oauth2]').click()");
     await waitUntil(async () =>
@@ -3355,8 +3356,6 @@ try {
     await waitForText('Sessão administrativa ativa.', evaluate);
     await waitForText('Operação preparada: MONTHLY', evaluate);
     const checkoutRetryPreviousDocumentTimeOrigin = await evaluate('performance.timeOrigin');
-    const checkoutRetryWaitDeadline = Date.now() + 60_000;
-    const checkoutRetryWaitRemainingMs = () => Math.max(1, checkoutRetryWaitDeadline - Date.now());
     const checkoutRetryScript = await command('Page.addScriptToEvaluateOnNewDocument', {
         source: `(() => {
           const originalFetch = window.fetch.bind(window);
@@ -3375,49 +3374,63 @@ try {
           };
         })();`,
     });
-    await command('Page.reload', { ignoreCache: true });
-    try {
-        await waitUntil(
-            () => evaluate(`window.__checkoutRetryInterceptorInstalled === true && performance.timeOrigin !== ${checkoutRetryPreviousDocumentTimeOrigin} && document.readyState === 'complete'`),
-            checkoutRetryWaitRemainingMs(),
-        );
-    } catch (error) {
-        const diagnostic = await evaluate(`JSON.stringify({
-          page: location.origin + location.pathname,
-          readyState: document.readyState,
-          documentChanged: performance.timeOrigin !== ${checkoutRetryPreviousDocumentTimeOrigin},
-          interceptorInstalled: window.__checkoutRetryInterceptorInstalled === true,
-          requestQueueType: typeof window.__checkoutRequests,
-          requestCount: Array.isArray(window.__checkoutRequests) ? window.__checkoutRequests.length : null,
-          checkoutButton: (() => { const button = [...document.querySelectorAll('button')].find(item => item.innerText.trim() === 'Iniciar ou recuperar a mesma operação'); return button ? {present:true, enabled:!button.disabled} : {present:false}; })(),
-          operationIntentPresent: sessionStorage.getItem(${JSON.stringify(checkoutIntentStorageKey)}) !== null
-        })`);
-        throw new Error(`Documento pós-reload/interceptador de checkout não ficou pronto: ${diagnostic}`, {cause:error});
-    }
-    await waitForText('Trial encerrado', evaluate);
-    await waitForText('Operação preparada: MONTHLY', evaluate);
-    await waitUntil(() => evaluate(`(() => { const button = [...document.querySelectorAll('button')].find(item => item.innerText.trim() === 'Iniciar ou recuperar a mesma operação'); return Boolean(button && !button.disabled); })()`));
-    await clickButtonByText('Iniciar ou recuperar a mesma operação', evaluate);
-    try {
-        await waitUntil(
-            () => evaluate('window.__checkoutRequests?.length === 1'),
-            checkoutRetryWaitRemainingMs(),
-        );
-    } catch (error) {
-        const diagnostic = await evaluate(`JSON.stringify({
-          page: location.origin + location.pathname,
-          readyState: document.readyState,
-          interceptorInstalled: window.__checkoutRetryInterceptorInstalled === true,
-          documentChanged: performance.timeOrigin !== ${checkoutRetryPreviousDocumentTimeOrigin},
-          requestQueueType: typeof window.__checkoutRequests,
-          requestCount: Array.isArray(window.__checkoutRequests) ? window.__checkoutRequests.length : null,
-          requestFieldPresence: Array.isArray(window.__checkoutRequests) ? window.__checkoutRequests.map(request => ({key:!!request.key, context:!!request.context, body:!!request.body})) : [],
-          checkoutButtonPresent: [...document.querySelectorAll('button')].some(item => item.innerText.trim() === 'Iniciar ou recuperar a mesma operação'),
-          operationIntentPresent: sessionStorage.getItem(${JSON.stringify(checkoutIntentStorageKey)}) !== null,
-          relevantResponses: ${JSON.stringify(recentHttpResponses.filter(({path}) => ['/api/v1/admin/subscription/checkout', '/api/v1/csrf'].includes(path)).slice(-8))}
-        })`);
-        throw new Error(`Checkout não produziu exatamente a primeira requisição observada: ${diagnostic}`, {cause:error});
-    }
+    const checkoutRetryDeadline = createDeadlineWaiter(60_000);
+    let latestCheckoutRetryDiagnostic = {stage: 'Page.reload', state: 'not-observed'};
+    await checkoutRetryDeadline.run(
+        (signal) => command('Page.reload', { ignoreCache: true }, {signal, timeoutMs: checkoutRetryDeadline.remainingMs()}),
+        'Page.reload',
+        () => latestCheckoutRetryDiagnostic,
+    );
+    const checkoutRetryProbe = `(() => {
+      const button = [...document.querySelectorAll('button')].find(item => item.innerText.trim() === 'Iniciar ou recuperar a mesma operação');
+      const requests = window.__checkoutRequests;
+      return {
+        page: location.origin + location.pathname,
+        documentChanged: performance.timeOrigin !== ${checkoutRetryPreviousDocumentTimeOrigin},
+        interceptorInstalled: window.__checkoutRetryInterceptorInstalled === true,
+        readyState: document.readyState,
+        trialEnded: document.body.innerText.includes('Trial encerrado'),
+        operationPrepared: document.body.innerText.includes('Operação preparada: MONTHLY'),
+        buttonPresent: Boolean(button),
+        buttonEnabled: Boolean(button && !button.disabled),
+        requestQueueType: typeof requests,
+        requestCount: Array.isArray(requests) ? requests.length : null,
+        requestFieldPresence: Array.isArray(requests) ? requests.map(request => ({key:Boolean(request.key), context:Boolean(request.context), body:Boolean(request.body)})) : [],
+        operationIntentPresent: sessionStorage.getItem(${JSON.stringify(checkoutIntentStorageKey)}) !== null
+      };
+    })()`;
+    const checkoutRetryDiagnostic = (state, stage) => ({
+        stage,
+        ...state,
+        relevantResponses: recentHttpResponses
+            .filter(({path}) => ['/api/v1/admin/subscription/checkout', '/api/v1/csrf'].includes(path))
+            .slice(-8),
+    });
+    const waitForCheckoutRetryState = (stage, predicate) => checkoutRetryDeadline.wait(async (signal) => {
+        try {
+            const state = await evaluate(checkoutRetryProbe, {signal, timeoutMs: checkoutRetryDeadline.remainingMs()});
+            latestCheckoutRetryDiagnostic = checkoutRetryDiagnostic(state, stage);
+            return {done: predicate(state), diagnostic: latestCheckoutRetryDiagnostic};
+        } catch {
+            latestCheckoutRetryDiagnostic = checkoutRetryDiagnostic({browserEvaluation: 'temporarily-unavailable'}, stage);
+            return {done: false, diagnostic: latestCheckoutRetryDiagnostic};
+        }
+    }, stage);
+    const checkoutRetryReady = (state) =>
+        state.documentChanged &&
+        state.interceptorInstalled &&
+        state.readyState === 'complete' &&
+        state.trialEnded &&
+        state.operationPrepared &&
+        state.buttonPresent &&
+        state.buttonEnabled;
+    await waitForCheckoutRetryState('novo documento, textos, interceptador e botão habilitado', checkoutRetryReady);
+    await checkoutRetryDeadline.run(
+        (signal) => clickButtonByText('Iniciar ou recuperar a mesma operação', evaluate, {signal, timeoutMs: checkoutRetryDeadline.remainingMs()}),
+        'clique para iniciar a operação',
+        () => latestCheckoutRetryDiagnostic,
+    );
+    await waitForCheckoutRetryState('exatamente uma primeira requisição de checkout', (state) => state.requestCount === 1);
     await waitForText('Resultado ainda incerto.', evaluate);
     const pendingCheckoutIntent = await evaluate(`({
       requests: window.__checkoutRequests,
@@ -3426,7 +3439,7 @@ try {
       discardDisabled: [...document.querySelectorAll('[aria-label="Operação de checkout pendente"] button')].find(button => button.innerText.includes('Descartar'))?.disabled,
     })`);
     if (pendingCheckoutIntent.requests?.length !== 1 || !pendingCheckoutIntent.intent || !pendingCheckoutIntent.stored || pendingCheckoutIntent.discardDisabled !== true) {
-        throw new Error(`Intenção de checkout não foi preservada após perda de resposta: ${JSON.stringify(pendingCheckoutIntent)}`);
+        throw new Error(`Intenção de checkout não foi preservada após perda de resposta: ${JSON.stringify({requestCount: pendingCheckoutIntent.requests?.length ?? null, intentVisible: Boolean(pendingCheckoutIntent.intent), intentStored: Boolean(pendingCheckoutIntent.stored), discardDisabled: pendingCheckoutIntent.discardDisabled, requestFieldPresence: pendingCheckoutIntent.requests?.map(request => ({key: Boolean(request.key), context: Boolean(request.context), body: Boolean(request.body)}) ) ?? []})}`);
     }
     await clickButtonByText('Iniciar ou recuperar a mesma operação', evaluate);
     await waitForText('Sessão de checkout hospedado criada.', evaluate);
@@ -3444,7 +3457,7 @@ try {
         checkoutReplay.intent !== null ||
         !checkoutReplay.result?.includes('CHECKOUT_READY')
     ) {
-        throw new Error(`Retry não recuperou a mesma operação de checkout: ${JSON.stringify(checkoutReplay)}`);
+        throw new Error(`Retry não recuperou a mesma operação de checkout: ${JSON.stringify({requestCount: checkoutReplay.requests?.length ?? null, sameKey: checkoutReplay.requests?.[0]?.key === checkoutReplay.requests?.[1]?.key, firstContextMatches: checkoutReplay.requests?.[0]?.context === authenticatedSession.tenantId, secondContextMatches: checkoutReplay.requests?.[1]?.context === authenticatedSession.tenantId, sameBody: checkoutReplay.requests?.[0]?.body === checkoutReplay.requests?.[1]?.body, intentCleared: checkoutReplay.intent === null, resultPresent: Boolean(checkoutReplay.result?.includes('CHECKOUT_READY'))})}`);
     }
     await command('Page.removeScriptToEvaluateOnNewDocument', { identifier: checkoutRetryScript.identifier });
     const checkoutOperationId = checkoutReplay.result.match(/Operação ([0-9a-f-]{36})/i)?.[1];
@@ -3645,34 +3658,51 @@ async function connectToCdp(webSocketDebuggerUrl, responseHistory = null) {
             } catch {}
         }
         if (!message.id || !pending.has(message.id)) return;
-        const { resolve, reject, timeout } = pending.get(message.id);
-        clearTimeout(timeout);
+        const { resolve, reject, cleanup } = pending.get(message.id);
         pending.delete(message.id);
+        cleanup();
         if (message.error) reject(new Error(message.error.message));
         else resolve(message.result);
     });
-    const command = (method, params = {}) =>
+    const command = (method, params = {}, options = {}) =>
         new Promise((resolve, reject) => {
+            const { signal, timeoutMs = 30_000 } = options;
+            if (signal?.aborted) {
+                reject(new Error(`CDP command ${method} aborted before dispatch.`));
+                return;
+            }
             const id = ++commandId;
-            const timeout = setTimeout(() => {
+            let timeout;
+            const cleanup = () => {
+                if (timeout !== undefined) clearTimeout(timeout);
+                signal?.removeEventListener('abort', abort);
+            };
+            const abort = () => {
                 pending.delete(id);
-                reject(new Error(`CDP command ${method} did not respond within 30 seconds.`));
-            }, 30_000);
-            pending.set(id, { resolve, reject, timeout });
+                cleanup();
+                reject(new Error(`CDP command ${method} aborted.`));
+            };
+            timeout = setTimeout(() => {
+                pending.delete(id);
+                cleanup();
+                reject(new Error(`CDP command ${method} did not respond within ${timeoutMs / 1000} seconds.`));
+            }, timeoutMs);
+            pending.set(id, { resolve, reject, cleanup });
+            signal?.addEventListener('abort', abort, { once: true });
             try {
                 cdpSocket.send(JSON.stringify({ id, method, params }));
             } catch (error) {
-                clearTimeout(timeout);
                 pending.delete(id);
+                cleanup();
                 reject(error);
             }
         });
-    const evaluate = async (expression) => {
+    const evaluate = async (expression, options = {}) => {
         const result = await command('Runtime.evaluate', {
             expression,
             returnByValue: true,
             awaitPromise: true,
-        });
+        }, options);
         if (result.exceptionDetails) {
             const description = result.exceptionDetails.exception?.description?.split('\n', 1)[0];
             throw new Error(
@@ -4004,12 +4034,12 @@ async function setTextareaById(id, value, evaluate) {
     })()`);
 }
 
-async function clickButtonByText(text, evaluate) {
+async function clickButtonByText(text, evaluate, options = {}) {
     await evaluate(`(() => {
       const button = [...document.querySelectorAll('button')].find(item => item.innerText.trim() === ${JSON.stringify(text)});
       if (!button) throw new Error('Button not found: ' + ${JSON.stringify(text)});
       button.click();
-    })()`);
+    })()`, options);
 }
 
 async function waitForButtonByText(text, evaluate) {
