@@ -1,0 +1,78 @@
+[
+    {
+        "Id": "sha256:3067cc4e02c091399edbd5d65f85a3ff4d511574aecadb47f280c3761e68852e",
+        "RepoTags": [
+            "caddy:2.11.7-alpine"
+        ],
+        "RepoDigests": [
+            "caddy@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5"
+        ],
+        "Parent": "",
+        "Comment": "buildkit.dockerfile.v0",
+        "Created": "2026-10-21T21:32:33.967060949Z",
+        "DockerVersion": "",
+        "Author": "",
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 66343362,
+        "GraphDriver": {
+            "Data": {
+                "LowerDir": "/var/lib/docker/overlay2/a74d869f267362a61ebc5ee16e9ee433cfd14cb94db1ba45e5a634ad55843167/diff:/var/lib/docker/overlay2/3c29f0a0ef4b93f74e87c3a2c0189eec66c56a0061fb6b3a71973cc92e94b8c6/diff:/var/lib/docker/overlay2/eb16086c83c14866613434c5cfb889d1b8590422cf97c3ddc7714695bc7c25de/diff:/var/lib/docker/overlay2/391fa43475ec0d58fcd40cbb33d2054448cb11bcf67b05649a72dd686c81c75e/diff",
+                "MergedDir": "/var/lib/docker/overlay2/0793427e8a3005831f43c143e97a0d6656447c53aabe44235793252051f0b60f/merged",
+                "UpperDir": "/var/lib/docker/overlay2/0793427e8a3005831f43c143e97a0d6656447c53aabe44235793252051f0b60f/diff",
+                "WorkDir": "/var/lib/docker/overlay2/0793427e8a3005831f43c143e97a0d6656447c53aabe44235793252051f0b60f/work"
+            },
+            "Name": "overlay2"
+        },
+        "RootFS": {
+            "Type": "layers",
+            "Layers": [
+                "sha256:54ea9baa1bbd7651dbda5c61569dad60fa601c73e5b784e154e8ba0f314e84fd",
+                "sha256:ffe3f66a572836b76678fc7bd0f6cc19a2ef8585cca6fe0ba7c2e1037d2e1159",
+                "sha256:4bb692fe970995252617470d76a9c95d18cd822a52a59558822b5f1d29d6cf2f",
+                "sha256:d08f1a0adb5011e488b16040328bb140738ff8248022d359170147464b656e5b",
+                "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+            ]
+        },
+        "Metadata": {
+            "LastTagTime": "0001-01-01T00:00:00Z"
+        },
+        "Config": {
+            "Cmd": [
+                "caddy",
+                "run",
+                "--config",
+                "/etc/caddy/Caddyfile",
+                "--adapter",
+                "caddyfile"
+            ],
+            "Entrypoint": null,
+            "Env": [
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "CADDY_VERSION=v2.11.7",
+                "XDG_CONFIG_HOME=/config",
+                "XDG_DATA_HOME=/data"
+            ],
+            "ExposedPorts": {
+                "2019/tcp": {},
+                "443/tcp": {},
+                "443/udp": {},
+                "80/tcp": {}
+            },
+            "Labels": {
+                "org.opencontainers.image.description": "a powerful, enterprise-ready, open source web server with automatic HTTPS written in Go",
+                "org.opencontainers.image.documentation": "https://caddyserver.com/docs",
+                "org.opencontainers.image.licenses": "Apache-2.0",
+                "org.opencontainers.image.source": "https://github.com/caddyserver/caddy-docker",
+                "org.opencontainers.image.title": "Caddy",
+                "org.opencontainers.image.url": "https://caddyserver.com",
+                "org.opencontainers.image.vendor": "Light Code Labs",
+                "org.opencontainers.image.version": "v2.11.7"
+            },
+            "OnBuild": null,
+            "User": "",
+            "Volumes": null,
+            "WorkingDir": "/srv"
+        }
+    }
+]

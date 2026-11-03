@@ -1,0 +1,12 @@
+go mod why -m github.com/go-jose/go-jose/v3 (Caddy v2.11.7 source module):
+# github.com/go-jose/go-jose/v3
+github.com/caddyserver/caddy/v2/modules/caddypki
+github.com/smallstep/certificates/authority
+go.step.sm/crypto/jose
+github.com/go-jose/go-jose/v3
+
+Source references:
+- modules/caddytls/capools.go imports github.com/caddyserver/caddy/v2/modules/caddypki.
+- modules/caddytls/internalissuer.go imports github.com/caddyserver/caddy/v2/modules/caddypki and github.com/smallstep/certificates/authority/provisioner.
+
+This establishes a dependency path in the upstream release source/module graph; it does not claim that the current Caddyfile exercises the vulnerable JWK parsing path. The scanner finding remains unresolved and fails the mandated gate.

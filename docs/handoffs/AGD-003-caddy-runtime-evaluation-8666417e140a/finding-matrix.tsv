@@ -1,0 +1,12 @@
+artifact	severity	CVE	component	installed	fixed	result
+official-caddy-2.11.7	CRITICAL	CVE-2026-111497	brotli-libs	1.2.0-r0	1.2.1-r0	finding
+official-caddy-2.11.7	HIGH	CVE-2026-92392	curl	8.22.0-r0	8.23.0-r0	finding
+official-caddy-2.11.7	HIGH	CVE-2026-92392	libcurl	8.22.0-r0	8.23.0-r0	finding
+official-caddy-2.11.7	HIGH	CVE-2026-116587	github.com/go-jose/go-jose/v3	3.0.5		finding
+official-caddy-2.11.7	HIGH	CVE-2026-116587	github.com/go-jose/go-jose/v4	4.1.5	4.1.6	finding
+official-caddy-2.11.7	HIGH	CVE-2026-78669	golang.org/x/net	0.59.0	0.60.0	finding
+official-caddy-2.11.7	HIGH	CVE-2026-111943	Go stdlib	1.26.8	1.26.10 or 1.27.3	finding
+official-caddy-2.11.7	HIGH	CVE-2026-78667	Go stdlib	1.26.8	1.26.9 or 1.27.2	finding
+official-caddy-2.11.7	HIGH	CVE-2026-78669	Go stdlib	1.26.8	1.26.9 or 1.27.2	finding
+official-caddy-2.11.7	HIGH	CVE-2026-97031	Go stdlib	1.26.8	1.26.9 or 1.27.2	finding
+controlled-diagnostic	HIGH	CVE-2026-116587	github.com/go-jose/go-jose/v3	3.0.5		finding
