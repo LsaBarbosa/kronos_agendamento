@@ -1,0 +1,170 @@
+services:
+  app-db:
+    image: ${STAGING_POSTGRES_IMAGE:?Set an approved PostgreSQL image by digest}
+    environment:
+      POSTGRES_DB: agendamento
+      POSTGRES_USER: staging_migrator
+      POSTGRES_PASSWORD: ${STAGING_APP_DB_MIGRATOR_PASSWORD:?External secret required}
+      APP_DB_PASSWORD: ${STAGING_APP_DB_PASSWORD:?External secret required}
+    volumes:
+      - app_db_data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U staging_migrator -d agendamento"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks: [staging]
+
+  keycloak-db:
+    image: ${STAGING_POSTGRES_IMAGE:?Set an approved PostgreSQL image by digest}
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${STAGING_KEYCLOAK_DB_PASSWORD:?External secret required}
+    volumes:
+      - keycloak_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks: [staging]
+
+  keycloak:
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: infra/keycloak/Dockerfile
+    image: ${STAGING_KEYCLOAK_IMAGE:?Build a project-scoped Keycloak image first}
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    command: ["start", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${STAGING_KEYCLOAK_DB_PASSWORD:?External secret required}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${STAGING_KEYCLOAK_BOOTSTRAP_USER:?External secret required}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${STAGING_KEYCLOAK_BOOTSTRAP_PASSWORD:?External secret required}
+      KC_HEALTH_ENABLED: "true"
+      KC_HOSTNAME: ${OIDC_ISSUER_ORIGIN:?External HTTPS issuer origin required}
+      KC_HOSTNAME_STRICT: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_PROXY_TRUSTED_ADDRESSES: ${STAGING_PROXY_CIDR:?Proxy CIDR is required}
+      KC_HTTP_ENABLED: "true"
+    volumes:
+      - ${STAGING_REALM_FILE:?Realm import file required}:/opt/keycloak/data/import/agendamento-realm.json:ro
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/9000'"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+      start_period: 45s
+    networks: [staging]
+
+  app:
+    platform: linux/amd64
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      additional_contexts:
+        temurin: ./infra/temurin
+    image: ${STAGING_BACKEND_IMAGE:?Build a project-scoped backend image first}
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    environment:
+      SPRING_PROFILES_ACTIVE: keycloak
+      SERVER_FORWARD_HEADERS_STRATEGY: none
+      SESSION_COOKIE_SECURE: "true"
+      DB_URL: jdbc:postgresql://app-db:5432/agendamento
+      DB_USERNAME: agendamento_app
+      DB_PASSWORD: ${STAGING_APP_DB_PASSWORD:?External secret required}
+      FLYWAY_DB_URL: jdbc:postgresql://app-db:5432/agendamento
+      FLYWAY_DB_USERNAME: staging_migrator
+      FLYWAY_DB_PASSWORD: ${STAGING_APP_DB_MIGRATOR_PASSWORD:?External secret required}
+      PUBLIC_BOOKING_HMAC_ACTIVE_KEY_ID: ${PUBLIC_BOOKING_HMAC_ACTIVE_KEY_ID:?External HMAC key ID required}
+      PUBLIC_BOOKING_HMAC_KEYS: ${PUBLIC_BOOKING_HMAC_KEYS:?External HMAC key ring required}
+      OIDC_ISSUER_URI: ${OIDC_ISSUER_URI:?External HTTPS issuer URI required}
+      OIDC_AUTHORIZATION_URI: ${OIDC_AUTHORIZATION_URI:?External HTTPS authorization URI required}
+      OIDC_TOKEN_URI: ${OIDC_TOKEN_URI:?External token URI required}
+      OIDC_JWK_SET_URI: ${OIDC_JWK_SET_URI:?External JWK URI required}
+      OIDC_USER_INFO_URI: ${OIDC_USER_INFO_URI:?External user-info URI required}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?External client ID required}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?External client secret required}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:?External callback URI required}
+      APP_FRONTEND_URL: ${APP_FRONTEND_URL:?External frontend URI required}
+    depends_on:
+      app-db:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/actuator/health/readiness"]
+      interval: 5s
+      timeout: 5s
+      retries: 36
+      start_period: 60s
+    networks: [staging]
+
+  edge:
+    build:
+      context: .
+      dockerfile: infra/staging/Dockerfile
+    image: ${STAGING_EDGE_IMAGE:?Build a project-scoped edge image first}
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp:mode=0700,uid=1000,gid=1000
+      - /data:mode=0700,uid=1000,gid=1000
+      - /config:mode=0700,uid=1000,gid=1000
+    environment:
+      APP_HOST: ${APP_HOST:?Application host required}
+      KEYCLOAK_HOST: ${KEYCLOAK_HOST:?Keycloak host required}
+      PUBLIC_HTTPS_PORT: ${STAGING_HTTPS_PORT:?Public HTTPS port required}
+    ports:
+      - target: 8443
+        published: "${STAGING_HTTPS_PORT:?Public HTTPS port required}"
+        host_ip: "${STAGING_BIND_ADDRESS:?Bind address required}"
+        mode: host
+        protocol: tcp
+    volumes:
+      - ${STAGING_TLS_DIR:?TLS directory required}:/run/staging:ro
+    healthcheck:
+      # Liveness only. The smoke performs certificate, SNI, Host and HTTP checks
+      # from outside the container using the runner-scoped CA.
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    depends_on:
+      app:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    networks:
+      staging:
+        ipv4_address: ${STAGING_PROXY_IP:?Static proxy address required}
+      ingress: {}
+
+networks:
+  staging:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${STAGING_SUBNET:?Project-unique network subnet required}
+  ingress:
+    ipam:
+      config:
+        - subnet: ${STAGING_INGRESS_SUBNET:?Project-unique ingress subnet required}
+
+volumes:
+  app_db_data:
+  keycloak_db_data:
