@@ -19,12 +19,12 @@
 
 ## Estratégia
 
-1. Criar Compose com projeto aleatório `agd054-load-<10 hex>`, portas loopback atribuídas pelo Docker, volume e rede do próprio projeto. A senha do owner e a senha do runtime são aleatórias, temporárias e armazenadas em arquivo com modo 0600 fora do repositório.
+1. Criar Compose com projeto aleatório `agd054-load-<24 hex>`, portas loopback atribuídas pelo Docker, volume e rede do próprio projeto. A senha do owner e a senha do runtime são aleatórias, temporárias e armazenadas em arquivo com modo 0600 fora do repositório.
 2. Construir a aplicação da base exata com os adapters sintéticos já existentes do perfil `e2e`; aguardar readiness do actuator.
 3. Semear tenants ativos publicados, serviço ativo, grade, política e trial sintéticos, com nomes e telefones marcados AGD-054. Não semear reservas, histórico, auditoria, outbox ou idempotência.
 4. Medir consulta de disponibilidade, criação em slots distintos distribuída por tenants, retry após commit da mesma intenção e disputas sincronizadas pelo mesmo slot. Relatar status por classe; `409 SLOT_NO_LONGER_AVAILABLE` dos perdedores é rejeição de negócio esperada, não falha técnica.
 5. Verificar no banco contagem de tenants/intenções/efeitos, vínculo de reserva e serviço ao tenant esperado, histórico/auditoria/outbox/idempotência únicos e ausência de pares de reservas sobrepostos.
-6. Remover somente containers, rede e volume cujo label `com.docker.compose.project` corresponda ao projeto aleatório criado pela execução. Se o projeto já possuir recursos antes da subida ou label divergente, falhar sem cleanup amplo.
+6. Antes de instalar trap ou criar artefatos, reservar por `mkdir` atômico o namespace aleatório e verificar colisões de containers (inclusive parados), volumes, redes e tag de imagem. Uma colisão falha sem cleanup Docker. Durante a execução, containers/volume/rede recebem label de posse exclusivo; cleanup enumera, reinspeciona os labels da execução e projeto e remove somente esses recursos. A imagem só é removida se tag e label de posse forem confirmados. Falha de confirmação/remoção preserva o recurso e faz o runner falhar explicitamente.
 
 Parâmetros padrão: 4 tenants, 100 consultas de disponibilidade, 24 criações distintas, 4 disputas pelo mesmo slot (8 comandos), concorrência HTTP 8; limites são inputs de experimento, não SLO. Datas vêm do timezone do tenant (`America/Sao_Paulo`) e do relógio real, com agendamento dois dias à frente. Cada tenant recebe tráfego de criação. A grade tem 32 inícios diários de 15 minutos; a execução falha se o parâmetro solicitar mais slots do que a fixture permite.
 
@@ -47,6 +47,13 @@ Parâmetros padrão: 4 tenants, 100 consultas de disponibilidade, 24 criações 
 | Banco PostgreSQL real | Probe SQL após a carga | Zero overlap; contagens e referências por tenant coerentes | PASS: 29 reservas, 29 history/audit/outbox/receipts; 0 pares sobrepostos e 0 vínculos cruzados/incompletos |
 | Isolamento da infraestrutura | Labels e cleanup validados pelo script | Só projeto/volume/rede daquela execução removidos | PASS: projeto `agd054-load-f34fbd9c8b` sem containers/volumes/redes após execução; imagens temporárias dos ensaios removidas por tags próprias |
 | Métricas úteis | Relatório JSON | Throughput, p50/p95/p99, status/falhas técnicas e recusas de negócio separados | PASS: JSON local `scripts/load/results/baseline-f34fbd9c8b.json`; fases separam respostas de negócio e falhas técnicas |
+| Colisão e cleanup limitado | `NODE_BIN=... scripts/load/test-run-baseline-cleanup.sh` | Colisão de projeto/tag preserva recursos preexistentes; falha parcial remove apenas recursos rotulados pela execução | PASS simulado: projeto/tag preservaram container parado, volume, rede e imagem; falha parcial removeu somente container/volume/rede/imagem próprios |
+
+#### Revalidação após o endurecimento do cleanup
+
+- Baseline completo em Docker real, projeto `agd054-load-97b26243dc4efb306a444f19`, image ID `sha256:5050fd2127449e390235af9742587da00a17b2fa739cecb46b7815ea9822b5a6`; cenários e invariantes PostgreSQL passaram (100 consultas 200, 24 criações 201, 4 conflitos esperados/0 técnicos, retry replay, 29 reservas e cadeias de efeito completas, zero overlaps/vínculos cruzados).
+- Consultas pós-execução por label do projeto e pela referência exata da tag retornaram vazio para containers, volumes, redes e imagem. Esta é a prova Docker real do caminho de sucesso/cleanup.
+- Colisões de projeto/tag e falha parcial são provas simuladas por shim determinístico, não colisões reais no daemon. A falha parcial simula imagem e recursos próprios já criados antes de `compose up` retornar erro; sentinelas sem os labels da execução permanecem intactas.
 
 ### Execução de referência registrada
 

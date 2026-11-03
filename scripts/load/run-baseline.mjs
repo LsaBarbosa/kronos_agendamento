@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { spawnSync } from 'node:child_process';
 
-const runId = requiredEnv('LOAD_RUN_ID', /^[a-f0-9]{10}$/);
+const runId = requiredEnv('LOAD_RUN_ID', /^[a-f0-9]{24}$/);
 const tenantCount = integerEnv('LOAD_TENANTS', 4, 2, 20);
 const availabilityRequests = integerEnv('LOAD_AVAILABILITY_REQUESTS', 100, 1, 100000);
 const createRequests = integerEnv('LOAD_CREATE_REQUESTS', 24, tenantCount, 10000);
@@ -182,7 +182,7 @@ async function postAppointment(tenant, booking, gate) {
 }
 
 async function databaseProbe(expectedAppointments, expectedIntents) {
-  const project = requiredEnv('LOAD_COMPOSE_PROJECT', /^agd054-load-[a-f0-9]{10}$/);
+  const project = requiredEnv('LOAD_COMPOSE_PROJECT', /^agd054-load-[a-f0-9]{24}$/);
   const envFile = requiredEnv('LOAD_ENV_FILE');
   const composeFile = requiredEnv('LOAD_COMPOSE_FILE');
   const repoRoot = requiredEnv('LOAD_REPO_ROOT');

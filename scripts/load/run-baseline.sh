@@ -3,11 +3,19 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 compose_file="$repo_root/infra/load/compose.yaml"
-run_id="$(od -An -N5 -tx1 /dev/urandom | tr -d ' \n')"
+run_id="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+if [[ ! "$run_id" =~ ^[a-f0-9]{24}$ ]]; then
+  printf 'Não foi possível gerar o identificador aleatório da execução; nada foi iniciado.\n' >&2
+  exit 2
+fi
 compose_project="agd054-load-${run_id}"
-run_dir="$(mktemp -d "/tmp/${compose_project}.XXXXXX")"
-env_file="$run_dir/compose.env"
 app_image="agd054-load-app:${run_id}"
+run_label="com.kronos.agd054.run"
+project_label="com.docker.compose.project"
+lock_dir="/tmp/${compose_project}.lock"
+run_dir=""
+cleanup_armed=0
+lock_owned=0
 
 load_tenants="${LOAD_TENANTS:-4}"
 availability_requests="${LOAD_AVAILABILITY_REQUESTS:-100}"
@@ -36,6 +44,149 @@ else
   [[ -n "$node_bin" ]] || { printf 'Node.js não encontrado; defina NODE_BIN para Node.js 24+.\n' >&2; exit 2; }
 fi
 
+if ! mkdir -- "$lock_dir" 2>/dev/null; then
+  printf 'Colisão de lock para o projeto descartável; nada foi alterado.\n' >&2
+  exit 2
+fi
+lock_owned=1
+
+docker_project_is_empty() {
+  local containers volumes networks images
+  if ! containers="$(docker ps -aq --filter "label=${project_label}=${compose_project}")" || \
+     ! volumes="$(docker volume ls -q --filter "label=${project_label}=${compose_project}")" || \
+     ! networks="$(docker network ls -q --filter "label=${project_label}=${compose_project}")" || \
+     ! images="$(docker image ls --filter "reference=${app_image}" --format '{{.Repository}}:{{.Tag}}')"; then
+    printf 'Não foi possível verificar colisões no Docker; nada foi iniciado.\n' >&2
+    return 1
+  fi
+  if [[ -n "$containers" || -n "$volumes" || -n "$networks" || "$images" == "$app_image" ]]; then
+    printf 'Colisão de projeto/tag detectada; nada foi alterado.\n' >&2
+    return 2
+  fi
+  return 0
+}
+
+if docker_project_is_empty; then
+  :
+else
+  preflight_status=$?
+  rmdir -- "$lock_dir"
+  lock_owned=0
+  exit "$preflight_status"
+fi
+
+compose() {
+  docker compose -p "$compose_project" --env-file "$env_file" -f "$compose_file" --project-directory "$repo_root" "$@"
+}
+
+cleanup() {
+  local ids resource_id labels image_info image_run_label image_refs cleanup_failed=0
+  if [[ "$cleanup_armed" == 1 ]]; then
+    if ! ids="$(docker ps -aq --filter "label=${run_label}=${run_id}")"; then
+      printf 'Cleanup: não foi possível listar containers da execução.\n' >&2
+      cleanup_failed=1
+    else
+      while IFS= read -r resource_id; do
+        [[ -n "$resource_id" ]] || continue
+        labels="$(docker inspect --format '{{ index .Config.Labels "com.kronos.agd054.run" }}|{{ index .Config.Labels "com.docker.compose.project" }}' "$resource_id" 2>/dev/null || true)"
+        if [[ "$labels" != "${run_id}|${compose_project}" ]]; then
+          printf 'Cleanup: container sem os labels de posse esperados; preservado.\n' >&2
+          cleanup_failed=1
+          continue
+        fi
+        docker rm -f "$resource_id" >/dev/null || cleanup_failed=1
+      done <<< "$ids"
+    fi
+
+    if ! ids="$(docker volume ls -q --filter "label=${run_label}=${run_id}")"; then
+      printf 'Cleanup: não foi possível listar volumes da execução.\n' >&2
+      cleanup_failed=1
+    else
+      while IFS= read -r resource_id; do
+        [[ -n "$resource_id" ]] || continue
+        labels="$(docker volume inspect --format '{{ index .Labels "com.kronos.agd054.run" }}|{{ index .Labels "com.docker.compose.project" }}' "$resource_id" 2>/dev/null || true)"
+        if [[ "$labels" != "${run_id}|${compose_project}" ]]; then
+          printf 'Cleanup: volume sem os labels de posse esperados; preservado.\n' >&2
+          cleanup_failed=1
+          continue
+        fi
+        docker volume rm "$resource_id" >/dev/null || cleanup_failed=1
+      done <<< "$ids"
+    fi
+
+    if ! ids="$(docker network ls -q --filter "label=${run_label}=${run_id}")"; then
+      printf 'Cleanup: não foi possível listar redes da execução.\n' >&2
+      cleanup_failed=1
+    else
+      while IFS= read -r resource_id; do
+        [[ -n "$resource_id" ]] || continue
+        labels="$(docker network inspect --format '{{ index .Labels "com.kronos.agd054.run" }}|{{ index .Labels "com.docker.compose.project" }}' "$resource_id" 2>/dev/null || true)"
+        if [[ "$labels" != "${run_id}|${compose_project}" ]]; then
+          printf 'Cleanup: rede sem os labels de posse esperados; preservada.\n' >&2
+          cleanup_failed=1
+          continue
+        fi
+        docker network rm "$resource_id" >/dev/null || cleanup_failed=1
+      done <<< "$ids"
+    fi
+
+    if ! image_refs="$(docker image ls --filter "reference=${app_image}" --format '{{.Repository}}:{{.Tag}}')"; then
+      printf 'Cleanup: não foi possível verificar a tag da imagem; ela foi preservada.\n' >&2
+      cleanup_failed=1
+    elif [[ "$image_refs" == "$app_image" ]]; then
+      if image_info="$(docker image inspect --format '{{.Id}}|{{ index .Config.Labels "com.kronos.agd054.run" }}' "$app_image" 2>/dev/null)"; then
+        image_run_label="${image_info##*|}"
+        if [[ "$image_run_label" == "$run_id" ]]; then
+          docker image rm "$app_image" >/dev/null || cleanup_failed=1
+        else
+          printf 'Cleanup: tag da aplicação não pertence a esta execução; preservada.\n' >&2
+          cleanup_failed=1
+        fi
+      else
+        printf 'Cleanup: não foi possível confirmar a posse da tag da imagem; ela foi preservada.\n' >&2
+        cleanup_failed=1
+      fi
+    elif [[ -n "$image_refs" ]]; then
+      printf 'Cleanup: a consulta de tag retornou uma referência inesperada; imagem preservada.\n' >&2
+      cleanup_failed=1
+    fi
+  fi
+  if [[ -n "$run_dir" ]] && ! rm -rf -- "$run_dir"; then
+    printf 'Cleanup: não foi possível remover o diretório temporário desta execução.\n' >&2
+    cleanup_failed=1
+  fi
+  if [[ "$lock_owned" == 1 ]]; then
+    if rmdir -- "$lock_dir" 2>/dev/null; then
+      lock_owned=0
+    else
+      printf 'Cleanup: não foi possível liberar o lock desta execução.\n' >&2
+      cleanup_failed=1
+    fi
+  fi
+  if (( cleanup_failed != 0 )); then
+    printf 'Cleanup parcial: alguns recursos foram preservados por falha de verificação/remoção.\n' >&2
+    return 1
+  fi
+  return 0
+}
+
+cleanup_armed=1
+finish() {
+  local original_status=$? cleanup_status=0
+  trap - EXIT
+  cleanup || cleanup_status=$?
+  if (( cleanup_status != 0 )); then
+    exit 1
+  fi
+  exit "$original_status"
+}
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'status=$?; printf "baseline_command_failed line=%s status=%s\n" "$LINENO" "$status" >&2' ERR
+
+run_dir="$(mktemp -d "/tmp/${compose_project}.XXXXXX")"
+env_file="$run_dir/compose.env"
 postgres_password="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
 app_db_password="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
 umask 077
@@ -43,43 +194,9 @@ cat > "$env_file" <<EOF
 LOAD_POSTGRES_PASSWORD=$postgres_password
 LOAD_APP_DB_PASSWORD=$app_db_password
 LOAD_APP_IMAGE=$app_image
+LOAD_RUN_ID=$run_id
 EOF
 chmod 600 "$env_file"
-
-compose() {
-  docker compose -p "$compose_project" --env-file "$env_file" -f "$compose_file" --project-directory "$repo_root" "$@"
-}
-
-cleanup() {
-  local container_ids container_id project_label volume_ids network_ids
-  if [[ "$compose_project" =~ ^agd054-load-[a-f0-9]{10}$ ]]; then
-    container_ids="$(docker ps -aq --filter "label=com.docker.compose.project=$compose_project" 2>/dev/null || true)"
-    volume_ids="$(docker volume ls -q --filter "label=com.docker.compose.project=$compose_project" 2>/dev/null || true)"
-    network_ids="$(docker network ls -q --filter "label=com.docker.compose.project=$compose_project" 2>/dev/null || true)"
-    if [[ -n "$container_ids" || -n "$volume_ids" || -n "$network_ids" ]]; then
-      while IFS= read -r container_id; do
-        [[ -n "$container_id" ]] || continue
-        project_label="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$container_id" 2>/dev/null || true)"
-        if [[ "$project_label" != "$compose_project" ]]; then
-          printf 'Cleanup interrompido: container fora do projeto identificado.\n' >&2
-          return 1
-        fi
-      done <<< "$container_ids"
-      compose down --volumes --remove-orphans >/dev/null 2>&1
-    fi
-  fi
-  docker image rm "$app_image" >/dev/null 2>&1 || true
-  rm -rf -- "$run_dir"
-}
-trap cleanup EXIT INT TERM
-trap 'status=$?; printf "baseline_command_failed line=%s status=%s\n" "$LINENO" "$status" >&2' ERR
-
-if [[ -n "$(docker ps -aq --filter "label=com.docker.compose.project=$compose_project")" ]] || \
-   [[ -n "$(docker volume ls -q --filter "label=com.docker.compose.project=$compose_project")" ]] || \
-   [[ -n "$(docker network ls -q --filter "label=com.docker.compose.project=$compose_project")" ]]; then
-  printf 'Projeto descartável já possui recursos; recusando sobreposição.\n' >&2
-  exit 2
-fi
 
 printf 'Projeto descartável: %s\n' "$compose_project"
 printf 'Parâmetros: tenants=%s availability_requests=%s create_requests=%s conflict_rounds=%s concurrency=%s\n' \

@@ -1,6 +1,8 @@
 services:
   postgres:
     image: postgres@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50
+    labels:
+      com.kronos.agd054.run: ${LOAD_RUN_ID:?synthetic run id required}
     environment:
       POSTGRES_DB: agd054_load
       POSTGRES_USER: agd054_owner
@@ -24,7 +26,11 @@ services:
         temurin: ./infra/temurin
       args:
         INCLUDE_E2E_FIXTURES: "true"
+      labels:
+        com.kronos.agd054.run: ${LOAD_RUN_ID:?synthetic run id required}
     image: ${LOAD_APP_IMAGE:-agd054-load-app:local}
+    labels:
+      com.kronos.agd054.run: ${LOAD_RUN_ID:?synthetic run id required}
     environment:
       SPRING_PROFILES_ACTIVE: e2e
       DB_URL: jdbc:postgresql://postgres:5432/agd054_load
@@ -58,6 +64,10 @@ services:
 networks:
   load:
     driver: bridge
+    labels:
+      com.kronos.agd054.run: ${LOAD_RUN_ID:?synthetic run id required}
 
 volumes:
   load_postgres_data:
+    labels:
+      com.kronos.agd054.run: ${LOAD_RUN_ID:?synthetic run id required}
