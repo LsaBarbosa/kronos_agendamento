@@ -42,11 +42,38 @@ Image IDs construídos e exercitados pelo mesmo runner, antes do cleanup:
 
 O teste de isolamento criou um container parado, volume e rede sob outro projeto sintético. Todos permaneceram intactos durante e depois do runner; em seguida, o teste removeu somente seu próprio sentinel. O runner também confirmou a remoção dos containers, volumes, redes e imagens locais com tags exclusivas que ele próprio criou. Não restaram recursos dos projetos de teste.
 
+## Revalidação de scan e colisão — 2026-11-03
+
+O runner passou a recusar, antes de criar temporários ou registrar cleanup, qualquer nome explícito de projeto que já tenha containers, volumes ou redes rotulados com esse projeto, ou tags no namespace `kronos-staging-<projeto>-`. `scripts/staging/test-cleanup-isolation.sh` comprovou o caso de colisão: havia um container parado, volume, rede e tag de imagem sintéticos associados ao projeto escolhido; a execução foi recusada e os quatro recursos permaneceram. Em seguida, a execução normal concluiu o smoke e removeu apenas seus próprios recursos e tags, preservando o sentinel. Não foi usado recurso de outro projeto como fixture.
+
+Comando de teste:
+
+```sh
+scripts/staging/test-cleanup-isolation.sh
+```
+
+Resultado: PASS para recusa da colisão sem remoção e PASS para cleanup isolado da execução normal, incluindo container, volume, rede e tags de imagem.
+
+O scan completo do artefato edge foi executado por `scripts/staging/scan-edge.sh`. O mesmo runner construiu e iniciou as imagens, completou o smoke HTTPS/OIDC e emitiu o Image ID; o scanner verificou que a tag edge ainda apontava para esse ID, exportou-a com `docker save` e passou o arquivo resultante ao Trivy. O SHA-256 do arquivo escaneado também foi registrado. Assim, o smoke e o scan estão vinculados ao mesmo conteúdo de imagem, sem depender de uma tag mutável durante a análise.
+
+Evidência do artefato testado:
+
+- Edge: Image ID `sha256:e2033e54c3cbd36468c73999e617f4e7615de5383b76bc22218bd2e8685cc4ce`; tag do run `kronos-staging-agd003-https-1793707246-469496-84717e-edge:run`; arquivo `docker save` SHA-256 `3416b6ee0f4592547a0e62cb9cff29ec02d1489bb5e334254c3e3985e83fcc49`.
+- Plataforma/configuração: Linux amd64, usuário `1000:1000`, Alpine `3.23.6`, Caddy `v2.11.4`, 32 pacotes APK.
+- Scanner: imagem oficial Trivy 0.75.0, Image ID `sha256:6d93f1ec925b37c5ce785e416b86cba056e10c8c2914a59a8ea7be18115d6764`, registry digest `aquasec/trivy@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa`.
+- Política: scanners de vulnerabilidade, severidades HIGH/CRITICAL, `ignore-unfixed=false`, `--exit-code 1`, sem arquivo de ignore ou suppressions.
+- DB Trivy: versão 2; atualização `2026-11-03T07:14:02.629452927Z`, próxima atualização `2026-11-04T07:14:02.629452405Z`, download `2026-11-03T12:02:20.985520331Z`.
+- Inventário CycloneDX: 180 componentes; inventário OS/APK: 32 pacotes. Relatório Trivy: 29 findings, 1 CRITICAL e 28 HIGH; processo saiu com status 1 conforme a política.
+- Arquivos integrais: [`resumo`](AGD-003-edge-scan-e2033e54c3cbd364/summary.md), [`relatório Trivy`](AGD-003-edge-scan-e2033e54c3cbd364/trivy-report.json), [`CycloneDX`](AGD-003-edge-scan-e2033e54c3cbd364/inventory.cdx.json), [`inventário TSV`](AGD-003-edge-scan-e2033e54c3cbd364/inventory.tsv), [`metadados do DB`](AGD-003-edge-scan-e2033e54c3cbd364/database-metadata.json), [`configuração da imagem`](AGD-003-edge-scan-e2033e54c3cbd364/image-inspect.json), [`configuração do scanner`](AGD-003-edge-scan-e2033e54c3cbd364/scanner-image-inspect.json) e [`SO/pacotes`](AGD-003-edge-scan-e2033e54c3cbd364/os-and-packages.txt).
+
+O relatório separa 3 registros de pacotes Alpine (Brotli CRITICAL e curl/libcurl HIGH) e 26 findings ligados ao binário Go do Caddy, incluindo stdlib e dependências Go. Eles são findings do scanner e mantêm o gate local reprovado; esta rodada não avaliou aplicabilidade nem implementou correções. Nenhum finding foi suprimido. O CI existente do PR verifica outras imagens (backend/Keycloak) e não executa este scan do edge; seus resultados não devem ser usados como substitutos desta evidência nem como aprovação do edge.
+
 ## Execução reproduzível
 
 ```sh
 scripts/staging/run-disposable.sh
 scripts/staging/test-cleanup-isolation.sh
+scripts/staging/scan-edge.sh
 ```
 
 Para validar configuração externa sem iniciar serviço:
@@ -62,4 +89,4 @@ scripts/staging/preflight.sh --env-file /caminho/seguro/staging.env --project-na
 
 O ensaio com nomes `.test` e CA do runner não é homologação pública. Faltam domínios/DNS controlados, certificados públicos e renovação, secret manager e rotação, provisionamento hospedado isolado, teste de expiração real após 30 minutos e aprovação operacional. O preflight desta preparação rejeita bind fora de loopback e não é configuração de publicação externa.
 
-A rede de ingresso dá egress ao edge, embora apenas a porta HTTPS esteja publicada em `127.0.0.1`; app, Keycloak e bancos permanecem sem conexão nessa rede. O edge tem configuração estática e nenhuma integração de fornecedor. O scan de imagem não foi executado nesta tarefa; permanecem aplicáveis as avaliações residuais de segurança de Keycloak documentadas na frente de infraestrutura/PR #27. Nenhuma aprovação de segurança, homologação ou prontidão de produção é inferida.
+A rede de ingresso dá egress ao edge, embora apenas a porta HTTPS esteja publicada em `127.0.0.1`; app, Keycloak e bancos permanecem sem conexão nessa rede. O edge tem configuração estática e nenhuma integração de fornecedor. O scan executado encontrou 29 findings HIGH/CRITICAL e reprovou segundo a política estabelecida; a configuração HTTPS/OIDC funcional não altera esse resultado. Também permanecem as avaliações residuais de segurança das imagens Keycloak/backend documentadas na frente de infraestrutura/PR #27. Nenhuma aprovação de segurança, homologação ou prontidão de produção é inferida.

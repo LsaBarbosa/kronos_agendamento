@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 repo_root=$(cd "$(dirname "$0")/../.." && pwd)
-exec python3 "$repo_root/scripts/staging/run-disposable.py"
+exec python3 "$repo_root/scripts/staging/run-disposable.py" "$@"

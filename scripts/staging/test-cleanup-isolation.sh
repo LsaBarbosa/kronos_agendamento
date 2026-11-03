@@ -9,8 +9,11 @@ compose_file="$tmp/sentinel.compose.yaml"
 container_name="${project}-sentinel-1"
 network_name="${project}_sentinel"
 volume_name="${project}_sentinel_data"
+collision_tag="kronos-staging-${project}-edge:run"
+postgres_image="postgres:16.13-alpine@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50"
 
 cleanup_sentinel() {
+  docker image rm "$collision_tag" >/dev/null 2>&1 || true
   docker compose --project-name "$project" --project-directory "$tmp" \
     --file "$compose_file" --env-file "$env_file" down --volumes --remove-orphans >/dev/null 2>&1 || true
   rm -rf -- "$tmp"
@@ -45,6 +48,19 @@ docker compose --project-name "$project" --project-directory "$tmp" \
 docker volume inspect "$volume_name" >/dev/null
 docker network inspect "$network_name" >/dev/null
 echo "Sentinel prepared: stopped container, named volume and network are owned by a different synthetic project."
+
+docker tag "$postgres_image" "$collision_tag"
+collision_log="$tmp/collision.log"
+if "$repo_root/scripts/staging/run-disposable.sh" --project-name "$project" >"$collision_log" 2>&1; then
+  echo "Runner accepted a pre-existing project/tag collision." >&2
+  exit 1
+fi
+grep -q "pre-existing Compose project/tag collision detected" "$collision_log"
+[[ "$(docker inspect -f '{{.State.Status}}' "$container_name")" == "exited" ]]
+docker volume inspect "$volume_name" >/dev/null
+docker network inspect "$network_name" >/dev/null
+docker image inspect "$collision_tag" >/dev/null
+echo "PASS: pre-existing project/tag collision was rejected without removing its container, volume, network or image tag."
 
 runner_log="$tmp/runner.log"
 if ! "$repo_root/scripts/staging/run-disposable.sh" >"$runner_log" 2>&1; then

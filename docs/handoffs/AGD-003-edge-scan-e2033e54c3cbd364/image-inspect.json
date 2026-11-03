@@ -1,0 +1,83 @@
+[
+    {
+        "Id": "sha256:e2033e54c3cbd36468c73999e617f4e7615de5383b76bc22218bd2e8685cc4ce",
+        "RepoTags": [
+            "kronos-staging-agd003-https-1793707246-469496-84717e-edge:run"
+        ],
+        "RepoDigests": [],
+        "Parent": "",
+        "Comment": "buildkit.dockerfile.v0",
+        "Created": "2026-11-01T09:18:50.656739986-03:00",
+        "DockerVersion": "",
+        "Author": "",
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 111834256,
+        "GraphDriver": {
+            "Data": {
+                "LowerDir": "/var/lib/docker/overlay2/9536ftjwue58ipnlssw29vabv/diff:/var/lib/docker/overlay2/o1lk0y0dx29gqq7354p0quyha/diff:/var/lib/docker/overlay2/4b11e606abdf8954da0e5367dfd3d5e51f1b5b4e57385d9a892b91be04493ba6/diff:/var/lib/docker/overlay2/db32141dc3cf6422ccd73484fbfd877c223a3dba14cd3abd5e2dbed81f43f56f/diff:/var/lib/docker/overlay2/5cabe2ed677491db1fc0f7027ad8af0f17a4478400f6c0f6e87bd6a4fa080686/diff:/var/lib/docker/overlay2/4392e6d9ed1cd8995afbeadda697de86d7a0d0bf475b11e214bd2e307a373bd9/diff:/var/lib/docker/overlay2/190de88ffbaa065b6ac231db28e55be258218f219bdd1476a7d6262d2d72eaaa/diff",
+                "MergedDir": "/var/lib/docker/overlay2/x65nlpwjd6s84lcq2gs2dbgxt/merged",
+                "UpperDir": "/var/lib/docker/overlay2/x65nlpwjd6s84lcq2gs2dbgxt/diff",
+                "WorkDir": "/var/lib/docker/overlay2/x65nlpwjd6s84lcq2gs2dbgxt/work"
+            },
+            "Name": "overlay2"
+        },
+        "RootFS": {
+            "Type": "layers",
+            "Layers": [
+                "sha256:e63b02c2b5c761df2cb95e657d744f27d95da4e051235a13c80b88cd68eab188",
+                "sha256:c56ed5007fe949efbc262fb0cbf5dd1bb1c60954b423375e37b3fc6faa478d39",
+                "sha256:b5691abaf4ca50aadf0bb3d1ba4a044164bccaa0c8ec4fba98edb6b74c9d1f76",
+                "sha256:b772a028c043e792604569b2a9835c29bab7f909d4b16fd6b14cceac6efde5c7",
+                "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+                "sha256:401da5edf5f04aa1890cb0823cec6a50ddbdd26a77da14dd5cb72a4ddb0b7693",
+                "sha256:d9ae75c85de2e950978b17244177fa7ea16d7ed792744f8f2b0a70133ad8fb77",
+                "sha256:3aa3d33d69af8e7d75f2e584c632cdadb31be81faa137f891b18e07a03b3c01c"
+            ]
+        },
+        "Metadata": {
+            "LastTagTime": "2026-11-03T09:00:47.621349673-03:00"
+        },
+        "Config": {
+            "Cmd": null,
+            "Entrypoint": [
+                "caddy",
+                "run",
+                "--config",
+                "/etc/caddy/Caddyfile",
+                "--adapter",
+                "caddyfile"
+            ],
+            "Env": [
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "CADDY_VERSION=v2.11.4",
+                "XDG_CONFIG_HOME=/config",
+                "XDG_DATA_HOME=/data"
+            ],
+            "ExposedPorts": {
+                "2019/tcp": {},
+                "443/tcp": {},
+                "443/udp": {},
+                "80/tcp": {},
+                "8443/tcp": {}
+            },
+            "Labels": {
+                "com.docker.compose.project": "agd003-https-1793707246-469496-84717e",
+                "com.docker.compose.service": "edge",
+                "com.docker.compose.version": "5.1.3",
+                "org.opencontainers.image.description": "a powerful, enterprise-ready, open source web server with automatic HTTPS written in Go",
+                "org.opencontainers.image.documentation": "https://caddyserver.com/docs",
+                "org.opencontainers.image.licenses": "Apache-2.0",
+                "org.opencontainers.image.source": "https://github.com/caddyserver/caddy-docker",
+                "org.opencontainers.image.title": "Caddy",
+                "org.opencontainers.image.url": "https://caddyserver.com",
+                "org.opencontainers.image.vendor": "Light Code Labs",
+                "org.opencontainers.image.version": "v2.11.4"
+            },
+            "OnBuild": null,
+            "User": "1000:1000",
+            "Volumes": null,
+            "WorkingDir": "/srv"
+        }
+    }
+]

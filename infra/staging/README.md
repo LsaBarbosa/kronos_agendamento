@@ -18,7 +18,15 @@ To prove cleanup does not remove another project's stopped resources:
 scripts/staging/test-cleanup-isolation.sh
 ```
 
-This creates a synthetic stopped container, network and volume under a separate unique Compose project, runs the disposable stack and asserts all three sentinel resources still exist before removing only its own sentinel project.
+This creates a synthetic stopped container, network and volume under a unique Compose project. It first tags a local synthetic image with a tag that collides with that project, runs the runner with the colliding project name, and asserts refusal without removing the container, volume, network or image tag. It then runs the normal disposable stack and proves the foreign sentinel resources survive its cleanup.
+
+To build, smoke-test and scan the exact same edge Image ID under the established policy:
+
+```sh
+scripts/staging/scan-edge.sh
+```
+
+The script runs the HTTPS/OIDC smoke, verifies the unique edge tag resolves to the emitted Image ID, exports that image, refreshes the official Trivy 0.75.0 vulnerability database, scans with HIGH/CRITICAL and `ignore-unfixed=false`, and saves the full JSON report, CycloneDX inventory, APK inventory and database metadata under a digest-named directory in `docs/handoffs/`. The exit status remains nonzero when findings violate policy. It removes only this run's project tags after artifacts are written; no ignore file or suppression is used.
 
 For external configuration review without starting services:
 

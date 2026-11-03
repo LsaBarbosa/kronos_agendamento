@@ -1,0 +1,64 @@
+[
+    {
+        "Id": "sha256:6d93f1ec925b37c5ce785e416b86cba056e10c8c2914a59a8ea7be18115d6764",
+        "RepoTags": [
+            "aquasec/trivy:0.75.0"
+        ],
+        "RepoDigests": [
+            "aquasec/trivy@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa"
+        ],
+        "Parent": "",
+        "Comment": "buildkit.dockerfile.v0",
+        "Created": "2026-10-01T13:32:14.589205355Z",
+        "DockerVersion": "",
+        "Author": "",
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 194672277,
+        "GraphDriver": {
+            "Data": {
+                "LowerDir": "/var/lib/docker/overlay2/c3b6dc28a14ee9ed3a235c9d6a89cca88d56383d523e26f9e4309617a483a99c/diff:/var/lib/docker/overlay2/61b0f361de8a920ac5857fc835fdd42f09b81ad9feabf1fc9763570e370b1484/diff:/var/lib/docker/overlay2/26bcee50ffa2f6cf98132b04a31e4a6ee3afdd5adde129642520b1b2704f4da1/diff",
+                "MergedDir": "/var/lib/docker/overlay2/c20cb77bc591c4a2def25685d0fcd7cab3d51d1fdc1ed29e258ed4d4b333c216/merged",
+                "UpperDir": "/var/lib/docker/overlay2/c20cb77bc591c4a2def25685d0fcd7cab3d51d1fdc1ed29e258ed4d4b333c216/diff",
+                "WorkDir": "/var/lib/docker/overlay2/c20cb77bc591c4a2def25685d0fcd7cab3d51d1fdc1ed29e258ed4d4b333c216/work"
+            },
+            "Name": "overlay2"
+        },
+        "RootFS": {
+            "Type": "layers",
+            "Layers": [
+                "sha256:74d97c428c51a828f9051a7a40a53ff1fc99e54fc30323ce36760701b0b7f711",
+                "sha256:ed34867eefa0e1a2ed62f4742054527ecaaf677329cb08b003fe411e0d63c33a",
+                "sha256:b0fd5d86b3cab72925c3ed1d2dba5228b6b2607ebe477f7caf83c82209ef9564",
+                "sha256:55ca405b1d0817ec6cb543c046b84719ea87f3004c0c9416f940227e6baea6e5"
+            ]
+        },
+        "Metadata": {
+            "LastTagTime": "0001-01-01T00:00:00Z"
+        },
+        "Config": {
+            "Cmd": null,
+            "Entrypoint": [
+                "trivy"
+            ],
+            "Env": [
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            ],
+            "Labels": {
+                "org.opencontainers.image.created": "2026-10-01T12:52:48Z",
+                "org.opencontainers.image.description": "A Fast Vulnerability Scanner for Containers",
+                "org.opencontainers.image.documentation": "https://trivy.dev/v0.75.0/",
+                "org.opencontainers.image.revision": "591e9799316a602e703f0b484f6c6d7b234ec8f3",
+                "org.opencontainers.image.source": "https://github.com/aquasecurity/trivy",
+                "org.opencontainers.image.title": "trivy",
+                "org.opencontainers.image.url": "https://www.aquasec.com/products/trivy/",
+                "org.opencontainers.image.vendor": "Aqua Security",
+                "org.opencontainers.image.version": "0.75.0"
+            },
+            "OnBuild": null,
+            "User": "",
+            "Volumes": null,
+            "WorkingDir": "/"
+        }
+    }
+]

@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import base64
+import argparse
 import atexit
 import ipaddress
 import json
 import os
 import pathlib
+import re
 import secrets
 import shutil
 import socket
@@ -23,7 +25,8 @@ import uuid
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 COMPOSE_FILE = ROOT / "compose.staging.yaml"
 POSTGRES_IMAGE = "postgres:16.13-alpine@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50"
-PROJECT = f"agd003-https-{int(time.time())}-{os.getpid()}-{secrets.token_hex(3)}"
+PROJECT = ""
+KEEP_IMAGES = False
 
 
 def run(args, *, env=None, input_text=None, capture=False, check=True, timeout=180):
@@ -52,7 +55,10 @@ CLEANUP_ENV: pathlib.Path | None = None
 
 def cleanup_project() -> None:
     if CLEANUP_ENV and CLEANUP_ENV.is_file():
-        result = subprocess.run(compose(CLEANUP_ENV, "down", "--volumes", "--remove-orphans", "--rmi", "local"),
+        args = ["down", "--volumes", "--remove-orphans"]
+        if not KEEP_IMAGES:
+            args.extend(("--rmi", "local"))
+        result = subprocess.run(compose(CLEANUP_ENV, *args),
                                 cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=180)
         if result.returncode:
             output = result.stdout or ""
@@ -61,6 +67,23 @@ def cleanup_project() -> None:
             print("ERROR: project-scoped Compose cleanup failed; inspect only this project:", output[-4000:], file=sys.stderr)
     if CLEANUP_DIR:
         shutil.rmtree(CLEANUP_DIR, ignore_errors=True)
+
+
+def ensure_project_unused(project: str) -> None:
+    checks = {
+        "containers": ["docker", "ps", "-aq", "--filter", f"label=com.docker.compose.project={project}"],
+        "volumes": ["docker", "volume", "ls", "-q", "--filter", f"label=com.docker.compose.project={project}"],
+        "networks": ["docker", "network", "ls", "-q", "--filter", f"label=com.docker.compose.project={project}"],
+    }
+    collisions = [name for name, command in checks.items() if run(command, capture=True).stdout.strip()]
+    image_rows = run(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"], capture=True).stdout.splitlines()
+    if any(row.startswith(f"kronos-staging-{project}-") for row in image_rows):
+        collisions.append("project-tagged images")
+    if collisions:
+        raise RuntimeError(
+            "Refusing disposable run: pre-existing Compose project/tag collision detected "
+            f"({', '.join(collisions)}); no stack resources were changed."
+        )
 
 
 def free_port() -> int:
@@ -187,9 +210,22 @@ def wait_for(predicate, description: str, timeout: int = 360) -> None:
 
 
 def main() -> int:
+    global PROJECT, KEEP_IMAGES
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--project-name", help="unique Compose project slug (normally generated automatically)")
+    parser.add_argument("--keep-images", action="store_true",
+                        help="retain this run's uniquely tagged images for an immediate scan")
+    args = parser.parse_args()
+    PROJECT = args.project_name or f"agd003-https-{int(time.time())}-{os.getpid()}-{secrets.token_hex(3)}"
+    KEEP_IMAGES = args.keep_images
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{5,62}", PROJECT):
+        raise RuntimeError("Compose project name must be a unique lowercase slug (6-63 characters).")
     arch = run(["docker", "info", "--format", "{{.OSType}}/{{.Architecture}}"], capture=True).stdout.strip()
     if arch != "linux/x86_64":
         raise RuntimeError(f"The pinned Keycloak JRE is amd64-only; this runner is {arch}.")
+    # Refuse collisions before creating a temp directory or registering cleanup:
+    # a failed attempt must never run `compose down` against somebody else's project.
+    ensure_project_unused(PROJECT)
     run_dir = pathlib.Path(tempfile.mkdtemp(prefix=f"{PROJECT}-", dir="/tmp"))
     env_file = run_dir / "staging.env"
     global CLEANUP_DIR, CLEANUP_ENV
@@ -280,6 +316,7 @@ def main() -> int:
             image_ref = values[image_var]
             image_id = run(["docker", "image", "inspect", "--format", "{{.Id}}", image_ref], capture=True).stdout.strip()
             print(f"Built image identity: {image_var}={image_id}", flush=True)
+            print(f"Built image tag: {image_var}={image_ref}", flush=True)
         try:
             run(compose(env_file, "up", "-d", "--wait", "--wait-timeout", "300", "--remove-orphans"), timeout=360)
             edge_id = run(compose(env_file, "ps", "-q", "edge"), capture=True).stdout.strip()
