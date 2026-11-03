@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import base64
 import argparse
-import atexit
+import fcntl
 import ipaddress
 import json
 import os
@@ -14,6 +14,7 @@ import re
 import secrets
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,7 @@ COMPOSE_FILE = ROOT / "compose.staging.yaml"
 POSTGRES_IMAGE = "postgres:16.13-alpine@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50"
 PROJECT = ""
 KEEP_IMAGES = False
+LOCK_ROOT = pathlib.Path(tempfile.gettempdir()) / "agd003-runner-locks"
 
 
 def run(args, *, env=None, input_text=None, capture=False, check=True, timeout=180):
@@ -53,20 +55,118 @@ CLEANUP_DIR: pathlib.Path | None = None
 CLEANUP_ENV: pathlib.Path | None = None
 
 
+def safe_diagnostic(value, limit: int = 3000) -> str:
+    text = str(value)
+    for secret in SECRETS:
+        text = text.replace(secret, "[redacted]")
+    return text[-limit:]
+
+
 def cleanup_project() -> None:
+    global CLEANUP_DIR, CLEANUP_ENV
     if CLEANUP_ENV and CLEANUP_ENV.is_file():
         args = ["down", "--volumes", "--remove-orphans"]
         if not KEEP_IMAGES:
             args.extend(("--rmi", "local"))
-        result = subprocess.run(compose(CLEANUP_ENV, *args),
-                                cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=180)
+        try:
+            result = subprocess.run(compose(CLEANUP_ENV, *args),
+                                    cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=180)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"Cleanup timed out for disposable project {PROJECT}; restricted temporary config retained at {CLEANUP_DIR}."
+            ) from None
+        except Exception as error:
+            raise RuntimeError(
+                f"Cleanup raised {type(error).__name__} for disposable project {PROJECT}; "
+                f"restricted temporary config retained at {CLEANUP_DIR}."
+            ) from None
         if result.returncode:
-            output = result.stdout or ""
-            for secret in SECRETS:
-                output = output.replace(secret, "[redacted]")
-            print("ERROR: project-scoped Compose cleanup failed; inspect only this project:", output[-4000:], file=sys.stderr)
+            output = safe_diagnostic(result.stdout or "", 2000)
+            raise RuntimeError(
+                f"Project-scoped Compose cleanup failed for {PROJECT} (exit {result.returncode}); "
+                f"restricted temporary config retained at {CLEANUP_DIR}. Diagnostic: {output[-2000:]}"
+            )
     if CLEANUP_DIR:
-        shutil.rmtree(CLEANUP_DIR, ignore_errors=True)
+        try:
+            shutil.rmtree(CLEANUP_DIR)
+        except Exception as error:
+            raise RuntimeError(
+                f"Temporary-file cleanup raised {type(error).__name__} for disposable project {PROJECT}; "
+                f"restricted directory retained at {CLEANUP_DIR}."
+            ) from None
+    CLEANUP_DIR = None
+    CLEANUP_ENV = None
+
+
+def acquire_namespace_lock(project: str) -> int:
+    """Acquire a non-blocking, per-project lock before checking or creating resources."""
+    try:
+        LOCK_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
+        root_stat = LOCK_ROOT.lstat()
+        if (not stat.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != os.getuid()
+                or stat.S_IMODE(root_stat.st_mode) & 0o077):
+            raise RuntimeError("Runner lock directory is not private and owned by the current user.")
+        lock_path = LOCK_ROOT / f"{project}.lock"
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        lock_stat = os.fstat(fd)
+        if (not stat.S_ISREG(lock_stat.st_mode) or lock_stat.st_uid != os.getuid()
+                or stat.S_IMODE(lock_stat.st_mode) & 0o077):
+            os.close(fd)
+            raise RuntimeError("Runner namespace lock file is not private and owned by the current user.")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            raise RuntimeError(
+                f"Refusing disposable run: another process owns project namespace {project}."
+            ) from None
+        return fd
+    except RuntimeError:
+        raise
+    except OSError as error:
+        raise RuntimeError(f"Could not acquire private runner lock for project {project}: {type(error).__name__}.") from None
+
+
+def release_namespace_lock(fd: int) -> None:
+    fcntl.flock(fd, fcntl.LOCK_UN)
+    os.close(fd)
+
+
+def run_managed(project: str, operation) -> int:
+    """Serialize a project namespace and include cleanup failures in the exit status."""
+    try:
+        lock_fd = acquire_namespace_lock(project)
+    except Exception as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+
+    primary_error = None
+    cleanup_error = None
+    operation_started = False
+    try:
+        try:
+            ensure_project_unused(project)
+            operation_started = True
+            operation()
+        except Exception as error:
+            primary_error = error
+        if operation_started:
+            try:
+                cleanup_project()
+            except Exception as error:
+                cleanup_error = error
+    finally:
+        try:
+            release_namespace_lock(lock_fd)
+        except Exception as error:
+            if cleanup_error is None:
+                cleanup_error = RuntimeError(f"Could not release runner lock: {type(error).__name__}.")
+
+    if primary_error is not None:
+        print(f"ERROR: {safe_diagnostic(primary_error)}", file=sys.stderr)
+    if cleanup_error is not None:
+        print(f"ERROR: cleanup failed: {safe_diagnostic(cleanup_error)}", file=sys.stderr)
+    return 1 if primary_error is not None or cleanup_error is not None else 0
 
 
 def ensure_project_unused(project: str) -> None:
@@ -220,17 +320,18 @@ def main() -> int:
     KEEP_IMAGES = args.keep_images
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{5,62}", PROJECT):
         raise RuntimeError("Compose project name must be a unique lowercase slug (6-63 characters).")
+
+    return run_managed(PROJECT, run_disposable_locked)
+
+
+def run_disposable_locked() -> None:
+    global CLEANUP_DIR, CLEANUP_ENV
     arch = run(["docker", "info", "--format", "{{.OSType}}/{{.Architecture}}"], capture=True).stdout.strip()
     if arch != "linux/x86_64":
         raise RuntimeError(f"The pinned Keycloak JRE is amd64-only; this runner is {arch}.")
-    # Refuse collisions before creating a temp directory or registering cleanup:
-    # a failed attempt must never run `compose down` against somebody else's project.
-    ensure_project_unused(PROJECT)
     run_dir = pathlib.Path(tempfile.mkdtemp(prefix=f"{PROJECT}-", dir="/tmp"))
     env_file = run_dir / "staging.env"
-    global CLEANUP_DIR, CLEANUP_ENV
     CLEANUP_DIR, CLEANUP_ENV = run_dir, env_file
-    atexit.register(cleanup_project)
     app_host = f"app-{secrets.token_hex(3)}.staging.test"
     id_host = f"id-{secrets.token_hex(3)}.staging.test"
     port = free_port()
@@ -282,7 +383,6 @@ def main() -> int:
     values["STAGING_TLS_DIR"] = str(tls_dir)
     write_env(env_file, values)
 
-    cleanup_error = None
     try:
         print(f"Disposable project: {PROJECT}; application/identity hosts use synthetic .test names; secrets are redacted.", flush=True)
         run([str(ROOT / "scripts/staging/preflight.sh"), "--env-file", str(env_file), "--project-name", PROJECT, "--disposable"], capture=True)
@@ -402,7 +502,6 @@ COMMIT;
             raise
         print("PASS: disposable HTTPS/OIDC/session/authorization/CSRF/logout smoke", flush=True)
         print(f"PASS: exact tested images: {values['STAGING_KEYCLOAK_IMAGE']}, {values['STAGING_BACKEND_IMAGE']}, {values['STAGING_EDGE_IMAGE']}", flush=True)
-        return 0
     finally:
         pass
 

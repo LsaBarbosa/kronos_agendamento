@@ -272,3 +272,27 @@ jobs:
           docker compose -p "$COMPOSE_PROJECT_NAME" --env-file .env --env-file .env.keycloak --env-file .env.e2e \
             -f compose.yaml -f compose.keycloak.yaml -f compose.identity.yaml -f compose.e2e.yaml \
             --profile app down --volumes --remove-orphans || true
+
+  edge-staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      STAGING_CHROME: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test disposable runner locking and cleanup failure handling
+        run: python3 scripts/staging/test-run-disposable-lifecycle.py
+      - name: Verify cleanup isolation with Docker sentinels
+        run: scripts/staging/test-cleanup-isolation.sh
+      - name: Build, HTTPS/OIDC smoke, and scan the same isolated edge image
+        run: scripts/staging/scan-edge.sh
+      - name: Preserve the edge Trivy report and inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-edge-scan-${{ github.sha }}
+          path: docs/handoffs/AGD-003-edge-scan-*/
+          if-no-files-found: ignore
+          retention-days: 7

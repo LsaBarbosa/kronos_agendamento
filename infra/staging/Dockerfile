@@ -1,8 +1,8 @@
-# Build the frontend and package it with the official, digest-pinned Caddy.
+# Build the frontend and package it with the official, digest-pinned NGINX.
 # The final edge artifact is built once and serves the exact static bundle used
 # by the disposable HTTPS browser smoke.
 ARG NODE_IMAGE=node:22-alpine3.23@sha256:6abbcf5dd6b231da109bcde1181db1d92bf78015ae1a9514d9807c1f857869db
-ARG CADDY_IMAGE=caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+ARG NGINX_IMAGE=nginx:1.30.6-alpine3.24-slim@sha256:dede8895648b461178c3bc604f7eed4423efe5220b2c4d839f5eb3d34ac3f8f7
 
 FROM ${NODE_IMAGE} AS frontend-build
 WORKDIR /workspace
@@ -11,10 +11,12 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run check
 
-FROM ${CADDY_IMAGE} AS edge
-RUN setcap -r /usr/bin/caddy && test -z "$(getcap /usr/bin/caddy)"
+FROM ${NGINX_IMAGE} AS edge
 COPY --from=frontend-build /workspace/dist/ /srv/
-COPY infra/staging/Caddyfile /etc/caddy/Caddyfile
+COPY infra/staging/nginx.conf.template /etc/nginx/nginx.conf.template
+COPY infra/staging/empty-response /etc/nginx/empty-response
+COPY infra/staging/nginx-entrypoint.sh /usr/local/bin/kronos-nginx-entrypoint
+RUN chmod 0555 /usr/local/bin/kronos-nginx-entrypoint
 USER 1000:1000
 EXPOSE 8443
-ENTRYPOINT ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+ENTRYPOINT ["/usr/local/bin/kronos-nginx-entrypoint"]

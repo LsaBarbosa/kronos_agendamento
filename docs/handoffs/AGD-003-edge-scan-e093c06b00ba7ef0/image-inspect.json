@@ -1,0 +1,73 @@
+[
+    {
+        "Id": "sha256:e093c06b00ba7ef00925ce4c71a4fd32cea51a4af697ae3830aa216462c1e890",
+        "RepoTags": [
+            "kronos-staging-agd003-https-1793716099-548490-b079fa-edge:run"
+        ],
+        "RepoDigests": [],
+        "Parent": "",
+        "Comment": "buildkit.dockerfile.v0",
+        "Created": "2026-11-03T11:28:20.852602135-03:00",
+        "DockerVersion": "",
+        "Author": "",
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 13147107,
+        "GraphDriver": {
+            "Data": {
+                "LowerDir": "/var/lib/docker/overlay2/c4rst5br90ud5w8weyn9ikvlc/diff:/var/lib/docker/overlay2/y9t95r9s2eghl6hn68p9o465l/diff:/var/lib/docker/overlay2/qgivvlci7nrk9isrewwmeli84/diff:/var/lib/docker/overlay2/vnh6f7n5nx2rtiuqyx0oqd4xd/diff:/var/lib/docker/overlay2/9d5fc9f03e069d2471fd5e218d1a9e96c76493100d9d6ce8440e773d848845c3/diff:/var/lib/docker/overlay2/384155ba4762ac8e379606e98060c30cb648273d303fec37bd463e1ca699ee7f/diff:/var/lib/docker/overlay2/0bf561fbe4e85eb5e43a3ea8065641e42e30cd06dadc48d48f878ae0bc478c51/diff:/var/lib/docker/overlay2/9d92338f5cd5a0d4963807905999b7657a4f413c637d623395023f8be9bb6f18/diff:/var/lib/docker/overlay2/8232417cb73a34a87d28dcead2bf675d113a739d5ba1fdba43c627467df560a1/diff:/var/lib/docker/overlay2/eced12b3e416ddacdcfe736fb472e263fc12410b3caf04d0d37a3819003e9bff/diff:/var/lib/docker/overlay2/7a4caaca1dc9202f213c0f67bdabd6875b8626c0f6f4436c778a3e8d55aea265/diff",
+                "MergedDir": "/var/lib/docker/overlay2/3ibebfasgf1yfxkfrucj5lruz/merged",
+                "UpperDir": "/var/lib/docker/overlay2/3ibebfasgf1yfxkfrucj5lruz/diff",
+                "WorkDir": "/var/lib/docker/overlay2/3ibebfasgf1yfxkfrucj5lruz/work"
+            },
+            "Name": "overlay2"
+        },
+        "RootFS": {
+            "Type": "layers",
+            "Layers": [
+                "sha256:75c137aedfb2760f88629236cb7b797630aed0c3d91d626d1d1bb694878fc2ba",
+                "sha256:5b91dba2fc11b3e6dab4d25e913db11e6e701065af717028e060dfb5ab8532e4",
+                "sha256:a8a09d37d441c540c613402fa23c75308b04f4801e80f6d193316949f3df4b42",
+                "sha256:d87f6628aa86314e48021285bd5dce15a2cf5166c1c80246d2e03dbb674abaf2",
+                "sha256:313dac429378b98567656151706777045067624f9a6678873dd6fdc7ecf35545",
+                "sha256:2ba21653acee34632d9eab26da39a5ff0cac12021817e6a5e9efac9507628575",
+                "sha256:3212502c73d1691bd2b186efdda493ca750fc99795b6b0b85741af01b4e79aa4",
+                "sha256:d9ae75c85de2e950978b17244177fa7ea16d7ed792744f8f2b0a70133ad8fb77",
+                "sha256:f7f3d560e50fdda269423984265789bdccc8de2557185f245395f17f1b04eded",
+                "sha256:b8978de0f2c363e1d0ac1e6295735bdfc0d8638ebf5d23cdd0c337ef37f053b7",
+                "sha256:24f454bf55f97520a2e69b5a7193c7f8df42b8ae00a49bc1d6da4a4f4428f22d",
+                "sha256:4d1747e67e4047c269c7a2e493abe9ecc192f16708c9d835a33918fc93bdb9bb"
+            ]
+        },
+        "Metadata": {
+            "LastTagTime": "2026-11-03T11:28:20.924818045-03:00"
+        },
+        "Config": {
+            "Cmd": null,
+            "Entrypoint": [
+                "/usr/local/bin/kronos-nginx-entrypoint"
+            ],
+            "Env": [
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "NGINX_VERSION=1.30.6",
+                "PKG_RELEASE=1",
+                "DYNPKG_RELEASE=1"
+            ],
+            "ExposedPorts": {
+                "80/tcp": {},
+                "8443/tcp": {}
+            },
+            "Labels": {
+                "com.docker.compose.project": "agd003-https-1793716099-548490-b079fa",
+                "com.docker.compose.service": "edge",
+                "com.docker.compose.version": "5.1.3",
+                "maintainer": "NGINX Docker Maintainers \u003cdocker-maint@nginx.com\u003e"
+            },
+            "OnBuild": null,
+            "StopSignal": "SIGQUIT",
+            "User": "1000:1000",
+            "Volumes": null,
+            "WorkingDir": "/"
+        }
+    }
+]

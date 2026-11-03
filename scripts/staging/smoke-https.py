@@ -269,13 +269,28 @@ def run_smoke() -> None:
                               {"X-Forwarded-Host": "attacker.invalid", "X-Forwarded-Proto": "http", "Forwarded": "host=attacker.invalid;proto=http"})
     assert_true(status == 401, "Unauthenticated administrative session was not rejected with 401")
     assert_true(len(body) < 512, "Unauthenticated API error response unexpectedly large")
+
+    spa_status, _, spa_body = request("GET", app_host, port, "/admin", ca)
+    assert_true(spa_status == 200 and b"<html" in spa_body[:512].lower(), "Application SPA fallback did not return its HTML document")
+    for api_path in ("/api", "/api/v1/__agd003_missing_route__"):
+        api_status, _, api_body = request("GET", app_host, port, api_path, ca)
+        assert_true(api_body != spa_body, f"API path {api_path} returned the SPA index document")
+
     status, _, body = request("GET", "untrusted.invalid", port, "/admin", ca, {"__tls_name": app_host})
     assert_true(status == 421 and not body, "Unknown Host was not rejected without content")
+
+    discovery_path = "/realms/agendamento/.well-known/openid-configuration"
+    for tls_name, host, path in ((app_host, id_host, discovery_path),
+                                 (id_host, app_host, "/api/v1/admin/session")):
+        crossed_status, _, crossed_body = request("GET", host, port, path, ca, {"__tls_name": tls_name})
+        assert_true(crossed_status == 421 and not crossed_body,
+                    "Crossed SNI/Host pair between the application and identity origins was not rejected")
+
     status, _, body = request("GET", id_host, port, "/realms/agendamento/.well-known/openid-configuration", ca,
                               {"X-Forwarded-Host": "attacker.invalid", "X-Forwarded-Proto": "http", "X-Forwarded-Port": "80"})
     assert_true(status == 200 and json.loads(body).get("issuer") == issuer,
                 "Spoofed forwarded headers changed Keycloak's fixed issuer")
-    print("PASS: Host allowlist, forwarded-header spoof rejection, unauthenticated admin API", flush=True)
+    print("PASS: Host allowlist, crossed SNI/Host rejection, API no-SPA fallback, forwarded-header spoof rejection, unauthenticated admin API", flush=True)
 
     def stop_browser(browser, cdp, profile):
         cdp.close()
